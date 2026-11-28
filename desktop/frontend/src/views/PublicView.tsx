@@ -303,14 +303,15 @@ export function PublicView(_: ViewProps) {
       const linkBase = r.linkBase || ''
       // 笔记在应用里打开:Web 上别的库切过去直达,桌面按同步映射找到当前库里的文件。
       const openPage = async (vaultId: string, path: string, localPath?: string): Promise<void> => {
-        if (!localPath && active && vaultId !== active) {
+        const viewPath = !localPath && collab.fileViewPath ? collab.fileViewPath(vaultId, path) : undefined
+        if (!localPath && (viewPath === null || (viewPath === undefined && active && vaultId !== active))) {
           if (window.amadeusSync) useApp.getState().toast(t('publicview.pageMoved'))
           else collab.switchVault(vaultId, path)
           return
         }
         if (localPath) await usePageStore.getState().switchVaultSide('cloud') // 共享镜像在云端侧
         const { vaultRoot, vaultSide } = usePageStore.getState()
-        const target = localPath ?? localPathFor(useEntrySync.getState().vaults, vaultRoot, vaultSide, path)
+        const target = localPath ?? viewPath ?? localPathFor(useEntrySync.getState().vaults, vaultRoot, vaultSide, path)
         const { resolveDeepLink } = await import('../deepLinkInstall')
         await resolveDeepLink({ kind: 'space', ref: 'amadeus', params: {} })
         if (!target || !(await resolveDeepLink({ kind: 'note', ref: target, params: {} }))) useApp.getState().toast(t('publicview.pageMoved'))

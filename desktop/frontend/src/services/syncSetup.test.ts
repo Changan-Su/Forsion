@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const request = vi.fn()
 vi.mock('./backendService', () => ({ request: (...a: unknown[]) => request(...a) }))
+// 大多数用例测的是放开时的开关;封着(Agents 与插件数据先封住,2026-11-27 智库同步统一方案第 0 步)的在「sealed」那组
+const seal = vi.hoisted(() => ({ agents: false, plugins: false }))
+vi.mock('./syncSeal', () => ({ get AGENT_SYNC_SEALED() { return seal.agents }, get PLUGIN_DATA_SYNC_SEALED() { return seal.plugins } }))
 vi.mock('./engine/targets', () => ({ homeTarget: () => ({ key: 'home' }) }))
 vi.mock('../amadeus/plugins/pluginStore', () => ({
   usePluginStore: Object.assign(() => null, { getState: () => ({ plugins: [{ id: 'a', syncData: true }, { id: 'b' }], disabledIds: [] }), subscribe: () => () => {} }),
@@ -29,6 +32,7 @@ async function fresh() {
 }
 
 beforeEach(() => {
+  seal.agents = false; seal.plugins = false
   localStorage.clear()
   cfg = { backend: 'off', intervalMin: 0 }
   plan = []
@@ -294,6 +298,8 @@ describe('onboarding finish with folder rules', () => {
     const calls: Array<[string, ...unknown[]]> = []
     ;(window as any).tangu.cloudInvoke = vi.fn(async (ch: string, ...a: unknown[]) => {
       calls.push([ch, ...a])
+      // 老 Extend:没有智库同步 v2 的通道(真机上 invoke 抛「not a Forsion Extend channel」→ 旧同步在管)
+      if (ch.startsWith('vaultsync:')) throw new Error(`not a Forsion Extend channel: ${ch}`)
       if (ch === 'penzor:sync:get') return { ok: true, value: { available: true } }
       if (fail && ch === fail) return { ok: false, error: 'boom' }
       if (ch === 'penzor:sync:setup') return { ok: true, value: preview }
@@ -353,5 +359,110 @@ describe('onboarding finish with folder rules', () => {
     expect(out.at(-1)).toMatchObject({ ok: false, error: 'boom' })
     expect(s.getSync()?.decided).toBe(false)
     expect(s.getSync()?.applying).toBe(false)
+  })
+})
+
+// 2026-11-27 智库同步统一方案第 0 步:Agents 与插件数据先封住。读数照实,开关的动作一个都不做;human/ 那条 POST /agent/sync 照发
+describe('sealed agents and plugin data', () => {
+  const lsDump = () => Object.fromEntries(Object.keys(localStorage).filter((k) => !k.startsWith('forsion.sync.decided.')).sort().map((k) => [k, localStorage.getItem(k)]))
+  const writes = () => request.mock.calls.filter(([, , init]) => (init as RequestInit | undefined)?.method && (init as RequestInit).method !== 'GET').map(([, path, init]) => `${(init as RequestInit).method} ${path}`)
+  beforeEach(() => { seal.agents = true; seal.plugins = true })
+
+  it('the snapshot reports what is stored plus sealed', async () => {
+    request.mockImplementation(async (_t: unknown, path: string) => (path === '/agent/sync/status' ? { running: false, lastAt: null, lastResult: null } : { enabled: true, agents: 3, sealed: true }))
+    localStorage.setItem('forsion.pluginSync.off', '1')
+    const s = await fresh(); await s.refreshSync()
+    expect(s.getSync()).toMatchObject({ agents: { on: true, count: 3 }, plugins: { on: false }, sealed: { agents: true, plugins: true } })
+  })
+
+  it('the engine saying sealed is enough to lock the agents switch', async () => {
+    seal.agents = false
+    request.mockImplementation(async (_t: unknown, path: string) => (path === '/agent/sync/status' ? null : { enabled: false, agents: 1, sealed: true }))
+    const s = await fresh(); await s.refreshSync()
+    expect(s.getSync()?.sealed).toEqual({ agents: true, plugins: true })
+    expect(s.syncKindSealed('agents')).toBe(true)
+  })
+
+  it('setSync on a sealed kind writes nothing (no plugin key, no PUT, no old desktop flag, no page jump) and answers ok', async () => {
+    localStorage.setItem('forsion.pluginSync.off', '1')
+    const s = await fresh(); await s.refreshSync()
+    request.mockClear()
+    const before = lsDump()
+    for (const [kind, on] of [['plugins', true], ['plugins', false], ['agents', true], ['agents', false]] as const) {
+      expect(await s.setSync(kind, on)).toEqual({ ok: true })
+    }
+    expect(lsDump()).toEqual(before)
+    expect(writes()).toEqual([])
+    expect((window as any).tangu.setConfig).not.toHaveBeenCalled()
+    // 新同步(按条规则)那版原来会跳去蓬洲云:封着也不跳
+    ;(window as any).tangu.cloudInvoke = vi.fn(async () => ({ ok: true, value: { available: true } }))
+    await s.refreshSync()
+    expect(await s.setSync('agents', true)).toEqual({ ok: true })
+    expect(localStorage.getItem(s.PENZOR_FOCUS)).toBeNull()
+  })
+
+  it('first sign-in card start: only notes moves; plugin key and agent consent stay byte-identical', async () => {
+    const s = await fresh(); await s.refreshSync()
+    request.mockClear()
+    const before = lsDump()
+    const out = await s.applySyncChoices({ notes: true, agents: true, plugins: false })
+    expect(out).toEqual([{ ok: true }]) // 只有智库那一项
+    expect(cfg.backend).toBe('penzor')
+    expect(writes()).toEqual([])
+    expect((window as any).tangu.setConfig).not.toHaveBeenCalled()
+    expect(lsDump()).toEqual(before)
+    expect(s.getSync()?.decided).toBe(true)
+  })
+
+  it('onboarding finish (folder rules): the setup payload never carries plugins or agents, and the plugin key is untouched', async () => {
+    const calls: Array<[string, ...unknown[]]> = []
+    ;(window as any).tangu.cloudInvoke = vi.fn(async (ch: string, ...a: unknown[]) => {
+      calls.push([ch, ...a])
+      if (ch.startsWith('vaultsync:')) throw new Error(`not a Forsion Extend channel: ${ch}`) // 老 Extend
+      if (ch === 'penzor:sync:get') return { ok: true, value: { available: true } }
+      if (ch === 'penzor:sync:setup') return { ok: true, value: { token: 't', upload: 1, download: 0, conflicts: 0, bytes: 1 } }
+      return { ok: true, value: null }
+    })
+    const s = await fresh(); await s.refreshSync()
+    const before = lsDump()
+    await s.applyOnboardingSync({ notes: true, agents: false, plugins: true }, ['notes', 'plugins'])
+    expect(calls.find(([ch]) => ch === 'penzor:sync:setup')?.[1]).toEqual({ notes: true, profile: false, plugins: false, agents: false, agentSlugs: [] })
+    expect(lsDump()).toEqual(before)
+    await s.applyOnboardingSync({ notes: false, agents: false, plugins: false }, ['plugins'])
+    expect(lsDump()).toEqual(before)
+  })
+
+  it('the card asks only about notes', async () => {
+    const s = await fresh()
+    const snap = { signedIn: true, decided: false, applying: false, notes: { available: true, on: true }, agents: { on: false }, plugins: { on: false }, sealed: { agents: true, plugins: true } } as any
+    expect(s.wantsSyncCard(snap, true)).toBe(false)
+    expect(s.wantsSyncCard({ ...snap, notes: { available: true, on: false } }, true)).toBe(true)
+    expect(s.wantsSyncCard({ ...snap, sealed: undefined }, true)).toBe(true) // 没封时插件 / Agents 关着照样问
+  })
+
+  it('sync now still asks the engine to sync (it carries About me and the default calendar)', async () => {
+    request.mockImplementation(async (_t: unknown, path: string) => (path === '/agent/sync/status' ? null : { enabled: true, agents: 1, sealed: true }))
+    const s = await fresh(); await s.refreshSync()
+    request.mockClear(); request.mockResolvedValue({})
+    await s.runSyncNow()
+    expect(writes()).toEqual(['POST /agent/sync'])
+  })
+})
+
+// 智库同步第 2 步:问不出是哪套同步(v2 通道在但读失败)时,引导不走旧的开启流程、不记「点过了」(Codex P1-7)
+describe('onboarding finish when the sync mode is unknown', () => {
+  it('a failing v2 status leaves the decision open and never calls the old setup', async () => {
+    const calls: Array<[string, ...unknown[]]> = []
+    ;(window as any).tangu.cloudInvoke = vi.fn(async (ch: string, ...a: unknown[]) => {
+      calls.push([ch, ...a])
+      if (ch.startsWith('vaultsync:')) return { ok: false, error: 'timeout' }
+      if (ch === 'penzor:sync:get') return { ok: true, value: { available: true } }
+      return { ok: true, value: null }
+    })
+    const s = await fresh(); await s.refreshSync()
+    const out = await s.applyOnboardingSync({ notes: true, agents: false, plugins: false }, ['notes'])
+    expect(out.some((r) => !r.ok)).toBe(true)
+    expect(calls.some(([ch]) => ch === 'penzor:sync:setup')).toBe(false)
+    expect(s.getSync()?.decided).not.toBe(true)
   })
 })

@@ -6,11 +6,23 @@
  *  - 条件写(CAS):writeFile 三态 mode(null→add / rev→update / undefined→overwrite),
  *    rm 带 parent_rev —— walk→push 窗口的并发写在 Dropbox 侧变 409,绝不静默覆盖;
  *  - Dropbox-API-Arg 头必须纯 ASCII:中文路径一律 \uXXXX 转义(asciiJson)。
+ *  - opts.cas = TargetFs 语义(targetFs.ts):上传加 strict_conflict(期望的那份被删了 / 内容恰好相同也算冲突,
+ *    不再静默重建);rm(null) 只查不删;条件删回 not_found 时再查一次,区分「真没了」和「换了一版」;
+ *    空字符串的 expectedId 不是合法 rev:发任何请求之前就 cas-conflict(旧行为里 rm 会把它当成无条件删)。缺省 = 旧行为。
  * 隔离约定:不 import electron/desktop;凭据由宿主(remotesyncIpc)注入。
  */
 import { createHash, randomBytes } from 'node:crypto'
 import http from 'node:http'
 import type { RemoteEntity, RemoteFs } from './types'
+import { defineMainMessages, mt } from '../mainI18n'
+
+// 回调口回给浏览器的页面文案(取当时的界面语言)
+defineMainMessages({
+  'main.remotesync.authPageStale': {
+    zh: 'Forsion：这个授权页已过期，请用最新打开的那个。',
+    en: 'Forsion: this authorization page is out of date. Use the latest one.',
+  },
+})
 
 export interface DropboxConfig {
   /** Dropbox App Key(client_id;PKCE 无 secret)。 */
@@ -28,11 +40,13 @@ const CONTENT = 'https://content.dropboxapi.com'
  * Forsion 官方 Dropbox 应用的 App Key —— 填了它,用户点「连接 Dropbox」直接登,不用自建应用。
  * PKCE 公共客户端没有 secret,App Key 随包分发是官方认可的做法(remotely-save 等同款)。
  * 空 = 尚未登记官方应用,UI 退回「用户自建应用 + 填 App Key」。
- * 登记步骤:dropbox.com/developers → Create app → Scoped access → App folder →
- * Permissions 勾 account_info.read / files.metadata.read+write / files.content.read+write →
- * Settings → OAuth2 Redirect URIs 加 http://localhost:53682/ → 复制 App key 填到这里。
+ * 已登记(2026-11-27):应用名 Forsion,App folder 名 Forsion(用户侧落在「应用/Forsion」),
+ * Scoped access + App folder,Permissions 勾 account_info.read / files.metadata.read+write /
+ * files.content.read+write,OAuth2 Redirect URIs = http://localhost:53682/,Allow public clients 开。
+ * 改权限或回调口要同步改 App Console,否则授权页报 invalid_scope / invalid redirect_uri。
+ * 新应用是 Development 状态,连接用户数涨上来后要在 App Console 申请 Production。
  */
-export const FORSION_DROPBOX_APP_KEY = ''
+export const FORSION_DROPBOX_APP_KEY: string = 'ft4gcwbsrmu3x4x'
 
 /** Dropbox-API-Arg 头要求纯 ASCII:非 ASCII 一律 \uXXXX 转义(中文文件名必踩)。 */
 export function asciiJson(v: unknown): string {
@@ -105,6 +119,7 @@ export function dropboxCallbackServer(
   port: number,
   state: string,
   onResult: (r: { code: string } | { error: string }) => void,
+  opts: { ignoreStateMismatch?: boolean } = {},
 ): Promise<{ port: number; close: () => void } | null> {
   return new Promise((resolve) => {
     let done = false
@@ -112,6 +127,13 @@ export function dropboxCallbackServer(
       const r = parseDropboxCallback(req.url ?? '', state)
       if ('error' in r && r.error === 'no-code') {
         res.writeHead(404).end() // 浏览器顺带来的噪声(/favicon.ico):不算授权结果,继续等
+        return
+      }
+      // 被顶掉的上一次授权、它那个浏览器页晚到的回调(state 不是这一次的):回个过期页,不消耗这一次,接着等。
+      // 缺省不开 = 旧设置页的行为一字不变
+      if (opts.ignoreStateMismatch && 'error' in r && r.error === 'state-mismatch') {
+        res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end(page(mt('main.remotesync.authPageStale')))
         return
       }
       res.writeHead('code' in r ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8' })
@@ -164,9 +186,35 @@ export async function dropboxExchangeCode(
   return { refreshToken: j.refresh_token, accountId: j.account_id ?? '', email, name }
 }
 
+/** refresh token 属于哪个账号(去处的目录身份用,syncTargets.identity):换 access token → users/get_current_account 的 account_id。
+ *  取不到(网络、401、回包里没有)抛固定码,不带回包原文。 */
+export async function dropboxAccountId(cfg: { appKey: string; refreshToken: string }, signal?: AbortSignal): Promise<string> {
+  const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: cfg.refreshToken, client_id: cfg.appKey })
+  const tok = await fetch(`${API}/oauth2/token`, { method: 'POST', body, signal }).catch(() => null)
+  if (!tok?.ok) throw new Error('dropbox-account-unavailable')
+  const t = (await tok.json().catch(() => null)) as { access_token?: unknown; account_id?: unknown } | null
+  if (typeof t?.account_id === 'string' && t.account_id) return t.account_id
+  if (typeof t?.access_token !== 'string' || !t.access_token) throw new Error('dropbox-account-unavailable')
+  const acc = await fetch(`${API}/2/users/get_current_account`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${t.access_token}`, 'Content-Type': 'application/json' },
+    body: 'null',
+    signal,
+  }).catch(() => null)
+  if (!acc?.ok) throw new Error('dropbox-account-unavailable')
+  const a = (await acc.json().catch(() => null)) as { account_id?: unknown } | null
+  if (typeof a?.account_id !== 'string' || !a.account_id) throw new Error('dropbox-account-unavailable')
+  return a.account_id
+}
+
 // ── RemoteFs ─────────────────────────────────────────────────────────────────
 
-export function createDropboxRemote(cfg: DropboxConfig): RemoteFs {
+export interface DropboxRemoteOptions {
+  /** TargetFs 语义(见 targetFs.ts);缺省 false = 旧行为。 */
+  cas?: boolean
+}
+
+export function createDropboxRemote(cfg: DropboxConfig, opts: DropboxRemoteOptions = {}): RemoteFs & Required<Pick<RemoteFs, 'stat'>> {
   const base = normBaseDir(cfg.baseDir)
   const absOf = (key: string): string => `${base}/${key}`
   let cached: { token: string; exp: number } | null = null
@@ -200,6 +248,19 @@ export function createDropboxRemote(cfg: DropboxConfig): RemoteFs {
     if (!rel) return null
     const mt = Date.parse(f.client_modified ?? f.server_modified ?? '') || 0
     return { key: rel, size: f.size, mtimeMs: mt, id: f.rev }
+  }
+
+  /** get_metadata:id = rev(与 walk 同口径);409 not_found → null;文件夹 → not-a-file;其余失败抛。 */
+  const statKey = async (key: string, signal?: AbortSignal): Promise<RemoteEntity | null> => {
+    const rsp = await rpc('/2/files/get_metadata', { path: absOf(key) }, signal)
+    if (!rsp.ok) {
+      const text = await rsp.text().catch(() => '')
+      if (rsp.status === 409 && text.includes('not_found')) return null
+      throw new Error(`dropbox stat ${rsp.status} ${key}: ${text.slice(0, 200)}`)
+    }
+    const j = (await rsp.json()) as WireFile
+    if (j['.tag'] !== 'file') throw new Error(`not-a-file dropbox ${key}`)
+    return { key, size: j.size, mtimeMs: Date.parse(j.client_modified ?? j.server_modified ?? '') || 0, id: j.rev }
   }
 
   return {
@@ -249,13 +310,17 @@ export function createDropboxRemote(cfg: DropboxConfig): RemoteFs {
       return data
     },
     async writeFile(key, data, mtimeMs, signal, expectedId) {
+      if (opts.cas && expectedId === '') throw new Error(`cas-conflict dropbox PUT ${key}: empty expected rev`)
       const token = await accessToken(signal)
       const mode = expectedId === null ? 'add' : typeof expectedId === 'string' ? { '.tag': 'update', update: expectedId } : 'overwrite'
+      const arg: Record<string, unknown> = { path: absOf(key), mode, autorename: false, mute: true, client_modified: isoSec(mtimeMs) }
+      // strict_conflict:不带时 update 遇到「期望的那份已被删」会直接新建、内容相同也不报冲突 —— TargetFs 要求严格比身份
+      if (opts.cas && expectedId !== undefined) arg.strict_conflict = true
       const rsp = await fetch(`${CONTENT}/2/files/upload`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
-          'Dropbox-API-Arg': asciiJson({ path: absOf(key), mode, autorename: false, mute: true, client_modified: isoSec(mtimeMs) }),
+          'Dropbox-API-Arg': asciiJson(arg),
           'Content-Type': 'application/octet-stream',
         },
         body: new Uint8Array(data),
@@ -270,15 +335,32 @@ export function createDropboxRemote(cfg: DropboxConfig): RemoteFs {
       return { key, size: j.size, mtimeMs: Date.parse(j.client_modified ?? j.server_modified ?? '') || mtimeMs, id: j.rev }
     },
     async rm(key, signal, expectedId) {
+      // 旧行为里 '' 是假值、不带 parent_rev = 无条件删;cas 下它只能是坏身份
+      if (opts.cas && expectedId === '') throw new Error(`cas-conflict dropbox rm ${key}: empty expected rev`)
+      if (opts.cas && expectedId === null) {
+        // 期望不存在:只查不删(在 = 冲突,不在 = 无事可做)
+        if (await statKey(key, signal)) throw new Error(`cas-conflict dropbox rm ${key}: exists`)
+        return
+      }
       const arg: { path: string; parent_rev?: string } = { path: absOf(key) }
       if (typeof expectedId === 'string' && expectedId) arg.parent_rev = expectedId
       const rsp = await rpc('/2/files/delete_v2', arg, signal)
       if (!rsp.ok) {
         const text = await rsp.text().catch(() => '')
-        if (rsp.status === 409 && text.includes('not_found')) return // 已不在 = 幂等
+        if (rsp.status === 409 && text.includes('not_found')) {
+          // 已不在 = 幂等。cas:parent_rev 对不上时 Dropbox 回什么没有单独的错误标签,不排除也报 not_found ——
+          // 再查一次:key 上现在有文件 = 被换了一版,不是「已删」(只在这条少见路径上多一个往返)
+          if (opts.cas && typeof expectedId === 'string' && (await statKey(key, signal))) {
+            throw new Error(`cas-conflict dropbox rm ${key}: remote changed`)
+          }
+          return
+        }
         if (rsp.status === 409) throw new Error(`cas-conflict dropbox rm ${key}: ${text.slice(0, 160)}`)
         throw new Error(`dropbox rm ${rsp.status} ${key}: ${text.slice(0, 200)}`)
       }
+    },
+    async stat(key, signal) {
+      return statKey(key, signal)
     },
     async check() {
       try {

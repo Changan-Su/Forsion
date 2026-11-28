@@ -39,6 +39,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input)
     let body: unknown = {}
+    if (url.pathname.endsWith('/libraries')) return Response.json({}, { status: 404 })
     if (url.pathname.endsWith('/vaults')) body = { vaults: [{ id: 'v1' }] }
     else if (url.pathname.endsWith('/tree')) body = { pages: ['seen.md'], files: [], folders: [], seq: 1 }
     else if (url.pathname.endsWith('/file') && init?.method === 'PUT') {

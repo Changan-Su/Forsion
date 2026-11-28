@@ -80,6 +80,7 @@ const GATE_FILES = [
 /** 移动端**故意**不要的东西:名字 → 理由。理由留空 = 视为未声明,照样红灯。 */
 const SKIP = {
   homeTarget: 'Root 仅为桌面 dev 命令的 listSkills 预取使用;Web/mobile 收件箱拉取已收口到共享 inboxStore,MobileRoot 不再直接调用',
+  SyncQuitCard: '退出卡问的是桌面主进程的退出门禁(window.remoteSync.quitGate,智库同步第 2 步 5C);手机不落盘、没有本机同步引擎,退出不用等',
   SyncSetupHost: '首登同步卡片管的是本地库远程同步(window.remoteSync,桌面专属);手机没有同步引擎、直接读云端(云同步开启方案 2026-10-20 第六节)',
   // —— 启动序列 ——
   loadTanguEntry: 'Tangu 界面热更新只做桌面(落地计划 §2):桌面 / 网页经它在界面包与编进宿主的那份之间挑;手机照旧静态编进 APK,mobileEntry 直接静态 import activateTangu 交给 installEngine',
@@ -95,6 +96,7 @@ const SKIP = {
   UnitWindowRoot: '设备的 Unit 窗:主进程开的独立窗(一台设备一扇),手机 / 网页没有多窗口',
   unitWindowId: '同上:判这扇独立窗是不是 Unit 窗(?unit=)',
   MiniRoot: '同上:悬浮 mini 卡片',
+  SyncFocusCapability: '桌面主窗为 Extend 声明设置浮窗的智库定位能力；手机没有设置浮窗和本机落盘 IPC',
   FloatingRoot: '第六种 Panel 的 Electron 原生子窗口根;移动端按产品约定继续使用全屏二级页面,不模拟桌面窗口',
   PipRoot: 'Computer Use 悬浮小画面(?window=pip)的根:一扇置顶的 Electron 系统小窗,只有桌面主进程开得出来;手机没有 window.tangu.computerUsePip,插件就不画「移到悬浮窗」',
   installComputerUsePipHost: '同上:非 pip 窗口替 pip 回答停止 / 状态的应答方,靠主进程的 pipAgent 转发桥;手机只有一个 WebView、没有这座桥,实现本身缺 window.tangu.pipAgentHost 即 no-op',

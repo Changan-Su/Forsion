@@ -456,6 +456,8 @@ export interface AgentConfig {
   /** 额外工作文件夹(host-only,绝对路径):并入引擎可写根 + 写进系统提示,免逐次「越界写」审批。
    *  cwd 仍是默认目录 —— 相对路径只相对 cwd 解析,这些一律绝对路径引用。引擎侧封顶 8 个。 */
   extraRoots?: string[]
+  /** Explicit provenance for roots appended by the host's Amadeus workspace helper. */
+  amadeusExtraRoots?: string[]
   approvalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
   /** 团队成员会话的团队段(引擎 teamRuns 写,桌面只读):有 teamSessionId 的 host 会话,审批闸只听那个团队会话此刻的档
    *  (tangu-agent agentLoop.approvalModeSessionId),本会话自己的 approvalMode 不算数。 */

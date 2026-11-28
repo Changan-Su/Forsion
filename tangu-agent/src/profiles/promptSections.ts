@@ -1,10 +1,11 @@
+import { existsSync } from 'node:fs';
 /**
  * 系统提示静态段(G4):从 agentLoop 内联文本**逐字节**搬移,按 AppProfile.promptSections 装载。
  * ⚠️ 改动这些文本会改变所有 app 的 prompt——per-app 定制请在各自 profile 工厂里覆盖,勿改默认段。
  */
 import type { PromptSectionCtx, PromptSections } from '../seams/appProfile.js';
 import type { Preset } from '../core/presetTable.js';
-import { amadeusPromptSection, amadeusCloudPromptSection, amadeusVaultExists, amadeusVaultPath } from '../tools/builtin/amadeus.js';
+import { amadeusPromptSection, amadeusCloudPromptSection, amadeusOnlinePromptSection, amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import { machineEnvironmentLines, machineFacts } from '../tools/hostEnvironment.js';
 
 /** 工具失败恢复指引(Harness-Bench:工具错误后恢复不了占失败 24.6%,仅次于输出契约)。
@@ -145,7 +146,7 @@ export const MEMORY_LOG_GUIDANCE =
 
 /** host 模式(本地直连):真实文件系统 + shell 的执行环境说明。
  *  coding 预设下浏览器引导行退场(browser_* 已转 deferred,提示词与工具面必须一致);默认文本逐字节不动。 */
-export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { coding?: boolean; machine?: string }): string {
+export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { coding?: boolean; machine?: string; amadeusVault?: PromptSectionCtx['amadeusVault'] }): string {
   // 额外工作文件夹:用户在「工作范围」里显式加的,已并入可写根(fsPolicy.writableRoots)。
   // 只报路径不预拉清单——列内容会把系统块吹大,让模型自己 list_dir 更省。
   const extra = (extraRoots || []).filter((r) => r && r !== cwd)
@@ -156,7 +157,8 @@ export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { cod
       + extra.map((r) => `  - \`${r}\``).join('\n') + '\n'
     : ''
   // 这台机器的事实(系统 / run_bash 的 shell / 家目录 / 笔记库 / 设备名 / PATH 上的工具):整个进程内不变,不打穿前缀缓存。
-  const machine = opts?.machine ?? machineEnvironmentLines(machineFacts(vaultOrNull()))
+  const root = opts?.machine === undefined ? amadeusVaultPath(opts) : null;
+  const machine = opts?.machine ?? machineEnvironmentLines(machineFacts(root && existsSync(root) ? root : null))
   return (
     '## Local Execution Environment (important)\n' +
     `You are running on the **user's own machine**; the current working directory is \`${cwd || process.cwd()}\`.\n` +
@@ -171,10 +173,6 @@ export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { cod
     // 破坏性操作事故链拆解(借 Codex 5.6 Destructive Actions:目标解析→递归展开→不可恢复,逐环加锁)
     '- Never make `~`, `/`, the working directory root, or another broad directory the target of a recursive delete/overwrite; scope destructive commands to the narrowest specific path. Prefer recoverable operations (move to trash or a backup location) over permanent deletion. After deleting anything material, tell the user what was removed and whether it can be restored.'
   );
-}
-
-function vaultOrNull(): string | null {
-  try { return amadeusVaultExists() ? amadeusVaultPath() : null } catch { return null }
 }
 
 /** sandbox 模式:文件输出位置(最常见的「产物丢失」原因:模型把文件写到工作区之外)。
@@ -222,6 +220,8 @@ export function efficiencySection(pythonExec: boolean): string {
 export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
   // 未传视为有(host 路径/旧调用点不受影响);只有显式 false(run_python 未注册)才裁执行类提示。
   const pyExec = ctx.sandboxExec !== false;
+  const online = amadeusOnlinePromptSection(ctx);
+  const onlineSections = online ? [online] : [];
   if (ctx.preset === 'coding') {
     // coding 预设:陪伴式「记忆与日志」指引、笔记/日历指引、浏览器引导全部退场——
     // 对应工具已转 deferred(registry CODING_PRESET_DEFERRED),提示词与工具面保持一致。
@@ -229,8 +229,8 @@ export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
       guidance: [],
       environment:
         ctx.execMode === 'host'
-          ? [hostEnvSection(ctx.cwd, ctx.extraRoots, { coding: true })]
-          : [sandboxOutputSection(pyExec), efficiencySection(pyExec)],
+          ? [hostEnvSection(ctx.cwd, ctx.extraRoots, { coding: true, amadeusVault: ctx.amadeusVault }), ...onlineSections]
+          : [sandboxOutputSection(pyExec), efficiencySection(pyExec), ...onlineSections],
     };
   }
   if (ctx.preset === 'chat') {
@@ -240,7 +240,7 @@ export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
     return {
       guidance: [CHAT_MEMORY_GUIDANCE],
       environment:
-        ctx.execMode === 'host' ? [] : [sandboxOutputSection(pyExec, { applyPatch: false }), efficiencySection(pyExec)],
+        ctx.execMode === 'host' ? onlineSections : [sandboxOutputSection(pyExec, { applyPatch: false }), efficiencySection(pyExec), ...onlineSections],
     };
   }
   return {
@@ -248,9 +248,9 @@ export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
     environment:
       ctx.execMode === 'host'
         ? // host 模式:本地环境段 + (若本机存在 Amadeus vault)笔记/日历指引
-          [hostEnvSection(ctx.cwd, ctx.extraRoots), amadeusPromptSection()].filter((s): s is string => !!s)
+          [hostEnvSection(ctx.cwd, ctx.extraRoots, ctx), online ?? amadeusPromptSection(ctx)].filter((s): s is string => !!s)
         : // 非 host:沙箱段 + (若云端 amadeus facet 已装配,如 thin worker)云笔记库指引
-          [sandboxOutputSection(pyExec), efficiencySection(pyExec), amadeusCloudPromptSection()].filter(
+          [sandboxOutputSection(pyExec), efficiencySection(pyExec), online ?? (ctx.amadeusVault?.managed ? null : amadeusCloudPromptSection())].filter(
             (s): s is string => !!s,
           ),
   };

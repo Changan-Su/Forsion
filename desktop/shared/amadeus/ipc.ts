@@ -11,6 +11,7 @@ export const IPC = {
   restoreVault: 'vault:restore',
   // 本机多智库(第 1 步):清单 / 切换 / 新建 / 移出清单 / 在访达中显示
   listVaults: 'vaults:list',
+  listVaultsForMenu: 'vaults:list-for-menu',
   switchVault: 'vaults:switch',
   createVault: 'vaults:create',
   forgetVault: 'vaults:forget',
@@ -790,6 +791,25 @@ export interface TagCount {
   total?: number
 }
 
+/** An online library opened in place of a local vault (desktop only; vault sync step 3).
+ *  `account` = sha256 of the Forsion account id (the host's cloudAccountNamespace). */
+export interface OnlineVaultRef {
+  kind: 'online'
+  account: string
+  libraryId: string
+  vaultId: string
+  /** Content prefix: 'Amadeus/' or 'Amadeus/<name>/'. */
+  prefix: string
+  name: string
+}
+/** `ref` null = open the local vault. `fallback` = an online library was saved for another (or no) account. */
+export interface ActiveVaultRead { ref: OnlineVaultRef | null; fallback: null | { reason: 'account'; name: string } }
+/** Shared host and bridge root. Preserve the existing identity of default and independent vaults. */
+export function onlineVaultRoot({ vaultId, libraryId }: Pick<OnlineVaultRef, 'vaultId' | 'libraryId'>): string {
+  const root = `cloud://${vaultId}`
+  return libraryId === vaultId ? root : `${root}/${libraryId}`
+}
+
 /** One row of the bottom vault menu. `current` = open on the local side. */
 export interface LocalVaultRow {
   root: string
@@ -859,8 +879,28 @@ export interface AmadeusApi {
   /** Create `<workspace>/Vaults/<name>` and open it; throws on a bad name or an existing folder. */
   createVault?(name: string): Promise<VaultInfo>
   /** Drop a row from the list (files stay). False for the open vault or the sync vault. */
+  listVaultsForMenu?(): Promise<{ rows: LocalVaultRow[]; degraded: boolean }>
+  vaultCreate?(args: import('./vaultCreate').VaultCreateArgs): Promise<import('./vaultCreate').VaultCreated>
+  vaultSyncActions?(): { download: boolean; create: boolean; unbind: boolean }
+  vaultDefaultParent?(): Promise<import('./vaultCreate').VaultDefaultLocation>
+  vaultEnsureDefaultParent?(): Promise<string>
+  vaultRollback?(operationId: string): Promise<import('./vaultCreate').VaultRollbackResult>
+  vaultFileHashes?(root: string, paths: string[]): Promise<string[]>
+  moveSyncVaultPin?(root: string, check?: import('./vaultCreate').VaultPinCheck): Promise<import('./vaultCreate').MoveVaultPinResult>
   forgetVault?(root: string): Promise<boolean>
   revealVault?(root: string): Promise<void>
+  /** Online library (desktop host only). Read throws when the config can't be read; open `lastVault` then. */
+  activeVaultGet?(): Promise<ActiveVaultRead>
+  /** Call after the bridge switched; throws `account_changed` for another account's ref. null = back to local.
+   *  Pass the `requestId` from onOpenOnline when this set answers that request (only then does openLibrary resolve). */
+  activeVaultSet?(ref: OnlineVaultRef | null, requestId?: string): Promise<void>
+  onActiveVaultChanged?(cb: (e: { ref: OnlineVaultRef | null }) => void): () => void
+  /** Main window only: the host asks to open this library (CloudHost.openLibrary). */
+  onOpenOnline?(cb: (req: { ref: OnlineVaultRef; requestId: string }) => void): () => void
+  /** Report a failed open-online request; success is the matching activeVaultSet. */
+  openOnlineResult?(r: { requestId: string; ok: boolean; code?: string }): void
+  /** Main window: the forwarding bridge is installed, so the host may ask for online opens. */
+  onlineCapable?(): void
   listPages(): Promise<string[]>
   /** All non-page files (attachments/.db/…), vault-relative — for the vault tree. */
   listFiles(): Promise<string[]>

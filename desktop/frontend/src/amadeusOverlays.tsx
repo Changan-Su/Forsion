@@ -14,6 +14,7 @@ import { GitAddRemoteHost } from './components/GitAddRemoteDialog'
 import { DeleteAssetsHost } from '@amadeus/components/askDeleteAssets'
 import { NewDrawingHost } from '@amadeus/components/askNewDrawing'
 import { CloudSyncDialogHost } from './components/CloudSyncDialog'
+import { SyncRecordsDialogHost } from './sync/SyncRecordList'
 import { AutomationBuilderHost } from './amadeusAutomation'
 import { SpaceOrganizerHost } from './views/SpaceOrganizer'
 import { fdDirOf } from '@amadeus/lib/fd'
@@ -200,6 +201,7 @@ export function AmadeusOverlays() {
       <DeleteAssetsHost />
       <NewDrawingHost />
       <CloudSyncDialogHost />
+      <SyncRecordsDialogHost />
       <AutomationBuilderHost />
       {/* ⌘⇧O(命令「切换 Space」)在主页以外弹出的 Space 收纳;只在主窗口(独立窗 / Mini 卡不切 Space) */}
       {windowKind() === 'main' && <SpaceOrganizerHost />}

@@ -7,10 +7,16 @@
  *  - Agents 与记忆 = 引擎的账号级总闸(PUT /agent/sync/default),顺手写旧的 forsionSyncEnabled,设置页那条老路径一致。
  *  - 插件数据 = 本机所有插件一起关的 localStorage 键(PLUGIN_SYNC_ALL_OFF_KEY)。
  * 「点过了」按账号记在本机(decided):登录了但没点过的,主窗弹一次卡片;点「稍后」也算点过,左栏挂点不再弹。
+ *
+ * 2026-11-27 智库同步统一方案第 0 步:Agents 与插件数据先封住(sealed)。读数照实(agents.on / plugins.on 是存着的值),
+ * 开关的动作不做:setSync 对封着的那类不写任何东西、回 ok;卡片 / 引导跳过它们,新同步的建议配置恒不带插件和 Agent。
+ * 引擎那边的 /agent/sync(POST)照常发 —— 它带着「我的资料」与默认日历(human/)上云。
  */
+import { isFullSync, isLegacySync, refreshSyncMode, syncModeNow } from '../sync/v2/mode'
 import { request, type SyncStatusResult } from './backendService'
 import { homeTarget } from './engine/targets'
 import { PLUGIN_SYNC_ALL_OFF_KEY, pluginSyncSummary } from '../amadeus/plugins/pluginDataSync'
+import { AGENT_SYNC_SEALED, PLUGIN_DATA_SYNC_SEALED } from './syncSeal'
 import { usePluginStore, pluginWanted } from '../amadeus/plugins/pluginStore'
 import type { AuthStatusInfo, RemoteSyncConfig, RemoteSyncReport } from '../types'
 import { registerMessages } from '../i18n'
@@ -54,6 +60,9 @@ export interface SyncSnapshot {
   agents: { on: boolean; count: number; running: boolean; last: { at: number; ok: boolean; pushed: number; pulled: number; conflicts: number; error?: string } | null }
   /** pending = 改了还没传上去的插件数;lastAt = 上次和云端对上的时刻 */
   plugins: { on: boolean; count: number; pending: number; lastAt: number | null }
+  /** 先封住、暂不同步的那几类(2026-11-27 起两项都是 true)。on 仍是存着的值,界面据这里锁住开关、写「暂不同步」;
+   *  封着时 set(kind) 什么都不写、回 ok。旧宿主没有这个字段 = 没封。 */
+  sealed?: { agents: boolean; plugins: boolean }
 }
 export interface SyncResult { ok: boolean; error?: string }
 
@@ -105,13 +114,19 @@ const toLast = (r: RemoteSyncReport | null): SyncSnapshot['notes']['last'] => r
   : null
 
 const AGENTS_OFF: SyncSnapshot['agents'] = { on: false, count: 0, running: false, last: null }
+/** 引擎说 Agents 同步封着(GET /agent/sync/default 的 sealed):界面常量没封、引擎封了时也按封着画,别让开关点了回 409。 */
+let engineSealed = false
+const sealedNow = (): NonNullable<SyncSnapshot['sealed']> => snap?.sealed ?? { agents: AGENT_SYNC_SEALED || engineSealed, plugins: PLUGIN_DATA_SYNC_SEALED }
+/** 这一类同步现在是不是封着(暂不同步):封着的开关不写任何东西。 */
+export const syncKindSealed = (kind: SyncKind): boolean => kind !== 'notes' && sealedNow()[kind]
 async function readAgents(): Promise<SyncSnapshot['agents']> {
   try {
     const [r, st] = await Promise.all([
-      request<{ enabled: boolean | null; agents: number }>(homeTarget(), '/agent/sync/default'),
+      request<{ enabled: boolean | null; agents: number; sealed?: boolean }>(homeTarget(), '/agent/sync/default'),
       request<SyncStatusResult>(homeTarget(), '/agent/sync/status').catch(() => null),
     ])
     const l = st?.lastResult
+    engineSealed = r.sealed === true
     return {
       on: r.enabled === true, count: r.agents ?? 0, running: !!st?.running,
       last: st?.lastAt && l ? { at: st.lastAt, ok: l.ok, pushed: l.pushed ?? 0, pulled: l.pulled ?? 0, conflicts: l.conflicts ?? 0, ...(l.ok ? {} : { error: l.error }) } : null,
@@ -166,6 +181,7 @@ async function load(): Promise<void> {
     },
     agents,
     plugins: readPlugins(),
+    sealed: { agents: AGENT_SYNC_SEALED || engineSealed, plugins: PLUGIN_DATA_SYNC_SEALED },
   }
   emit()
 }
@@ -276,6 +292,8 @@ export async function resolveNotes(choice: NotesChoice, backupLabel: string): Pr
 }
 
 export async function setSync(kind: SyncKind, on: boolean, who?: string | null): Promise<SyncResult> {
+  // 封着的那类(暂不同步):不改插件总开关键、不 PUT 总闸、不写 forsionSyncEnabled、也不跳去蓬洲云 —— 存着的选择原样留到放开
+  if (syncKindSealed(kind)) return { ok: true }
   try {
     if (kind === 'plugins') { ls.set(PLUGIN_SYNC_ALL_OFF_KEY, on ? null : '1'); return { ok: true } }
     if (snap?.contentRules) {openPenzorSync();return {ok:true}}
@@ -303,10 +321,10 @@ export async function applySyncChoices(choices: Record<SyncKind, boolean>, kinds
   const out: SyncResult[] = []
   if(snap?.contentRules){
     if(!(await sameAccount(who)))return [{ok:false,error:'account-changed'}]
-    if(kinds.includes('plugins'))out.push(await setSync('plugins',choices.plugins,who));markSyncDecided();openPenzorSync();return out
+    if(kinds.includes('plugins')&&!syncKindSealed('plugins'))out.push(await setSync('plugins',choices.plugins,who));markSyncDecided();openPenzorSync();return out
   }
   for (const kind of ['agents', 'plugins', 'notes'] as const) {
-    if (!kinds.includes(kind)) continue
+    if (!kinds.includes(kind) || syncKindSealed(kind)) continue
     if (account !== who) { out.push({ ok: false, error: 'account-changed' }); return out }
     if (kind === 'notes' && !choices.notes && snap?.notes.backend !== 'penzor') continue
     out.push(await setSync(kind, choices[kind], who))
@@ -337,18 +355,28 @@ function holdCard(on: boolean): void {
  *  预览或确认失败不记「点过了」:首登卡片会再问一次。 */
 export async function applyOnboardingSync(choices: Record<SyncKind, boolean>, kinds: readonly SyncKind[] = ['agents', 'plugins', 'notes']): Promise<SyncResult[]> {
   if (!snap) await refreshSync()
+  // 智库同步第 2 步完整模式:引导里勾了智库不在这里悄悄开(新同步要先比一下、出汇总卡再确认)。
+  // 不记「点过」→ 引导收尾后首登卡片(只有智库一行)接着问,开始同步 = 设置 › 同步那一行;没勾 = 点过了
+  if (syncModeNow() === 'unknown') await refreshSyncMode().catch(() => null)
+  if (isFullSync()) {
+    if (!(kinds.includes('notes') && choices.notes)) markSyncDecided()
+    return [{ ok: true }]
+  }
+  // 问不出是哪套(读失败 / 读不出 / Extend 停用):不走旧的开启流程,也不记「点过了」—— 首登卡片下次再问(Codex P1-7)
+  if (!isLegacySync()) return [{ ok: false, error: `sync-mode-${syncModeNow()}` }]
   if (!snap?.contentRules) return applySyncChoices(choices, kinds)
   const who = account
   if (!(await sameAccount(who))) return [{ ok: false, error: 'account-changed' }]
   const out: SyncResult[] = []
-  if (kinds.includes('plugins')) out.push(await setSync('plugins', choices.plugins, who))
+  const pluginsSealed = syncKindSealed('plugins')
+  if (kinds.includes('plugins') && !pluginsSealed) out.push(await setSync('plugins', choices.plugins, who))
   if (!kinds.includes('notes') || !choices.notes) {
     if (account === who) markSyncDecided()
     return out
   }
   holdCard(true)
   try {
-    const preview = await invokeContent<SetupPreviewLite | null>('penzor:sync:setup', { notes: true, profile: false, plugins: choices.plugins, agents: false, agentSlugs: [] })
+    const preview = await invokeContent<SetupPreviewLite | null>('penzor:sync:setup', { notes: true, profile: false, plugins: pluginsSealed ? false : choices.plugins, agents: false, agentSlugs: [] })
     if (account !== who) { out.push({ ok: false, error: 'account-changed' }); return out }
     if (preview && (preview.download > 0 || (preview.conflicts ?? 0) > 0 || !!preview.agentAsks?.length)) return out
     if (preview) await invokeContent('penzor:sync:apply', preview.token)
@@ -359,10 +387,11 @@ export async function applyOnboardingSync(choices: Record<SyncKind, boolean>, ki
   return out
 }
 
-/** 首登卡片要不要弹:登录着、没点过、这台能开智库同步、引导走完了;三样本来就都开着的不弹(调用方直接记成点过)。 */
+/** 首登卡片要不要弹:登录着、没点过、这台能开智库同步、引导走完了;能开的几样本来就都开着的不弹(调用方直接记成点过)。
+ *  封着的那类(暂不同步)卡片上开不了,不算数:现在只看智库那项。 */
 export function wantsSyncCard(s: SyncSnapshot | null, onboardingDone: boolean): boolean {
   if (!s || !s.signedIn || s.decided || s.applying || !s.notes.available || !onboardingDone) return false
-  return !(s.notes.on && s.agents.on && s.plugins.on)
+  return !(s.notes.on && (s.sealed?.agents || s.agents.on) && (s.sealed?.plugins || s.plugins.on))
 }
 
 export function markSyncDecided(): void {

@@ -252,7 +252,8 @@ describe('multiPeer: one binding and session per peer', () => {
     expect(cwd1).not.toBe(cwd2);
     expect(cwd1.startsWith(path.join(state.ws, 'chat', 'peers'))).toBe(true);
     expect(cwd2.startsWith(path.join(state.ws, 'chat', 'peers'))).toBe(true);
-    expect(cwd1).not.toContain('p1'); // peerId 由驱动编码,不直接进路径
+    // 只看 peers 下那一段:临时目录的随机后缀可能碰巧含 p1(如 channel-multipeer-QUp1OC)
+    expect(path.relative(path.join(state.ws, 'chat', 'peers'), cwd1)).not.toContain('p1'); // peerId 由驱动编码,不直接进路径
   });
 
   it('hashes hostile peer ids instead of walking the filesystem', async () => {

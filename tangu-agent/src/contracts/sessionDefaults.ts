@@ -45,5 +45,16 @@ export function withAmadeusWorkspace(config: AgentConfig, vaultRoot: string | nu
   if (config.execMode !== 'host' || !vaultRoot || vaultRoot === config.cwd) return config
   const roots = config.extraRoots || []
   if (roots.includes(vaultRoot)) return config
-  return { ...config, extraRoots: [...roots, vaultRoot] }
+  return {
+    ...config,
+    extraRoots: [...roots, vaultRoot],
+    amadeusExtraRoots: [...markedAmadeusRoots(config), vaultRoot],
+  }
+}
+
+/** Legacy lists and manually supplied roots carry no provenance. A marker never grants a new root. */
+export function markedAmadeusRoots(config: { extraRoots?: unknown; amadeusExtraRoots?: unknown } | null | undefined): string[] {
+  if (!Array.isArray(config?.extraRoots) || !Array.isArray(config?.amadeusExtraRoots)) return []
+  const roots = new Set(config.extraRoots)
+  return [...new Set(config.amadeusExtraRoots.filter((root): root is string => typeof root === 'string' && roots.has(root)))]
 }

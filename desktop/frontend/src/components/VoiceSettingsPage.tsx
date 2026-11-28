@@ -45,8 +45,14 @@ const KIND_MODEL: Record<'clone' | 'design', string> = { clone: 'qwen3-tts-vc-20
 const boundModel = (v: TtsVoiceInfo): string => v.targetModel || (v.kind === 'cosy' ? '' : KIND_MODEL[v.kind])
 /** 绑在通话模型上的音色(Qwen-Omni / *-realtime):朗读用不了。 */
 const callOnly = (targetModel?: string): boolean => /omni|realtime/i.test(targetModel || '')
-/** 这个朗读模型认哪张系统音色表;认不出来就只剩「自定义音色」。 */
-const readVoicesFor = (model: string): string[] => (/tts-1|gpt-.*tts|openai/i.test(model) ? OPENAI_READ_VOICES : !model || /qwen3?-tts/i.test(model) ? BAILIAN_READ_VOICES : [])
+/**
+ * 这个朗读模型认哪张系统音色表;认不出来就只剩「自定义音色」。传上游模型名(云端模型的 id 是 pr-<hash>,看不出家族)。
+ * 百炼的复刻 / 设计模型(qwen3-tts-vc-* / -vd-*)只认自己建的音色,系统音色选了会合成失败 → 不给。
+ */
+export const readVoicesFor = (model: string): string[] => (/tts-1|gpt-.*tts|openai/i.test(model) ? OPENAI_READ_VOICES : !model || (/qwen3?-tts/i.test(model) && !/-v[cd]-/i.test(model)) ? BAILIAN_READ_VOICES : [])
+/** 云端朗读模型 → 上游模型名(后台下发的 apiModelId);直连的 <providerId>/<model> 原样返回。 */
+export const ttsFamilyModel = (model: string, cloud?: ReadonlyArray<{ id: string; apiModelId?: string | null }> | null): string =>
+  cloud?.find((m) => m.id === model)?.apiModelId || model
 const COLLAPSED = 8
 
 /** 语音页要去的地方:模型 → 提供方 / 默认模型里的「语音通话」「朗读」那一行。 */
@@ -60,7 +66,7 @@ export function VoiceSettingsPage(p: {
   providers: DirectProviderConfig[]
   cloudModel?: CloudCallModel | null
   /** 后台给的朗读默认(用户没动过时跟随)。 */
-  ttsDefault?: { ttsModelId?: string | null; ttsVoice?: string | null } | null
+  ttsDefault?: { ttsModelId?: string | null; ttsVoice?: string | null; ttsModels?: Array<{ id: string; apiModelId?: string | null }> } | null
   cloudAccount: boolean
   signedIn: boolean
   edit: (patch: Partial<StoredDesktopConfig>) => void
@@ -112,7 +118,7 @@ function ReadAloudPanel(p: Parameters<typeof VoiceSettingsPage>[0] & { stored: S
   }
   // 系统音色没有样音、复刻 / 设计的音色:现合成一句(走当前朗读模型)
   const previewTtsUrl = (v: string): Promise<string> => synthesizeTts(homeTarget(), { text: t('settings.tts.testText'), model, voice: v, ...(stored.ttsSpeed && stored.ttsSpeed !== 1 ? { speed: stored.ttsSpeed } : {}) }).then((b) => URL.createObjectURL(b))
-  const presets = readVoicesFor(model)
+  const presets = readVoicesFor(ttsFamilyModel(model, p.ttsDefault?.ttsModels))
   const list = showAll ? presets : presets.slice(0, COLLAPSED)
   const named = (v: string): boolean => BAILIAN_READ_VOICES.includes(v)
   const system: VoiceItem[] = (list.includes(voice) || !presets.includes(voice) ? list : [...list.slice(0, -1), voice]).map((v) => ({

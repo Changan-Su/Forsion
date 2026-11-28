@@ -13,6 +13,13 @@ const KEYS: Record<string, string> = {
   'not-logged-in': 'ipcerr.notLoggedIn',
   'login-expired': 'ipcerr.loginExpired',
   'vault-missing': 'ipcerr.vaultMissing',
+  // 智库设置文件(amadeus-config)读不了 / 解析不了 / 形状不对(electron/amadeus/settings.ts):宿主不拿默认值盖它,原样留着。
+  // 读不了(I/O)让人查权限;内容坏的两种别引到权限上
+  'amadeus-config-unreadable': 'ipcerr.amadeusConfigUnreadable',
+  'amadeus-config-unparseable': 'ipcerr.amadeusConfigCorrupt',
+  'amadeus-config-malformed': 'ipcerr.amadeusConfigCorrupt',
+  // 旧 remotesync 那一轮(electron/remotesyncIpc.ts runNow):条目同步的名单算不出来(设置读不了 / 名单读不懂 / 条目库根打不开),不跑
+  'entry-ignores-unknown': 'ipcerr.entryIgnoresUnknown',
   'mirror-missing': 'ipcerr.mirrorMissing',
   'scan-failed': 'ipcerr.scanFailed',
   'invalid-space-id': 'ipcerr.invalidSpaceId',
@@ -24,9 +31,18 @@ const KEYS: Record<string, string> = {
   'ch-records-locked': 'computerHistory.recordsLocked',
 }
 
-export function ipcErrorText(e: unknown): string {
+const unwrap = (e: unknown): string => {
   const raw = typeof e === 'string' ? e : (e as Error)?.message || String(e)
-  const msg = raw.replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/, '')
+  return raw.replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/, '')
+}
+
+/** 主进程给的原因码(`code` / `code: <细节>` 里的 code);不是这种形状就 null。 */
+export function ipcErrorCode(e: unknown): string | null {
+  return /^([a-z-]+)(?:: [\s\S]*)?$/.exec(unwrap(e))?.[1] ?? null
+}
+
+export function ipcErrorText(e: unknown): string {
+  const msg = unwrap(e)
   const m = /^([a-z-]+)(?:: ([\s\S]*))?$/.exec(msg)
   const key = m && KEYS[m[1]]
   return key ? translate(key, { detail: m![2] ?? '' }) : msg

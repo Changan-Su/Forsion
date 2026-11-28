@@ -30,7 +30,9 @@ function engineSwap(): Plugin {
       const r = await this.resolve(source, importer, { ...options, skipSelf: true })
       if (!r) return null
       const id = r.id.replace(/\\/g, '/')
-      for (const [suffix, target] of MAP) if (id.endsWith(suffix)) return target
+      // 返回的替身也要用正斜杠:Windows 上 resolve() 给的是反斜杠,而直接 import 同一文件时 Vite 的模块 id 是正斜杠 ——
+      // 两种写法会被当成两个模块各打一份,单列 store 一分为二(Space.build() 开进一份、壳读另一份,主页空白)。
+      for (const [suffix, target] of MAP) if (id.endsWith(suffix)) return target.replace(/\\/g, '/')
       return null
     },
   }

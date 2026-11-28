@@ -9,6 +9,7 @@ import React, { useEffect, useState } from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { formatDateTime } from '../format/time'
+import { ipcErrorText } from '../ipcError'
 import type { RemoteSyncConfig, RemoteSyncProgress, RemoteSyncReport, RemoteSyncState } from '../types'
 
 registerMessages({
@@ -30,7 +31,8 @@ function viewInPenzor(vault: string): void {
   window.tangu?.requestMainAction?.('open-space', PENZOR_SPACE_ID)
 }
 
-export function RemoteSyncSection(): React.ReactElement | null {
+/** embedded:画在第 2 步的设置 › 同步页里(「同步到网盘（原来的方式）」那张卡),不再指去蓬洲云 › 同步。 */
+export function RemoteSyncSection({ embedded = false }: { embedded?: boolean } = {}): React.ReactElement | null {
   const { t } = useI18n()
   const api = window.remoteSync
   const [cfg, setCfg] = useState<RemoteSyncConfig | null>(null)
@@ -127,7 +129,7 @@ export function RemoteSyncSection(): React.ReactElement | null {
             else c.conf++
           }
           setNote(t('settings.remotesync.dryResult', { push: String(c.push), pull: String(c.pull), del: String(c.del), conf: String(c.conf) }))
-        } else setNote(r.errors?.[0] || 'error')
+        } else setNote(r.errors?.[0] ? ipcErrorText(r.errors[0]) : 'error')
       })
       .finally(() => setBusy(false))
   }
@@ -182,7 +184,7 @@ export function RemoteSyncSection(): React.ReactElement | null {
   return (
     <>
       {/* 开关搬去蓬洲云「同步」页了(云同步开启方案 2026-10-20);这一页留给换存储、改计划和方向 */}
-      {penzorSpaceReady() && (
+      {!embedded && penzorSpaceReady() && (
         <div className="field remotesync-moved">
           <div className="hint">{t('settings.remotesync.movedHint')}</div>
           <button type="button" className="btn sm" onClick={openPenzorSync}>{t('settings.remotesync.openPenzorSync')}</button>
@@ -449,7 +451,7 @@ export function RemoteSyncSection(): React.ReactElement | null {
         )}
         {report && report.errors.length > 0 && (
           <div className="hint" style={{ color: 'var(--danger, #c00)' }}>
-            {t('settings.remotesync.errors')}: {report.errors.slice(0, 3).join('; ')}
+            {t('settings.remotesync.errors')}: {report.errors.slice(0, 3).map(ipcErrorText).join('; ')}
             {report.errors.length > 3 ? '…' : ''}
           </div>
         )}

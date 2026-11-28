@@ -215,7 +215,8 @@ function WizardFlow({ themeLang, themeSkin, themeMode, themeModePref, themeSeed,
     if (phoneRun) finishPhoneGuide(phoneRun.mode === 'full')
     // 后台去开,不挡收尾。不跳蓬洲云「同步」页(11-08):云端已有数据要用户定的,回主页由首登卡片带着数字问
     if (pick && syncBase && window.remoteSync) {
-      const kinds = (['notes', 'plugins'] as const).filter((k) => (k !== 'notes' || syncBase.notesShown) && pick[k] !== syncBase[k])
+      // 封着的那项(暂不同步)勾是锁住的,不交出去:applyOnboardingSync 对它本来也什么都不写
+      const kinds = (['notes', 'plugins'] as const).filter((k) => (k !== 'notes' || syncBase.notesShown) && !(k === 'plugins' && syncBase.sealed?.plugins) && pick[k] !== syncBase[k])
       void applyOnboardingSync(pick, kinds)
     }
     onFinish()

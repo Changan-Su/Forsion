@@ -5,6 +5,7 @@
  * 负对照:去掉 connectOnce 里的 `if (!latest()) return` → ① connState 变 err、② 15s 后不再 connect。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AuthStatusInfo } from '../types'
 
 type ConnResult = { ok: boolean; message: string; authRejected?: boolean }
 const deferreds = new Map<string, { resolve: (r: ConnResult) => void }>()
@@ -32,7 +33,7 @@ type St = { state: 'stopped' | 'starting' | 'ready' | 'crashed'; url: string | n
 const ready: St = { state: 'ready', url: 'http://127.0.0.1:1', pid: 1, lastError: null }
 
 /** 假 window.tangu(照 appStore.boot.test):cfg 可改 token 模拟引擎换 token 重启;广播只送给已注册监听器。 */
-function arm() {
+function arm(authInfo: AuthStatusInfo | null = null) {
   const listeners = new Set<(st: St) => void>()
   const authListeners = new Set<() => void>()
   let status = ready
@@ -42,7 +43,7 @@ function arm() {
     onBackendStatus: (cb: (st: St) => void) => { listeners.add(cb); return () => listeners.delete(cb) },
     onAuthChanged: (cb: () => void) => { authListeners.add(cb); return () => authListeners.delete(cb) },
     backendStatus: () => Promise.resolve(status),
-    authStatus: () => Promise.resolve(null),
+    authStatus: () => Promise.resolve(authInfo),
     listProviders: () => Promise.resolve([]),
     envCheck: () => Promise.resolve({}),
   }
@@ -147,6 +148,22 @@ describe('appStore.connect:代数只认最新', () => {
     await tick()
     expect(useApp.getState().sessions).toEqual([localSession])
     expect(useApp.getState().connState).toBe('idle')
+  })
+
+  it('loads the fixture account on auth:changed even when the engine is unavailable', async () => {
+    const auth = { loggedIn: true, accountId: 'fixture', cloudUrl: 'http://127.0.0.1:1', username: 'fixture', tokenSource: null }
+    const { broadcast, broadcastAuth } = arm(auth)
+    const boot = useApp.getState().boot()
+    await tick(10)
+    await boot
+    deferreds.get('old')!.resolve({ ok: false, message: 'ECONNREFUSED' })
+    await tick()
+    expect(useApp.getState().authInfo).toBeNull()
+
+    broadcast({ ...ready, state: 'stopped' })
+    broadcastAuth()
+    await tick()
+    expect(useApp.getState().authInfo).toEqual(auth)
   })
 
   it('换连接目标(托管切外部):新目标的结果回来前 connState 不沿用旧目标的 ok;同一目标重连保持 ok(R2-g-1)', async () => {

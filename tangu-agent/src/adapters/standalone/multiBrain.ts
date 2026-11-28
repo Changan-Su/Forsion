@@ -126,11 +126,20 @@ export function dashScopeApiBase(baseUrl: string): string {
  * 百炼原生 TTS:POST /services/aigc/multimodal-generation/generation(qwen3-tts-flash / -vc- / -vd- 全系),
  * 非流式响应给 24h 有效的音频 URL,服务端下载后回传字节。speed 参数百炼不支持,忽略。
  */
+/**
+ * 百炼原生 qwen3-tts 不带音色直接 400("The voice property is required"):没传就用系统音色 Cherry,同 CosyVoice 兜 longxiaochun_v2。
+ * 复刻 / 设计模型(-vc- / -vd-)只认自建音色,兜不了,照旧不传、让上游报错。与 server ttsUpstream.ts 那份逐字一致。
+ */
+export function dashScopeDefaultVoice(apiModelId: string): string | undefined {
+  return /-v[cd]-/i.test(apiModelId) ? undefined : 'Cherry';
+}
+
 async function synthesizeDashScopeTts(baseUrl: string, apiKey: string | undefined, apiModelId: string, req: SpeechRequest): Promise<SpeechResult> {
+  const voice = req.voice || dashScopeDefaultVoice(apiModelId);
   const r = await fetch(`${dashScopeApiBase(baseUrl)}/services/aigc/multimodal-generation/generation`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey || ''}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: apiModelId, input: { text: req.text, ...(req.voice ? { voice: req.voice } : {}) } }),
+    body: JSON.stringify({ model: apiModelId, input: { text: req.text, ...(voice ? { voice } : {}) } }),
     signal: ttsSignal(req),
   });
   if (!r.ok) throw new Error(`dashscope tts ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);

@@ -452,6 +452,8 @@ export interface PluginAppApi extends BlockSurfaceApi {
   provideInboxChannel?(channel: InboxChannel | null): boolean
   /** 同步总开关(2026-10-20+,蓬洲云「同步」页):笔记库 / Agents 与记忆 / 插件数据三样的开关与状态,宿主
    *  services/syncSetup.ts 是真身。只给首方内置包、只在有本地库远程同步的桌面挂;别的插件 get() 恒 null、set 恒失败。
+   *  2026-11-27 起快照带 `sealed: { agents, plugins }`(先封住、暂不同步的那几类;`agents.on` / `plugins.on` 仍是存着的值):
+   *  封着的那类 set 回 ok 但什么都不写,界面该锁住它、写「暂不同步」。旧宿主没有 sealed = 没封。
    *  旧宿主没有:`ctx.app.sync?.get()`。 */
   sync?: {
     get(): SyncSnapshot | null

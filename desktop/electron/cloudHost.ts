@@ -46,7 +46,29 @@ export interface CloudHost {
       prepare(): Promise<void>
       baseline(path:string): Promise<{seq:number;hash:string;base?:string;pending:boolean}|null>
     }
+    /** 智库同步第 2 步起(可选):按库根的认领(契约 §3.7、实现期修订 H-1 第 5 条;contentSyncHost.contentSyncOwnershipV2)。
+     *  有它 → 新 Extend 不再调 claim / changed;老宿主没有 → Extend 进兼容模式。claim / changed 原样留给老 Extend。 */
+    ownership?: {
+      /** 没有 syncOwnershipV2 时按老的全局认领推:认领了 = 全部条目根 / 镜像停 / human 归 content;没认领 = 什么都没接手。读不了就抛。 */
+      get(account:string): Promise<SyncOwnership>
+      /** 先撤后给、读回核对、失败回滚再抛;human 没变不碰引擎;最后让旧引擎按新遮罩重建。 */
+      set(o:SyncOwnership,account:string): Promise<void>
+      /** 只通知「新同步动过盘」,不写 owner(替代老 changed())。 */
+      touched(account:string): Promise<void>
+    }
+    /** 智库同步第 3 步起(可选,H3 定稿第 1 节;contentSyncHost.MIRROR_RETIRE):宿主认 Ownership.mirrorRetired(只停镜像)。
+     *  有它:set 不给 mirrorRetired = 沿用盘上的值、false = 撤销;get 只在退役时带 mirrorRetired:true;遮罩给旧引擎 cloudSync.mirror:false、enabled 不动。
+     *  没有它 = 不退役:老宿主的 set 会静默丢掉这个字段,Extend 退役后以 get().mirrorRetired === true 为准。 */
+    mirrorRetire?: { readonly version: 1 }
   }
+  /** 智库同步第 2 步起(可选):「同步到哪」(契约 §3.4、§3.8 D、实现期修订 H-1 第 1–4 条;syncTargets.ts)。凭据留在宿主,Extend 只拿句柄。 */
+  syncTargets?: import('./syncTargets').SyncTargetsSeam
+  /** 智库同步第 3 步起(可选,H3 定稿第 2 节):在主窗里打开一个在线库。ref 由 Extend 用自己的库清单解析好,宿主不查服务器。
+   *  宿主核账号、聚焦主窗、发 amadeus:open-online,等主窗那份文档用同一个 ref + 同一个 requestId 调 amadeus:active-vault:set(≤ 30 秒)才 resolve。
+   *  失败抛固定码:invalid_ref / account_changed / no_main_window / renderer_unsupported / switch_failed / switch_timeout。老宿主没有 → 不画「在线打开」。 */
+  openLibrary?(ref: import('@amadeus-shared/ipc').OnlineVaultRef): Promise<void>
+  /** 同步读:主窗渲染层报过 amadeus:online-capable(装好了转发壳)。U3a 之前恒为 false。 */
+  canOpenOnline?(): boolean
   /** 当前账号的云端基址(无尾斜杠)与 token(空串=未登录)。token 只在主进程流转,绝不下发渲染层。 */
   getCloud(): Promise<{ base: string; token: string }>
   /** 等价 ipcMain.handle;宿主记下通道名,preload 据此只保留有人接的桥键(cloud:present)。 */
@@ -70,7 +92,11 @@ export interface CloudHost {
   /** auth.json **原样**同步读(空串 = 没有),不做 DEFAULT_CLOUD_URL 回落:身份、基线指纹、镜像目录都从这里推,
    *  getCloud() 的回落会把「没登录」凭空造成一个账号。 */
   readCreds(): { cloudUrl: string; token: string }
-  /** 当前账号身份(shared/forsionAccount.ts 的 forsionAccountId(readCreds()));未登录 / 拿不到 = null。 */
+  /** 当前账号身份(shared/forsionAccount.ts 的 forsionAccountId(readCreds()));未登录 / 拿不到 = null。
+   *  ⚠️必须和 Extend 的 forsionAccountId(src/core/account.ts)是同一个算法:`${cloud origin + path,去掉尾斜杠}::${userId}`
+   *  (origin 小写、去缺省端口;userId 取 JWT 的 userId ?? sub)。Extend 的云端库清单用它自己读凭据算出的账号 id 和这里比,
+   *  对不上就一直不发请求(契约 step34 E3L-4);在线库 activeVault.account = sha256(这个串)也靠它。
+   *  改这里之前先改两边的 forsionAccountId,shared/forsionAccount.test.ts 的「pinned vectors」钉着串的样子。 */
   accountId(): string | null
   /** 远程同步(设置 → 同步 → 本地库远程同步)注册一个外置后端(remotesync/backends.ts);remotesync:get 会把 kind 报给渲染层。 */
   registerRemoteSyncBackend(kind: string, factory: RemoteBackendFactory): void
@@ -109,8 +135,14 @@ export interface CloudHost {
   // ── 2.13.8 起(新同步频率 F2):切走窗口 1 秒后 / 合盖前 / 退出前叫一次,让还在静默期里的改动立刻推。见 electron/contentSyncFlush.ts ──
   /** 返回 promise = 有东西在推,宿主退出前最多等 5 秒;不返回 = 没有要推的。返回退订。 */
   addFlushHook(fn: FlushHook): () => void
+  // ── 智库同步第 2 步起(可选):退出门禁(契约 §3.10、实现期修订 H-1 第 6 条;electron/syncQuitGate.ts)──
+  /** 登记一个退出检查:叫引擎扫一遍,回 synced / pending / failed。宿主在不可逆清理之前问;没人登记 = 退出链照旧。返回退订。 */
+  addQuitCheck?(fn: import('./syncQuitGate').QuitCheckFn): () => void
   // ── 2.13.8 起(帮助改进 Forsion:契约 docs/ToBeImproved/默认数据采集方案_2026-10-28/contract.md §3;实现在 telemetryHost.ts)──
   /** 匿名遥测的宿主那一半(2.13.8 起)。宿主只采集、转发,自己不存、不发;发不发、开没开由 Extend 定。 */
+  /** 智库同步第 1 步起(可选):每轮同步交一行记录(形状 = shared/vaultSync.ts 的 SyncRoundRecord;同一 id 再交 = 覆盖那一行)。
+   *  account 不给 = 当前账号。老宿主没有 → Extend 不记。 */
+  syncRecords?: import('../shared/vaultSync').SyncRecordSink
   telemetry?: {
     /** 订阅宿主事件。首个订阅者到来之前宿主最多缓存 50 条(启动早期的崩溃 / 启动耗时),订阅时一次性回放;返回退订。 */
     subscribe(cb: (ev: HostTelemetryEvent) => void): () => void
@@ -134,6 +166,8 @@ export type HostTelemetryEvent = {
        | 'quota_prompt' | 'plugin_inventory' | 'model_feedback' | 'first_run'
   ts: string; props: Record<string, unknown>
 }
+/** 契约 §3.7 的 Ownership(宿主落盘在 amadeus-config 账号下的 syncOwnershipV2)。 */
+export type SyncOwnership = import('./amadeus/settings').SyncOwnershipV2
 export type RegisterCloud = (host: CloudHost) => void | Promise<void>
 
 export interface LoadDesktopEntriesOpts {

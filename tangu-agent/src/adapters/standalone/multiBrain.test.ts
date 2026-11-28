@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { pcmToWav, createMultiBrain, downgradeSpeedTier } from './multiBrain.js';
+import { pcmToWav, createMultiBrain, downgradeSpeedTier, dashScopeDefaultVoice } from './multiBrain.js';
 import { createProviderRegistry } from '../../llm/providerRegistry.js';
 import { freshOAuthCred } from '../../llm/providerOAuth.js';
 import { openaiToAnthropicBody } from '../../llm/anthropicMessages.js';
@@ -420,3 +420,11 @@ describe('Fast 档:官方 OpenAI / Anthropic API(BYOK)', () => {
     });
   });
 });
+
+describe('dashScopeDefaultVoice', () => {
+  it('qwen3-tts 没传音色兜 Cherry(上游不带音色 400);复刻 / 设计模型不兜', () => {
+    expect(dashScopeDefaultVoice('qwen3-tts-flash')).toBe('Cherry')
+    expect(dashScopeDefaultVoice('qwen3-tts-vc-2026-01-22')).toBeUndefined()
+    expect(dashScopeDefaultVoice('qwen3-tts-vd-2026-01-26')).toBeUndefined()
+  })
+})

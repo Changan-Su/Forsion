@@ -104,7 +104,8 @@ export const deskPresentProvider: ToolProvider = {
           let abs = path.isAbsolute(p) ? p : path.resolve(ctx.cwd || process.cwd(), p);
           if (!(await isFile(abs))) {
             // vault 兜底:Amadeus 笔记以 vault 相对路径流通(amadeus 工具的口径)——agent 不必先拼绝对路径。
-            const inVault = path.isAbsolute(p) ? null : path.resolve(amadeusVaultPath(), p);
+            const root = amadeusVaultPath(ctx);
+            const inVault = root && !path.isAbsolute(p) ? path.resolve(root, p) : null;
             if (inVault && (await isFile(inVault))) abs = inVault;
             else return `Error: file not found: ${p}`;
           }

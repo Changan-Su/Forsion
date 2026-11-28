@@ -4,6 +4,8 @@
  * - 发布:公开只读链接,任何人可访问,Unpublish 即失效。
  * 配额随套餐(服务端强制;此处仅展示与报错透传):free 共享不可用/发布3;plus 2/10;pro 10/∞。
  */
+import { entryLabel, isFullSyncNow, runEntry, useV2EntrySync } from '../sync/v2/entries'
+import { useLegacySync, useSyncMode } from '../sync/v2/mode'
 import React, { useEffect, useRef, useState } from 'react'
 import { X, Copy, Check, Link2, Globe2, Trash2, RotateCw, Cloud, CloudOff, FileText, Paperclip } from 'lucide-react'
 import { useApp } from '../stores/appStore'
@@ -79,6 +81,7 @@ registerMessages({
 
 const fmtQuota = (n: number): string => (Number.isFinite(n) ? String(n) : translate('share.unlimited'))
 const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
+const vaultSideNow = (): 'local' | 'cloud' => usePageStore.getState?.().vaultSide ?? 'local'
 
 interface ShareCardProps { path: string; anchor: { x: number; y: number }; onClose: () => void }
 
@@ -88,7 +91,10 @@ export function ShareCard({ path: localPath, anchor, onClose }: ShareCardProps):
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const vaultSide = usePageStore((s) => s.vaultSide)
   const entryVaults = useEntrySync((s) => s.vaults)
-  const path = cloudPathFor(entryVaults, vaultRoot, vaultSide, localPath) ?? ''
+  // 智库同步第 2 步完整模式:本机库的云端身份是 v2 绑定的 {库, 路径},旧注册表里可能还留着接手前的前缀 ——
+  // 拿它加上协作接口当前选中的云端库,会对着另一份同路径内容生成链接(Codex P1-5)。v2 的分享接上之前,本机侧一律不给链接
+  const full = useSyncMode((s) => s.mode === 'full')
+  const path = vaultSide === 'local' && full ? '' : cloudPathFor(entryVaults, vaultRoot, vaultSide, localPath) ?? ''
   // 文件移动、切库或同步映射改变时,旧 token、参与者和进行中的操作都属于旧目标。
   // 用完整目标身份重建内部状态,避免新路径首帧仍能点击旧页面的取消发布/共享按钮。
   return <ShareCardTarget key={JSON.stringify([vaultRoot, vaultSide, localPath, path])} path={path} localPath={localPath} anchor={anchor} onClose={onClose} />
@@ -103,7 +109,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
   const [tab, setTab] = useState<'share' | 'publish'>('share')
   const [share, setShare] = useState<AmadeusPageShare | null>(null)
   const [quota, setQuota] = useState<AmadeusCollabQuota | null>(null)
-  const [pub, setPub] = useState<{ token: string; url: string } | null>(null)
+  const [pub, setPub] = useState<{ token: string; url: string; vaultId?: string } | null>(null)
   const [pubState, setPubState] = useState<PublishState>({ kind: 'none' }) // 含「被上级文件夹发布覆盖」
   const [pubCount, setPubCount] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -121,14 +127,14 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
     void collab.pageShare(path)
       .then((r) => { if (current()) { setShare(r.share); setQuota(r.quota); setNotOwner(false) } })
       .catch((e) => { if (current() && (e as { status?: number })?.status === 404) setNotOwner(true) })
-    void collab.publishes()
+    void collab.publishes(path)
       .then((r) => {
         if (!current()) return
         setQuota(r.quota)
         setPubCount(r.shares.length)
-        const hit = r.shares.find((s) => s.path === path && s.mode === 'page')
-        setPub(hit ? { token: hit.token, url: collab.publishUrl(hit.token) } : null)
-        setPubState(publishStateFor(path, r.shares))
+        const direct = publishStateFor(path, r.shares.filter((row) => row.mode === 'page'), r.target)
+        setPub(direct.kind === 'direct' ? { token: direct.token, url: collab.publishUrl(direct.token), vaultId: r.target?.vaultId } : null)
+        setPubState(publishStateFor(path, r.shares, r.target))
       })
       .catch(() => {})
   }
@@ -139,10 +145,11 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
   }, [collab, path]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const shareId = share?.id
+  const shareVaultId = share?.vaultId
   useEffect(() => {
     if (!collab || !shareId) { setRelated(null); return }
     let live = true
-    void collab.relatedItems?.(shareId).then((next) => {
+    void collab.relatedItems?.(shareId, shareVaultId).then((next) => {
       if (!live) return
       // 后加的引用不自动带上,只标「新」排最前。第一次打开没有比较的基准,都不算新。
       const seenKey = `amx.share.seen.${shareId}`
@@ -153,7 +160,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
       setRelated(next)
     }).catch(() => { if (live) setRelated(null) }) // 旧 Extend / 旧服务端没有这个接口:分区不显示
     return () => { live = false }
-  }, [collab, shareId])
+  }, [collab, shareId, shareVaultId])
 
   if (!collab) return null
 
@@ -186,12 +193,12 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
     const flip = (included: boolean): void => setRelated((r) => r && { ...r, items: r.items.map((i) => (i.path === item.path ? { ...i, included } : i)) })
     flip(!item.included)
     setFresh((list) => list.filter((p) => p !== item.path))
-    void collab.setShareItem(share!.id, item.path, !item.included)
+    void collab.setShareItem(share!.id, item.path, !item.included, item.vaultId)
       .catch(async (e) => {
         if (!alive.current) return
         flip(item.included)
         // 文件刚被移动:清单已过时,按服务端的结果重画。
-        if ((e as { status?: number })?.status === 409) setRelated(await collab.relatedItems!(share!.id).catch(() => null))
+        if ((e as { status?: number })?.status === 409) setRelated(await collab.relatedItems!(share!.id, item.vaultId).catch(() => null))
         else err(e, t('share.opFailed'))
       })
       .finally(() => alongInFlight.current.delete(item.path))
@@ -210,7 +217,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
         </div>
 
         {!path ? (
-          <div className="amxc-hint" style={{ padding: '18px 8px' }}>{t('share.notInCloud')}</div>
+          <div className="amxc-hint" style={{ padding: '18px 8px' }}>{t(isFullSyncNow() && vaultSideNow() === 'local' ? 'ssync.share.v2Later' : 'share.notInCloud')}</div>
         ) : notOwner ? (
           <div className="amxc-hint" style={{ padding: '18px 8px' }}>{t('share.ownerOnly')}</div>
         ) : tab === 'share' ? (
@@ -232,20 +239,20 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
                 <button className="amxc-ic" title={t('share.copyInvite')} onClick={() => copy(collab.inviteUrl(share.inviteToken), 'inv')}>
                   {copied === 'inv' ? <Check size={13} /> : <Copy size={13} />}
                 </button>
-                <button className="amxc-ic" title={t('share.rotate')} onClick={() => run(collab.updatePageShare(share.id, { rotate: true }), t('share.rotated'))}>
+                <button className="amxc-ic" title={t('share.rotate')} onClick={() => run(collab.updatePageShare(share.id, { rotate: true }, shareVaultId), t('share.rotated'))}>
                   <RotateCw size={13} />
                 </button>
               </div>
               <div className="amxc-frow">
                 <span className="amxc-lbl">{t('share.linkRole')}</span>
-                <select value={share.inviteRole} onChange={(e) => run(collab.updatePageShare(share.id, { role: e.target.value as 'editor' | 'viewer' }))}>
+                <select value={share.inviteRole} onChange={(e) => run(collab.updatePageShare(share.id, { role: e.target.value as 'editor' | 'viewer' }, shareVaultId))}>
                   <option value="editor">{t('share.roleEditor')}</option>
                   <option value="viewer">{t('share.roleViewer')}</option>
                 </select>
                 <span className="amxc-lbl">{t('share.openFor')}</span>
                 <select
                   value={left === null ? 'forever' : 'left'}
-                  onChange={(e) => run(collab.updatePageShare(share.id, { expiresDays: e.target.value === 'forever' ? null : Number(e.target.value) }))}
+                  onChange={(e) => run(collab.updatePageShare(share.id, { expiresDays: e.target.value === 'forever' ? null : Number(e.target.value) }, shareVaultId))}
                 >
                   {left !== null && <option value="left" hidden>{left <= 0 ? t('share.endsToday') : t('share.daysLeft', { n: left })}</option>}
                   <option value="7">{t('share.days7')}</option>
@@ -258,13 +265,13 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
                 {share.hasPassword ? (
                   <>
                     <span className="amxc-tag">{t('share.passwordSet')}</span>
-                    <button className="amxc-ic" title={t('share.clearPassword')} onClick={() => run(collab.updatePageShare(share.id, { password: null }), t('share.passwordCleared'))}><Trash2 size={12} /></button>
+                    <button className="amxc-ic" title={t('share.clearPassword')} onClick={() => run(collab.updatePageShare(share.id, { password: null }, shareVaultId), t('share.passwordCleared'))}><Trash2 size={12} /></button>
                   </>
                 ) : (
                   <>
                     <input className="amxc-input" placeholder={t('share.passwordOptional')} value={pwDraft} onChange={(e) => setPwDraft(e.target.value)} />
                     <button className="amxc-ic" title={t('share.setPassword')} disabled={!pwDraft.trim()}
-                      onClick={() => { const pw = pwDraft.trim(); setPwDraft(''); run(collab.updatePageShare(share.id, { password: pw }), t('share.passwordSaved')) }}>
+                      onClick={() => { const pw = pwDraft.trim(); setPwDraft(''); run(collab.updatePageShare(share.id, { password: pw }, shareVaultId), t('share.passwordSaved')) }}>
                       <Check size={13} />
                     </button>
                   </>
@@ -274,7 +281,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
                 <>
                   <div className="amxc-sec">{t('share.along', { n: along.filter((i) => i.included).length, total: along.length })}</div>
                   {along.map((item) => (
-                    <button key={item.path} className={`amxc-row${item.included ? ' on' : ''}`} title={item.path} onClick={() => toggleAlong(item)}>
+                    <button key={item.path} className={`amxc-row${item.included ? ' on' : ''}`} title={item.displayPath ?? item.path} onClick={() => toggleAlong(item)}>
                       <span className="amxc-row-ic">{item.kind === 'page' ? <FileText size={13} /> : <Paperclip size={13} />}</span>
                       <span className="amxc-row-name">{item.title}</span>
                       {fresh.includes(item.path) && <span className="amxc-tag">{t('share.alongNew')}</span>}
@@ -290,14 +297,14 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
               {share.participants.map((m) => (
                 <div key={m.userId} className="amxc-row static">
                   <span className="amxc-row-name">{m.username ?? m.userId.slice(0, 8)}</span>
-                  <select value={m.role} onChange={(e) => run(collab.setParticipantRole(share.id, m.userId, e.target.value as 'editor' | 'viewer'))}>
+                  <select value={m.role} onChange={(e) => run(collab.setParticipantRole(share.id, m.userId, e.target.value as 'editor' | 'viewer', shareVaultId))}>
                     <option value="editor">{t('share.roleEditor')}</option>
                     <option value="viewer">{t('share.roleViewer')}</option>
                   </select>
-                  <button className="amxc-ic" title={t('share.removeParticipant')} onClick={() => run(collab.removeParticipant(share.id, m.userId), t('share.removed'))}><Trash2 size={12} /></button>
+                  <button className="amxc-ic" title={t('share.removeParticipant')} onClick={() => run(collab.removeParticipant(share.id, m.userId, shareVaultId), t('share.removed'))}><Trash2 size={12} /></button>
                 </div>
               ))}
-              <button className="amxc-danger" disabled={busy} onClick={() => run(collab.revokePageShare(share.id), t('share.stopped'))}>
+              <button className="amxc-danger" disabled={busy} onClick={() => run(share.vaultId ? collab.revokePageShareIn(share.vaultId, share.id) : collab.revokePageShare(share.id), t('share.stopped'))}>
                 {t('share.stop')}
               </button>
             </div>
@@ -311,7 +318,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
                   <button className="amxc-ic" title={t('share.copyLink')} onClick={() => copy(pub.url, 'pub')}>{copied === 'pub' ? <Check size={13} /> : <Copy size={13} />}</button>
                 </div>
                 <div className="amxc-frow">
-                  <button className="amxc-danger" disabled={busy} onClick={() => run(collab.revokePublish(pub.token), t('share.unpublished'))}>{t('share.unpublish')}</button>
+                  <button className="amxc-danger" disabled={busy} onClick={() => run(pub.vaultId ? collab.revokePublishIn(pub.vaultId, pub.token) : collab.revokePublish(pub.token), t('share.unpublished'))}>{t('share.unpublish')}</button>
                   <a className="amxc-view" href={pub.url} target="_blank" rel="noreferrer">{t('share.viewPage')}</a>
                 </div>
               </>
@@ -354,7 +361,20 @@ function CloudSyncRow({ path, onClose }: { path: string; onClose: () => void }) 
   const vaultSide = usePageStore((s) => s.vaultSide)
   useEntrySync((s) => s.vaults) // 订阅注册表变化以刷新 synced 态
   const { t } = useI18n()
-  if (!window.amadeusSync?.entrySyncEnable || vaultSide !== 'local') return null
+  // 智库同步第 2 步完整模式:同一个入口(同步这篇… / 停止同步这一项 / 同步设置…),改去设置 › 同步
+  const v2 = useV2EntrySync(vaultRoot, vaultSide === 'local' ? path : null)
+  const legacy = useLegacySync() // 旧写入口:读不出 / 还没问出来时不给
+  if (v2 !== null) {
+    if (vaultSide !== 'local') return null
+    return (
+      <div className="amxc-body" style={{ borderTop: '1px solid var(--border, rgba(128,128,128,.25))', marginTop: 4, paddingTop: 8 }}>
+        <button className="amxc-primary" data-sync-entry={v2 || 'off'} onClick={() => { onClose(); runEntry(path, 'page') }}>
+          {v2 === 'explicit' ? <CloudOff size={13} /> : <Cloud size={13} />} {entryLabel(v2, 'page')}
+        </button>
+      </div>
+    )
+  }
+  if (!window.amadeusSync?.entrySyncEnable || vaultSide !== 'local' || !legacy) return null
   const synced = isSyncedEntry(vaultRoot, path)
   return (
     <div className="amxc-body" style={{ borderTop: '1px solid var(--border, rgba(128,128,128,.25))', marginTop: 4, paddingTop: 8 }}>

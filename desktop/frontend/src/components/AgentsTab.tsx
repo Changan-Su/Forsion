@@ -17,6 +17,7 @@ import { act } from '../activity/log'
 import { agentDescription } from './builtinAgentDescriptions'
 import { homeTarget } from '../services/engine/targets'
 import { agentName } from '../agentName'
+import { AGENT_SYNC_SEALED } from '../services/syncSeal'
 
 registerMessages({
   'agentstab.userMdTemplate': {
@@ -125,7 +126,8 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
         maxIterations: editing.maxIterations ? Number(editing.maxIterations) : null,
         approvalMode: editing.approvalMode || undefined,
         shareDefaultMemory: editing.shareDefaultMemory,
-        cloudSync: editing.cloudSync,
+        // Agents 同步先封住(暂不同步):不带 cloudSync,存着的授权原样留着
+        ...(AGENT_SYNC_SEALED ? {} : { cloudSync: editing.cloudSync }),
         activityAccess: editing.activityAccess,
         // null=显式清除(JSON 里 undefined 会被剔键=保留旧值,清除必须传 null)
         toolsMode: editing.toolsMode || null,
@@ -310,14 +312,23 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
           <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.shareMemoryHint')}</div>
         </div>
         {/* 云同步要 Forsion 账号(登录态住在内置包 Forsion Extend,桥键 authStatus):没装就不给这个开关 */}
-        {!!window.tangu?.authStatus && <div className="field">
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
-            <input type="checkbox" checked={editing.cloudSync}
-              onChange={(e) => setEditing({ ...editing, cloudSync: e.target.checked })} />
-            {t('settings.agents.cloudSync')}
-          </label>
-          <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.cloudSyncHint')}</div>
-        </div>}
+        {!!window.tangu?.authStatus && (AGENT_SYNC_SEALED
+          // 先封住:锁住写「暂不同步」(不是用户关的,以后会回来),没有勾
+          ? <div className="field" data-agent-sync-sealed="">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, userSelect: 'none' }}>
+              {t('settings.agents.cloudSync')}
+              <span style={{ marginLeft: 'auto', fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-faint)', fontWeight: 400 }}>{t('sync.sealed')}</span>
+            </label>
+            <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.cloudSyncSealedHint')}</div>
+          </div>
+          : <div className="field">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
+              <input type="checkbox" checked={editing.cloudSync}
+                onChange={(e) => setEditing({ ...editing, cloudSync: e.target.checked })} />
+              {t('settings.agents.cloudSync')}
+            </label>
+            <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.cloudSyncHint')}</div>
+          </div>)}
         <div className="field">
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
             <input type="checkbox" checked={editing.activityAccess}
@@ -418,8 +429,10 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
                 {a.createdBy === 'system' && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-caption, 11px)' }}>· {t('agent.badge.system')}</span>}
                 {a.description && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>{agentDescription(a, t).length > 60 ? `${agentDescription(a, t).slice(0, 60)}…` : agentDescription(a, t)}</span>}
               </span>
-              {!!window.tangu?.authStatus && <button className="icon-btn" title={a.cloudSync ? t('settings.agents.cloudSyncOn') : t('settings.agents.cloudSyncOff')}
-                onClick={() => toggleCloudSync(a)} style={a.cloudSync ? { color: 'var(--accent-ink)' } : { opacity: 0.5 }}><Cloud size={13} /></button>}
+              {!!window.tangu?.authStatus && (AGENT_SYNC_SEALED
+                ? <button className="icon-btn" disabled data-agent-sync-sealed="" title={t('settings.agents.cloudSyncSealed')} aria-label={t('settings.agents.cloudSyncSealed')} style={{ opacity: 0.5 }}><Cloud size={13} /></button>
+                : <button className="icon-btn" title={a.cloudSync ? t('settings.agents.cloudSyncOn') : t('settings.agents.cloudSyncOff')}
+                  onClick={() => toggleCloudSync(a)} style={a.cloudSync ? { color: 'var(--accent-ink)' } : { opacity: 0.5 }}><Cloud size={13} /></button>)}
               {a.slug !== defaultSlug && <button className="icon-btn" title={t('settings.agents.setDefault')} onClick={() => setDefault(a.slug)}><Star size={13} /></button>}
               <button className="icon-btn" title={t('settings.agents.viewMem')} onClick={() => setViewing(a)}><BookOpen size={13} /></button>
               <button className="icon-btn" title={t('common.edit')} onClick={() => startEdit(a)}><Pencil size={13} /></button>

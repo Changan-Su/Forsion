@@ -913,6 +913,19 @@ export async function startStageEngine(
   }
 
   const server = createServer((req, res) => {
+    // CORS 同真引擎(tangu-agent standalone/main.ts):舞台的渲染层跨源直连这里 —— dev 是 vite 的 http://localhost,
+    // 带 Authorization 的请求浏览器先发 OPTIONS 预检,预检不带令牌。预检要在验令牌之前答,否则回 401、真正的请求被拦
+    // (dev 舞台里个人日历「暂时读不到」就是这么来的;打包态 file:// 碰巧不受影响)。鉴权只靠 Bearer、没有 cookie,放开 origin 无 CSRF 面;
+    // 预检只回这三条头,不碰演示数据。
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204)
+      res.end()
+      req.resume()
+      return
+    }
     // 只认这个舞台的令牌(父进程每次起舞台现生成,写进舞台的引擎配置):本机别的程序连上来读不到演示数据、也占不了资源
     if (opts.token && req.headers.authorization !== `Bearer ${opts.token}`) {
       res.writeHead(401, { 'Content-Type': 'application/json' })

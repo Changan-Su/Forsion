@@ -48,6 +48,8 @@ import { formatDateTime } from '../format/time'
 import { LocaleToggle } from './LocaleToggle'
 import { BrandLogo } from './BrandLogo'
 import { RemoteSyncSection, openPenzorSync, penzorSyncReady } from './RemoteSyncSection'
+import { SyncSettings } from './SyncSettings'
+import { takePendingSyncFocus, type SyncFocus } from '../sync/v2/openSyncSettings'
 import { APP_VERSION } from '../changelog'
 import { Markdown } from './Markdown'
 import { UpdateActions, UpdateSourceNote } from './UpdateActions'
@@ -449,6 +451,8 @@ export const SettingsModal: React.FC<{
   initialTab?: SettingsTarget
   /** Open a physical global skill copy when navigating here from an Agent profile. */
   initialSkillKey?: string
+  /** 设置 › 同步的落点(智库同步第 2 步:右键「同步这个文件夹…」、首登卡片),浮窗经 params.syncFocus 带来。 */
+  initialSyncFocus?: SyncFocus
 }> = (p) => {
   const { t, locale } = useI18n()
   const showWaitDetails = useChatWaitDetailsEnabled()
@@ -458,6 +462,8 @@ export const SettingsModal: React.FC<{
   // 深链解析(一级页 + 子页)只在 resolveSettingsTarget 一处:连接/Forsion → 常规(general)的对应子页;
   // Agent CLI → agents/ag-clis;微信 → 通道;`${tab}/${sub}` 直达二级页。旧 normalizeTab 丢 sub = 登录入口全落错页(U-02)。
   const [initialTarget] = useState(() => resolveSettingsTarget(p.initialTab))
+  // 窗内设置(没有浮窗的宿主)走 openSyncSettings 的一次性交接;浮窗由 FloatingRoot 经 props 传
+  const [syncFocus] = useState<SyncFocus | undefined>(() => p.initialSyncFocus ?? (initialTarget.tab === 'sync' ? takePendingSyncFocus() ?? undefined : undefined))
   const [requestedTab, setTab] = useState<Tab>(initialTarget.tab as Tab)
   // 「电脑操作」引擎插件有固定的一级页(AI 组,挨着浏览器):旧的 plugin:computer-use 深链 / 插件列表里的「打开设置」都落到它。
   const rawTab: Tab = requestedTab === `plugin:${COMPUTER_USE_PLUGIN}` ? 'computer-use' : requestedTab
@@ -2382,7 +2388,8 @@ export const SettingsModal: React.FC<{
                   <PluginSettingsView key={activeSub} pluginId={o.pluginId} def={o.item} bare anchor={activeSub === initialTarget.sub ? initialTarget.anchor : undefined} />
                 ))}
 
-                {tab === 'sync' && activeSub === 's-remote' && <RemoteSyncSection />}
+                {/* 完整模式画新的同步页;compat / 老 Extend / Extend 停用时照旧画今天的 RemoteSyncSection(门控在 SyncSettings) */}
+                {tab === 'sync' && activeSub === 's-remote' && <SyncSettings focus={syncFocus} legacy={<RemoteSyncSection />} drive={<RemoteSyncSection embedded />} />}
 
                 {tab === 'model' && activeSub === 'm-models' && (
                   <DefaultModelsPage

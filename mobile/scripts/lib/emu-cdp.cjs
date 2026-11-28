@@ -59,7 +59,10 @@ function startReader() {
       const tmp = `${dir}.${process.pid}` // built aside and moved in whole: two runs starting together never read half a file
       fs.mkdirSync(path.join(tmp, 'classes'), { recursive: true })
       execFileSync('javac', ['--release', '11', '-Xlint:-options', '-nowarn', '-cp', jar, '-d', path.join(tmp, 'classes'), src], { stdio: 'pipe' })
-      execFileSync(path.join(newest('build-tools', 'd8'), 'd8'), ['--lib', jar, '--output', tmp, ...fs.readdirSync(path.join(tmp, 'classes')).map((f) => path.join(tmp, 'classes', f))], { stdio: 'pipe' })
+      const d8Args = ['--lib', jar, '--output', tmp, ...fs.readdirSync(path.join(tmp, 'classes')).map((f) => path.join(tmp, 'classes', f))]
+      // Windows ships d8 as d8.bat, which Node will not start without a shell: run the jar it wraps instead
+      if (process.platform === 'win32') execFileSync('java', ['-cp', path.join(newest('build-tools', 'lib/d8.jar'), 'lib/d8.jar'), 'com.android.tools.r8.D8', ...d8Args], { stdio: 'pipe' })
+      else execFileSync(path.join(newest('build-tools', 'd8'), 'd8'), d8Args, { stdio: 'pipe' })
       // the system's temp cleaner empties these folders and leaves them standing: a folder without its file is in the
       // way of the move (every run then built again and fell back to `uiautomator dump`) — take it away first
       if (!fs.existsSync(path.join(dir, 'classes.dex'))) fs.rmSync(dir, { recursive: true, force: true })

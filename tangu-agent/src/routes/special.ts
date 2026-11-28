@@ -539,7 +539,8 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
     // 插件传不了这个字段 —— ensure 的 payload 由 pluginAutomation.buildPluginTriggerUpsert 整个重建,
     // 插件给的 rule 对象里多余的键一进一出即蒸发。
     const actor = body.actor === 'plugin-ensure' ? 'plugin-ensure' : body.actor === 'user' ? 'user' : undefined;
-    const v = validateTriggerInput(body, { allowToolCall: !isPlugin, vaultPath: amadeusVaultPath() });
+    const vaultPath = amadeusVaultPath();
+    const v = validateTriggerInput(body, { allowToolCall: !isPlugin, vaultPath: vaultPath ?? undefined });
     if (!v.ok) return res.status(400).json({ detail: v.error });
     if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
       return res.status(400).json({ detail: `agent "${v.value.agentSlug}" 不存在` });
@@ -572,8 +573,8 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
     // **刻意不封顶**(关不掉 = 用户以为停了、引擎里照跑),400 会让它无限重试成风暴。
     // **关规则永远不许被预检挡住。**
     // 判据单源在 museTriggers.needsWatchColPrecheck(那里有断言;内联一份 = 两处会漂)。
-    if (needsWatchColPrecheck(prev, v.value)) {
-      const badCol = await precheckWatchCols(v.value.cond, (rel) => readDbOrNull(rel) as Promise<DbLike | null>, amadeusVaultPath());
+    if (vaultPath && needsWatchColPrecheck(prev, v.value)) {
+      const badCol = await precheckWatchCols(v.value.cond, (rel) => readDbOrNull(rel, vaultPath) as Promise<DbLike | null>, vaultPath);
       if (badCol) return res.status(400).json({ detail: badCol });
     }
     // ⚠️ 游标作废(cond 换了 / 停用→启用)的**唯一真源在 upsertTrigger**,且跑在 saveTriggers **之前**。

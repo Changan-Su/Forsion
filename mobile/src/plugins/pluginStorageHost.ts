@@ -69,6 +69,10 @@ export interface MobilePluginStorageDeps {
 
 export interface MobilePluginStorage {
   handle(req: PluginStorageRequest): Promise<unknown>
+  /** Pause initialization on a cached target until its migration can be verified. */
+  pauseVaultMigration(to: string): void
+  /** Copy the vault layer of every plugin after a confirmed cloud library move. */
+  migrateVaultRoot(from: string, to: string): Promise<void>
   /** ctx.storage.url 的地址(同步);rootRel 相对插件数据根(库那一层已带 `vaults/<key>/`)。给不出 → null。 */
   url(pluginId: string, rootRel: string): string | null
 }
@@ -101,6 +105,9 @@ interface ImportArgs { id: string; vault: string; from: string | undefined; to: 
 export function createMobilePluginStorage(deps: MobilePluginStorageDeps): MobilePluginStorage {
   const { fs } = deps
   const queues = new Map<string, Promise<unknown>>()
+  const movingSources = new Set<string>()
+  interface Migration { blocked: Set<string> | null; running?: Promise<void> }
+  const migrations = new Map<string, Migration>()
   // 临时文件名的前一段:桌面是进程号,手机只有一个进程,用启动时刻区分「上一次没换完名」留下的
   const nonce = Date.now()
   let seq = 0
@@ -124,7 +131,11 @@ export function createMobilePluginStorage(deps: MobilePluginStorageDeps): Mobile
     const root = pluginRoot(id)
     if (vault === undefined) return root
     const current = await deps.vaultRoot()
-    if (typeof vault !== 'string' || !vault || current !== vault) throw new Error('Vault changed before plugin storage access')
+    const migration = migrations.get(vault)
+    if (typeof vault !== 'string' || !vault || current !== vault ||
+        (migration && (migration.blocked === null || migration.blocked.has(id)))) {
+      throw new Error('Vault changed before plugin storage access')
+    }
     return `${root}/${STORAGE_VAULTS_DIR}/${storageVaultKey(vault)}`
   }
 
@@ -135,6 +146,103 @@ export function createMobilePluginStorage(deps: MobilePluginStorageDeps): Mobile
   }
 
   const tempOf = (abs: string): string => `${abs}.tmp-${nonce}-${++seq}`
+
+  const pauseVaultMigration = (to: string): void => {
+    if (!migrations.has(to)) migrations.set(to, { blocked: null })
+  }
+
+  async function migrateVaultRoot(from: string, to: string): Promise<void> {
+    const oldKey = storageVaultKey(from)
+    const newKey = storageVaultKey(to)
+    if (!from.startsWith('cloud://') || !to.startsWith('cloud://') || oldKey === newKey) return
+    const active = migrations.get(to)?.running
+    if (active) return active
+    const state: Migration = { blocked: null }
+    migrations.set(to, state)
+    movingSources.add(from)
+    // Include plugins whose first queued write has not created their directory yet.
+    const prior = [...queues.values()]
+    state.running = (async () => {
+      await Promise.all(prior)
+      const plugins = (await fs.list(PLUGIN_STORAGE_DIR) ?? []).filter((entry) => entry.type === 'directory' && isSafeSlug(entry.name))
+      const blocked = new Set(plugins.map((entry) => entry.name))
+      state.blocked = blocked
+      const results = await Promise.allSettled(plugins.map(({ name }) => serial(pluginRoot(name), async () => {
+        const vaults = `${pluginRoot(name)}/${STORAGE_VAULTS_DIR}`
+        await migrateVaultLayer(vaults, oldKey, newKey)
+        blocked.delete(name)
+      })))
+      const failure = results.find((result) => result.status === 'rejected')
+      if (failure) throw failure.reason
+      migrations.delete(to)
+    })().finally(() => {
+      movingSources.delete(from)
+      state.running = undefined
+    })
+    return state.running
+  }
+
+  async function migrateVaultLayer(vaults: string, oldKey: string, newKey: string): Promise<void> {
+    const source = `${vaults}/${oldKey}`
+    const destination = `${vaults}/${newKey}`
+    const entries = await fs.list(source)
+    if (entries === null) return
+    const journal = `${vaults}/.root-migration-${newKey}.json`
+    const raw = await fs.readBytes(journal)
+    const saved: unknown = raw === null ? [] : JSON.parse(utf8Decode(raw))
+    if (!Array.isArray(saved) || !saved.every((entry) => typeof entry === 'string')) {
+      throw new Error('Vault changed before plugin storage access')
+    }
+    const handled = new Set<string>(saved)
+    const checkpoint = async (relative: string): Promise<void> => {
+      handled.add(`${oldKey}/${relative}`)
+      await atomicWrite(journal, utf8Encode(JSON.stringify([...handled])))
+    }
+    const walk = async (dir: string, children: StorageFsEntry[]): Promise<void> => {
+      if (handled.has(`${oldKey}/${dir}`)) return
+      const destDir = destination + (dir ? `/${dir.slice(0, -1)}` : '')
+      if ((await fs.stat(destDir))?.type === 'file') {
+        await checkpoint(dir)
+        return
+      }
+      await fs.mkdir(destDir)
+      for (const entry of children) {
+        if (TEMP_FILE.test(entry.name)) continue
+        const relative = dir + entry.name
+        if (entry.type === 'directory') {
+          const nested = await fs.list(`${source}/${relative}`)
+          if (nested === null) throw new Error('Vault changed before plugin storage access')
+          await walk(`${relative}/`, nested)
+        } else if (!handled.has(`${oldKey}/${relative}`)) {
+          const dest = `${destination}/${relative}`
+          if ((await fs.stat(dest)) === null) {
+            const bytes = await fs.readBytes(`${source}/${relative}`)
+            if (bytes === null) throw new Error('Vault changed before plugin storage access')
+            if (await copyNewFile(dest, bytes, entry.name)) {
+              const copied = await fs.readBytes(dest)
+              if (copied === null || !sameBytes(copied, bytes)) throw new Error('Vault changed before plugin storage access')
+            }
+          }
+          await checkpoint(relative)
+        }
+      }
+    }
+    await walk('', entries)
+  }
+
+  async function copyNewFile(dest: string, bytes: Uint8Array, sourceName: string): Promise<boolean> {
+    const tmp = tempOf(dest)
+    try {
+      await fs.writeBytes(tmp, bytes)
+      const back = await fs.readBytes(tmp)
+      if (!back || !sameBytes(back, bytes)) throw new Error(`Copy of ${sourceName} does not match its source`)
+      if ((await fs.stat(dest)) !== null) return false
+      await fs.rename(tmp, dest)
+      return true
+    } finally {
+      await fs.remove(tmp).catch(() => {})
+    }
+  }
 
   /**
    * 临时文件 + 换名,旧文件「先挪开、换不过去就挪回来」:
@@ -272,17 +380,8 @@ export function createMobilePluginStorage(deps: MobilePluginStorageDeps): Mobile
         continue
       }
       await fs.mkdir(parentOf(dest))
-      const tmp = tempOf(dest)
-      try {
-        await fs.writeBytes(tmp, src)
-        const back = await fs.readBytes(tmp)
-        if (!back || !sameBytes(back, src)) throw new Error(`Copy of ${f.rel || from} does not match its source`)
-        await fs.rename(tmp, dest)
-      } catch (e) {
-        await fs.remove(tmp).catch(() => {})
-        throw e
-      }
-      copied++
+      if (await copyNewFile(dest, src, f.rel || from)) copied++
+      else skipped.push(destRel)
     }
     const log = { status: 'complete', migration: a.migration, from, to: target.rel, into: a.into, copied, skipped, at: new Date().toISOString() }
     await atomicWrite(logFile, utf8Encode(`${JSON.stringify(log, null, 2)}\n`))
@@ -294,6 +393,7 @@ export function createMobilePluginStorage(deps: MobilePluginStorageDeps): Mobile
     // ⚠️ 这里到排进队列之前不许有 await:入参当场取成原始值,改动类当场排队(前后两次调用的先后 = 落盘的先后)
     const id = req.id
     const vault = req.vault === undefined ? undefined : (str(req.vault) ?? '')
+    if (vault !== undefined && movingSources.has(vault)) throw new Error('Vault changed before plugin storage access')
     const mutate = <T>(job: () => Promise<T>): Promise<T> => serial(pluginRoot(id), job)
     switch (req.op) {
       case 'readText':
@@ -399,5 +499,5 @@ export function createMobilePluginStorage(deps: MobilePluginStorageDeps): Mobile
     return `${base}/${pluginId}/${rel.split('/').map(encodeURIComponent).join('/')}`
   }
 
-  return { handle, url }
+  return { handle, pauseVaultMigration, migrateVaultRoot, url }
 }

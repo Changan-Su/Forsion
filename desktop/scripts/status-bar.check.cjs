@@ -75,11 +75,13 @@ async function main() {
     await win.waitForTimeout(1500)
 
     // F 新用户缺省不显示;同步出错只露同步项,恢复后收回。错误状态从主进程直推渲染端的那条 IPC(amadeus:sync:status,
-    //   带 binding = 按条目同步的事件形状),不必真配一个会失败的同步后端。
+    //   不带 binding = 云端镜像引擎的事件形状),不必真配一个会失败的同步后端。
+    //   ⚠️ 智库同步第 1 步起状态源只认注册表里有的条目同步:编一个没登记的 binding 会被当成已关掉的那条丢掉,所以这里用镜像;
+    //   镜像算云端那一侧,本机库的视图把它算「别处出错」,同样露出同步项。
     const fresh = await win.evaluate(() => ({ sb: !!document.querySelector('.sb'), prefs: localStorage.getItem('forsion.sb.prefs') }))
     check('F 新用户无存档:状态栏整条不显示', !fresh.sb && fresh.prefs === null, JSON.stringify(fresh))
     const pushSync = (state) => app.evaluate(({ BrowserWindow }, st) => {
-      for (const w of BrowserWindow.getAllWindows()) w.webContents.send('amadeus:sync:status', { enabled: true, state: st, lastSyncAt: null, pending: 0, conflicts: 0, skipped: [], error: st === 'error' ? 'probe' : null, binding: '/tmp/sb-probe-vault' })
+      for (const w of BrowserWindow.getAllWindows()) w.webContents.send('amadeus:sync:status', { enabled: true, state: st, lastSyncAt: null, pending: 0, conflicts: 0, skipped: [], error: st === 'error' ? 'probe' : null })
     }, state)
     await pushSync('error')
     await win.waitForSelector('.sb', { timeout: 10_000 }).catch(() => {})

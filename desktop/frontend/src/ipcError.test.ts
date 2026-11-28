@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { setLocaleGlobal } from './i18n'
-import { ipcErrorText } from './ipcError'
+import { ipcErrorCode, ipcErrorText } from './ipcError'
 
 const CJK = /[㐀-鿿]/
-const CODES = ['not-logged-in', 'login-expired', 'vault-missing', 'mirror-missing', 'scan-failed', 'invalid-space-id', 'invalid-plugin-id', 'not-user-plugin', 'plugin-not-found', 'mcp-name-reserved']
+const CODES = ['not-logged-in', 'login-expired', 'vault-missing', 'mirror-missing', 'scan-failed', 'invalid-space-id', 'invalid-plugin-id', 'not-user-plugin', 'plugin-not-found', 'mcp-name-reserved', 'amadeus-config-unreadable', 'amadeus-config-unparseable', 'amadeus-config-malformed']
 
 describe('ipcErrorText', () => {
   afterEach(() => setLocaleGlobal('zh'))
@@ -31,6 +31,24 @@ describe('ipcErrorText', () => {
     expect(ipcErrorText("Error invoking remote method 'mcp:write': Error: mcp-name-reserved: dev_phone")).toContain('dev_phone')
     setLocaleGlobal('en')
     expect(ipcErrorText("Error invoking remote method 'mcp:write': Error: mcp-name-reserved: dev_phone")).toMatch(/^The MCP server name "dev_phone" is reserved/)
+  })
+
+  it('智库设置文件读不了(restoreVault / 普通写抛的三个码)→ 一句看得懂的话,不带原码;内容坏的不引到权限上', () => {
+    const cases: Array<[string, string, string]> = [
+      ['amadeus-config-unreadable', '读不了智库的设置文件，没有改动它。检查这个文件的权限后重试。', "Couldn't read the vault settings file, so it was left unchanged. Check the file's permissions and try again."],
+      ['amadeus-config-unparseable', '智库的设置文件内容不完整或格式不对，没有改动它。检查这个文件后重试。', 'The vault settings file is incomplete or invalid, so it was left unchanged. Check the file and try again.'],
+      ['amadeus-config-malformed', '智库的设置文件内容不完整或格式不对，没有改动它。检查这个文件后重试。', 'The vault settings file is incomplete or invalid, so it was left unchanged. Check the file and try again.'],
+    ]
+    for (const [code, zh, en] of cases) {
+      const e = new Error(`Error invoking remote method 'amadeus:restoreVault': Error: ${code}`)
+      setLocaleGlobal('zh')
+      expect(ipcErrorText(e), code).toBe(zh)
+      setLocaleGlobal('en')
+      expect(ipcErrorText(e), code).toBe(en)
+      expect(ipcErrorCode(e), code).toBe(code)
+    }
+    expect(ipcErrorCode(new Error('fetch failed'))).toBeNull()
+    expect(ipcErrorCode('resolve: HTTP 502')).toBe('resolve')
   })
 
   it('不认识的原样透传(只剥前缀)', () => {

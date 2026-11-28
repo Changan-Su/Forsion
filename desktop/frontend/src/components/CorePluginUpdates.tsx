@@ -16,7 +16,7 @@ registerMessages({
   'plugins.developer': { zh: '开发工具', en: 'Developer tools' },
   'plugins.editorExtensions': { zh: '编辑器扩展', en: 'Editor extensions' },
   'plugins.bundledFeatures': { zh: '内置功能', en: 'Built-in features' },
-  'plugins.core.extend': { zh: '账号、云同步、设备互联与 Connect。', en: 'Account, cloud sync, device connections and Connect.' },
+  'plugins.core.extend': { zh: '账号、智库同步、设备互联与 Connect。', en: 'Account, vault sync, device connections and Connect.' },
   'plugins.core.calendar': { zh: '日历和待办：快捷添加、安排日期、完成与撤销。', en: 'Calendar and tasks: quick add, scheduling, complete and undo.' },
   'plugins.core.translation': { zh: '划线翻译：换目标语言、朗读原文与译文，可选划选后自动翻译。', en: 'Translate selected text: switch the target language, read the source and translation aloud, and optionally translate on select.' },
   'plugins.core.computerUse': { zh: '通过 Agent 操作电脑上的应用。', en: 'Let agents operate apps on your computer.' },

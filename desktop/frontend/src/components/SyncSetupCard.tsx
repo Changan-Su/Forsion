@@ -3,6 +3,8 @@
  * 登录了 Forsion、这个账号在这台电脑上还没对同步点过头(引导「连接」那步的勾就算点过),主窗弹一次:
  * 三行默认勾上,「开始同步」按勾的开,「稍后」什么都不开、以后不再弹(蓬洲云左栏「同步」挂点等着)。
  * 点了开始之后第一次同步时主窗底部一条进度,传完自己收走。只在桌面主窗、引导走完之后;手机 / 网页没有本地库远程同步。
+ * 2026-11-27 智库同步统一方案第 0 步:快照里 sealed 的那几类(Agents 与记忆、插件)画成锁住的一行,写「暂不同步」、没有勾,
+ * 不进新同步的建议配置,开始同步也不碰它们的开关。
  */
 import { Fragment, useEffect, useState, useSyncExternalStore } from 'react'
 import { Bot, NotebookPen, Puzzle, RefreshCw, UserRound } from 'lucide-react'
@@ -17,6 +19,11 @@ import { POPUP_PRIORITY, usePopupTurn } from '../stores/popupQueue'
 import { watchAccountName } from '../services/accountName'
 import { formatDateTime } from '../format/time'
 import './syncSetup.css'
+import './syncSettingsMessages'
+import { usePageStore } from '@amadeus/store/pageStore'
+import { useSyncMode } from '../sync/v2/mode'
+import { openSyncSettings } from '../sync/v2/openSyncSettings'
+import { ensureVaultSyncSubscribed, useVaultSyncRaw } from '../sync/vaultSyncStore'
 
 registerMessages({
   'syncSetup.storageEnforced': { zh: '我的云盘 {used} / {max} · 统一额度已启用，超额时暂停增长写入', en: 'My drive {used} / {max} · unified quota active; growing writes pause over quota' },
@@ -55,6 +62,8 @@ registerMessages({
   'syncSetup.c.profileHint': { zh: '你的资料和默认日历', en: 'Your profile and default calendar' },
   'syncSetup.c.plugins': { zh: '插件', en: 'Plugins' },
   'syncSetup.c.pluginsHint': { zh: '插件的文件夹和设置', en: 'Plugin folders and settings' },
+  // 插件先封住时那一行的说明:封的是插件自己存的设置和数据;智库里 Plugins/<插件> 那些文件夹是智库内容,跟着笔记走
+  'syncSetup.c.pluginsSealedHint': { zh: '插件自己存的设置和数据；智库里的插件文件夹跟着笔记同步', en: 'Settings and data your plugins save. Plugin folders inside your vault sync with your notes' },
   'syncSetup.c.counts': { zh: '将上传 {up} 个文件（{size}）、下载 {down} 个；云端已有的不会被覆盖或删除。', en: 'Uploads {up} files ({size}) and downloads {down}. Nothing already in the cloud is overwritten or deleted.' },
   'syncSetup.c.countsPlain': { zh: '将上传 {up} 个文件、下载 {down} 个；云端已有的不会被覆盖或删除。', en: 'Uploads {up} files and downloads {down}. Nothing already in the cloud is overwritten or deleted.' },
   'syncSetup.c.counting': { zh: '正在算要传多少…', en: 'Working out what will move…' },
@@ -101,7 +110,73 @@ function openPenzor(): void {
   if (useSpaceStore.getState().spaces.some((x) => x.id === PENZOR_SPACE)) setActiveSpace(PENZOR_SPACE)
 }
 
+/** 智库同步第 2 步:完整模式画只有「智库」一行的新卡(开始同步 = 去设置 › 同步那一行,在那里比一下、出汇总卡再确认);其余照旧。 */
 export function SyncSetupHost(): React.JSX.Element | null {
+  const full = useSyncMode((m) => m.mode === 'full')
+  return full ? <SyncSetupV2Card /> : <LegacySyncSetupHost />
+}
+
+function SyncSetupV2Card(): React.JSX.Element | null {
+  const { t } = useI18n()
+  const s = useSync()
+  const main = windowKind() === 'main'
+  const vaultRoot = usePageStore((x) => x.vaultRoot)
+  const vaultSide = usePageStore((x) => x.vaultSide)
+  const v2 = useVaultSyncRaw((x) => x.v2)
+  const [open, setOpen] = useState(false)
+  const [notes, setNotes] = useState(true)
+  const turn = usePopupTurn('syncSetup', open, POPUP_PRIORITY.syncSetup)
+  useEffect(() => { if (!main) return; if (window.remoteSync) startSyncSetup(); ensureVaultSyncSubscribed() }, [main])
+  let obDone = false
+  try { obDone = localStorage.getItem(ONBOARDING_DISMISS_KEY) === '1' } catch { /* 读不到当没走完:不弹 */ }
+  // 这个库已经有在跑的绑定(接手来的 / 别处开过)就不问
+  const bound = !!vaultRoot && !!v2?.bindings.some((b) => b.root === vaultRoot && b.enabled !== false)
+  const eligible = main && !!s?.signedIn && !s.decided && obDone && vaultSide === 'local' && !!vaultRoot && !!v2 && !bound
+  useEffect(() => {
+    if (!eligible || open) return
+    const timer = setTimeout(() => setOpen(true), 2500)
+    return () => clearTimeout(timer)
+  }, [eligible, open])
+  useEffect(() => { if (open && !eligible) setOpen(false) }, [open, eligible])
+  if (!main || !turn || !vaultRoot) return null
+  const name = s?.notes.rootName || (vaultRoot.split(/[\\/]/).filter(Boolean).pop() ?? vaultRoot)
+  const later = (): void => { markSyncDecided(); setOpen(false) }
+  const start = (): void => { markSyncDecided(); setOpen(false); openSyncSettings({ root: vaultRoot, intent: 'start' }) }
+  const locked = (k: string, icon: React.JSX.Element, title: string, sub: string): React.JSX.Element => (
+    <div key={k} className="sync-setup-row is-locked" data-sealed={k}>
+      <span aria-hidden="true" />
+      <span className="sync-setup-tile">{icon}</span>
+      <span className="sync-setup-copy"><b>{title}</b><small>{sub}</small></span>
+      <span className="sync-setup-lk">{t('sync.sealed')}</span>
+    </div>
+  )
+  return (
+    <div className="u-backdrop sync-setup-backdrop">
+      <div className="modal modal-sm sync-setup" role="dialog" aria-modal="true" aria-label={t('syncSetup.title')} data-sync-setup="v2">
+        <div className="modal-head"><PenzorIcon width={16} height={16} /><span className="sync-setup-title">{t('syncSetup.title')}</span></div>
+        <div className="sync-setup-body">
+          <p className="sync-setup-lead">{t('ssync.setup.lead')}</p>
+          <label className="sync-setup-row">
+            <input type="checkbox" checked={notes} onChange={(e) => setNotes(e.target.checked)} />
+            <span className="sync-setup-tile"><NotebookPen size={15} /></span>
+            <span className="sync-setup-copy"><b>{t('syncSetup.notes', { name })}</b><small>{t('ssync.setup.notesHint')}</small></span>
+          </label>
+          {locked('agents', <Bot size={15} />, t('syncSetup.agents'), t('syncSetup.agentsHint'))}
+          {locked('plugins', <Puzzle size={15} />, t('syncSetup.c.plugins'), t('syncSetup.c.pluginsSealedHint'))}
+        </div>
+        <div className="sync-setup-foot">
+          <span className="sync-setup-hint">{t('ssync.setup.foot')}</span>
+          <span className="sync-setup-acts">
+            <button className="btn" onClick={later}>{t('syncSetup.later')}</button>
+            <button className="btn primary" disabled={!notes} data-sync-setup-start="" onClick={start}>{t('syncSetup.start')}</button>
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LegacySyncSetupHost(): React.JSX.Element | null {
   const { t, locale } = useI18n()
   const [name, setName] = useState('')
   useEffect(() => watchAccountName(setName), [])
@@ -124,7 +199,9 @@ export function SyncSetupHost(): React.JSX.Element | null {
 
   useEffect(() => { if (main && window.remoteSync) startSyncSetup() }, [main])
   const contentMode = !!s?.contentRules
-  const picks = JSON.stringify({ ...cpicked, agents: false, agentSlugs: apicked })
+  // 先封住、暂不同步的那几类(快照没有 sealed = 没封):不出勾、不进建议配置
+  const sealed = { agents: !!s?.sealed?.agents, plugins: !!s?.sealed?.plugins }
+  const picks = JSON.stringify({ ...cpicked, ...(sealed.plugins ? { plugins: false } : {}), agents: false, agentSlugs: sealed.agents ? [] : apicked })
   useEffect(() => {
     if (!turn || !contentMode) return
     let live = true
@@ -153,7 +230,9 @@ export function SyncSetupHost(): React.JSX.Element | null {
   // 依赖只放这两个布尔:快照每次同步进度 / 插件变动都换新对象,拿它当依赖计时器会一直被重置、永远弹不出来
   const eligible = main && wantsSyncCard(s, obDone)
   const want = eligible && !open
-  const allOn = main && !!s && s.signedIn && !s.decided && !s.applying && obDone && s.notes.available && !want && !open
+  // 三样都真开着才自动记成「点过了」:只因为封着(暂不同步)的那几类不算数而不弹的,不写这个记号 —— 它跨放开永久生效,
+  // 放开后原本该弹的卡片会被压掉(Codex 交付前评审 P2)
+  const allOn = main && !!s && s.signedIn && !s.decided && !s.applying && obDone && s.notes.available && !want && !open && s.notes.on && s.agents.on && s.plugins.on
   useEffect(() => { if (allOn) markSyncDecided() }, [allOn])
   useEffect(() => {
     if (!want) return
@@ -192,10 +271,20 @@ export function SyncSetupHost(): React.JSX.Element | null {
       if (/preview_(changed|expired)/.test(m)) { setSetup({ ...setup, preview: null, recount: true }); setNonce((n) => n + 1); return }
       notifyApp({ text: t('syncSetup.failed', { error: m }), level: 'warning' }); return
     }
-    await setSync('plugins', cpicked.plugins) // 插件一行管两样:Plugins 文件夹 + 插件自己存的设置(插件数据通道)
+    if (!sealed.plugins) await setSync('plugins', cpicked.plugins) // 插件一行管两样:Plugins 文件夹 + 插件自己存的设置(插件数据通道)
     markSyncDecided(); setBusy(false); setOpen(false)
   }
   const fresh = contentMode && !setup?.legacy
+  /** 锁住的一行:没有勾,右边一枚「暂不同步」(不是用户关的,以后会回来,所以不写「已关闭」)。 */
+  const lockedRow = (k: string, icon: React.JSX.Element, title: string, sub: string): React.JSX.Element => (
+    <div key={k} className="sync-setup-row is-locked" data-sealed={k}>
+      <span aria-hidden="true" />
+      <span className="sync-setup-tile">{icon}</span>
+      <span className="sync-setup-copy"><b>{title}</b><small>{sub}</small></span>
+      <span className="sync-setup-lk">{t('sync.sealed')}</span>
+    </div>
+  )
+  const canStart = cpicked.notes || cpicked.profile || (!sealed.plugins && cpicked.plugins) || (!sealed.agents && apicked.length > 0)
 
   const notesSub = (() => {
     const { localBytes: size, maxBytes: max } = s.notes
@@ -229,12 +318,13 @@ export function SyncSetupHost(): React.JSX.Element | null {
               <p className="sync-setup-lead">{t('syncSetup.c.lead')}</p>
               {crows.map(([k, icon, title, sub]) => (
                 <Fragment key={k}>
-                  <label className="sync-setup-row">
+                  {k === 'plugins' && sealed.plugins ? lockedRow(k, icon, title, t('syncSetup.c.pluginsSealedHint')) : <label className="sync-setup-row">
                     <input type="checkbox" checked={cpicked[k]} disabled={busy} onChange={(e) => { setCpicked({ ...cpicked, [k]: e.target.checked }); setSetup((x) => x && { ...x, recount: false }) }} />
                     <span className="sync-setup-tile">{icon}</span>
                     <span className="sync-setup-copy"><b>{title}</b><small>{sub}</small></span>
-                  </label>
-                  {k === 'notes' && !!setup?.agents?.length && (
+                  </label>}
+                  {k === 'notes' && sealed.agents && lockedRow('agents', <Bot size={15} />, t('syncSetup.agents'), t('syncSetup.agentsHint'))}
+                  {k === 'notes' && !sealed.agents && !!setup?.agents?.length && (
                     // Agents:勾了几个这一项就算勾上;上面那个勾只是显示,点它不会全选
                     <div className="sync-setup-row sync-setup-group" data-testid="sync-setup-agents">
                       <input type="checkbox" className="sync-setup-mark" checked={apicked.length > 0} readOnly tabIndex={-1} aria-hidden="true" />
@@ -281,7 +371,7 @@ export function SyncSetupHost(): React.JSX.Element | null {
             </div> : <div className="sync-setup-body">
               <p className="sync-setup-lead">{s.contentRules?t('syncSetup.scopeLead'):t('syncSetup.lead', { name })}</p>
               <p className="sync-setup-hint">{s.storage?.complete && s.storage.usedBytes != null ? t(s.storage.enforcement ? 'syncSetup.storageEnforced' : 'syncSetup.storage', { used: fmtBytes(s.storage.usedBytes), max: fmtBytes(s.storage.limitBytes) }) : t('syncSetup.storageUnknown')}</p>
-              {rows.filter(([k])=>!s.contentRules||k==='plugins').map(([k, icon, title, sub]) => (
+              {rows.filter(([k])=>!s.contentRules||k==='plugins').map(([k, icon, title, sub]) => k !== 'notes' && sealed[k] ? lockedRow(k, icon, title, sub) : (
                 <label key={k} className="sync-setup-row">
                   <input type="checkbox" checked={picked[k]} disabled={busy} onChange={(e) => setPicked({ ...picked, [k]: e.target.checked })} />
                   <span className="sync-setup-tile">{icon}</span>
@@ -294,7 +384,7 @@ export function SyncSetupHost(): React.JSX.Element | null {
               <span className="sync-setup-acts">
                 <button className="btn" disabled={busy} onClick={later}>{t('syncSetup.later')}</button>
                 {fresh
-                  ? <button className="btn primary" disabled={busy || !pv || (!Object.values(cpicked).some(Boolean) && !apicked.length)} onClick={() => void startContent()}>{t('syncSetup.start')}</button>
+                  ? <button className="btn primary" disabled={busy || !pv || !canStart} onClick={() => void startContent()}>{t('syncSetup.start')}</button>
                   : <button className="btn primary" disabled={busy} onClick={() => void start()}>{t(s.contentRules?'syncSetup.chooseScope':'syncSetup.start')}</button>}
               </span>
             </div>

@@ -14,6 +14,10 @@ export interface CloudAssetState {
   assetToken(): string
   /** 当前打开的笔记(vault 相对路径;未知 = null)—— 服务端解析页面相对 ref 的基准。 */
   activePage(): string | null
+  /** 库视图 → 服务端路径(原位置库以 `X/` 为根打开时补前缀,智库同步第 3 步)。不给 = 原样。 */
+  toWirePath?(rel: string): string
+  /** 服务端路径 → 库视图;不在这个视图里 → null。不给 = 原样。 */
+  fromWirePath?(path: string): string | null
 }
 
 let state: CloudAssetState | null = null
@@ -23,9 +27,12 @@ let state: CloudAssetState | null = null
 export function buildAssetUrl(ref: string, page?: string | null, lit?: string): string {
   if (!state) return ref
   const params = new URLSearchParams()
-  params.set('ref', ref)
   const p = page === undefined ? state.activePage() : page
-  if (p) params.set('page', p)
+  const wire = state.toWirePath ?? ((x: string) => x)
+  // 带 page:ref 是页相对 / 裸文件名,服务端拼页目录(page 换成服务端路径,页目录自然带着 X/);
+  // 不带 page:ref 就是库内路径,补前缀。ponytail: 原位置库视图里「页相对落空、按库根找」的那一步找的是整库的根,不是 X/。
+  params.set('ref', p ? ref : wire(ref))
+  if (p) params.set('page', wire(p))
   if (lit) params.set('lit', lit)
   const at = state.assetToken()
   if (at) params.set('at', at)
@@ -51,7 +58,9 @@ export function parseAssetUrl(url: string): string | null {
   if (q < 0 || !/^(https?:\/\/|\/)/.test(url)) return null
   if (!url.slice(0, q).endsWith(`/amadeus/vaults/${encodeURIComponent(state.vaultId())}/asset`)) return null
   const params = new URLSearchParams(url.slice(q + 1))
-  const ref = params.get('ref') || null
+  let ref = params.get('ref') || null
+  // 不带 page 的那种是补过前缀的库内路径(见 buildAssetUrl):换回视图路径;视图外的不认
+  if (ref && !params.get('page') && state.fromWirePath) ref = state.fromWirePath(ref)
   const lit = params.get('lit')
   return ref && lit && normalizePosix(lit) === normalizePosix(ref) ? lit : ref
 }

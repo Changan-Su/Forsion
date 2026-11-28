@@ -3,15 +3,15 @@
  * 配置持久化(userData/remotesync[.dev].json)+ 定时调度 + IPC + 同步根解析。
  *
  * 边界约定(见 remotesync/README.md):
- *  - 同步根 = Amadeus 本地库(localVault);云镜像目录一律拒绝(那是云端模式引擎的管辖);
+ *  - 同步根 = Amadeus 钉住的库(syncVault),未钉住时回落到本机库;云镜像目录一律拒绝;
  *  - 按条目云同步(entrySync)绑定的路径自动加入忽略 —— 双引擎不许抢管辖同一批文件;
  *  - 本地删除注入系统回收站(shell.trashItem),兜底 fs.rm。
  */
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, app, ipcMain, shell } from 'electron'
-import { readConfig as readAmadeusConfig } from './amadeus/settings'
+import { readConfig as readAmadeusConfig, type AmadeusConfig, type EntrySyncVault } from './amadeus/settings'
 import { syncVaultRoot } from './amadeus/vaultList'
 import { cloudVaultDir, hash8, isManagedCloudVault } from './amadeus/cloudPaths'
 import { isDevMode } from './forsionHome'
@@ -30,7 +30,11 @@ import { createS3Remote, normPrefix, type S3Config } from './remotesync/fsS3'
 import { createWebdavRemote, type WebdavConfig } from './remotesync/fsWebdav'
 import type { RemoteFs, SyncReport } from './remotesync/types'
 import { contentSyncOwned } from './contentSyncHost'
-import { currentCloudAccountId } from './amadeus/settings'
+import { currentCloudAccountId, readEntrySyncSnapshotStrict } from './amadeus/settings'
+import { remoteReportProblems, SYNC_RECORD_MAX_FAILED, type SyncTarget } from '../shared/vaultSync'
+import { appendSyncRecord } from './syncRecordsIpc'
+import { createLegacyGate, type LegacyGate, type LegacyGateState } from './remotesync/legacySeal'
+import { createSyncTargetsStore } from './syncTargetsStore'
 
 export interface RemoteSyncConfig {
   /** penzor = Forsion 云端:实现住在 Forsion Extend(remotesync/backends.ts 注册点),这里只保留配置形状。 */
@@ -58,6 +62,8 @@ const DEFAULT_CONFIG: RemoteSyncConfig = { backend: 'off', intervalMin: 0 }
 const MIN_INTERVAL_MIN = 5
 
 let cache: RemoteSyncConfig | null = null
+/** 配置文件在、却读不了 / 解析不了:界面照常给缺省值,但下一次保存先把坏文件挪到一边再写(不拿缺省值盖掉里面的凭据)。 */
+let loadBroken = false
 let running = false
 let lastReport: SyncReport | null = null
 let progress: { done: number; total: number; key: string } | null = null
@@ -70,38 +76,92 @@ async function loadConfig(): Promise<RemoteSyncConfig> {
   if (cache) return cache
   try {
     cache = { ...DEFAULT_CONFIG, ...(JSON.parse(await fs.readFile(configFile(), 'utf8')) as RemoteSyncConfig) }
-  } catch {
+  } catch (e) {
+    loadBroken = (e as NodeJS.ErrnoException)?.code !== 'ENOENT'
     cache = { ...DEFAULT_CONFIG }
   }
   return cache
 }
 
-async function saveConfig(patch: Partial<RemoteSyncConfig>): Promise<RemoteSyncConfig> {
-  const next = { ...(await loadConfig()), ...patch }
-  cache = next
-  await fs.mkdir(app.getPath('userData'), { recursive: true }).catch(() => {})
-  // ponytail: 凭据明文落 userData(与 amadeus-config 同一惯例);要更强上 safeStorage
-  await fs.writeFile(configFile(), JSON.stringify(next, null, 2), 'utf8')
-  return next
+/** 严格读(接手用,契约实现期修订 H-1 第 1 条):没有文件 = null;读不了 / 不是 JSON 对象就抛 —— 读失败 ≠ 没配置。
+ *  文件里有凭据:抛的是固定错误码(会进 Extend 的日志、回渲染层),JSON.parse 的原始报错带一截原文,不进 message 也不挂 cause。
+ *  bytes = 读到的原样字节(归档复制用它,和改写的底是同一次读)。 */
+async function readLegacyConfigStrict(): Promise<{ bytes: Buffer; raw: string; cfg: RemoteSyncConfig } | null> {
+  let bytes: Buffer
+  try { bytes = await fs.readFile(configFile()) } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return null
+    throw new Error('remotesync-config-unreadable')
+  }
+  const raw = bytes.toString('utf8')
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { throw new Error('remotesync-config-unparseable') }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('remotesync-config-malformed')
+  return { bytes, raw, cfg: { ...DEFAULT_CONFIG, ...(parsed as RemoteSyncConfig) } }
+}
+
+/** remotesync.json 的写一条队列:设置页 / OAuth 回调的 saveConfig 与接手时的归档改写排在一起,
+ *  不会出现「归档读了旧文件 → 这边存下新凭据 → 归档把改过的旧文件 rename 回去」丢掉新凭据。 */
+let configQueue: Promise<unknown> = Promise.resolve()
+function inConfigQueue<T>(fn: () => Promise<T>): Promise<T> {
+  const work = configQueue.then(fn)
+  configQueue = work.catch(() => {})
+  return work
+}
+
+/** patch 可以是函数:在写队列里拿到最新那份再算(OAuth 回调只改自己那一段,不拿排队前读的旧段盖掉设置页刚存的目录)。 */
+function saveConfig(patch: Partial<RemoteSyncConfig> | ((cur: RemoteSyncConfig) => Partial<RemoteSyncConfig>)): Promise<RemoteSyncConfig> {
+  return inConfigQueue(async () => {
+    const cur = await loadConfig()
+    const next = { ...cur, ...(typeof patch === 'function' ? patch(cur) : patch) }
+    await fs.mkdir(app.getPath('userData'), { recursive: true }).catch(() => {})
+    if (loadBroken) {
+      // 读不了的那份原样挪开留着(里面可能有凭据),再写新的。挪不开(文件已经不在除外)就不写:覆盖写会把它截掉
+      try { await fs.rename(configFile(), `${configFile()}.unreadable-${Date.now()}`) } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw new Error('remotesync-config-move-aside-failed')
+      }
+      loadBroken = false
+    }
+    // ponytail: 凭据明文落 userData(与 amadeus-config 同一惯例);要更强上 safeStorage
+    await fs.writeFile(configFile(), JSON.stringify(next, null, 2), 'utf8')
+    cache = next // 写成了才进缓存:写失败时界面别显示一份没存下的配置
+    return next
+  })
 }
 
 interface BuiltRemote { remote: RemoteFs; fingerprint: string; maxFileBytes?: number }
+
+/** 内置四个后端的基线指纹(runNow 的基线文件 = remotesync-state/<hash8(根|指纹)>.json)。只看配置、不出网、不要凭据齐全;
+ *  认不出(不是内置后端、认身份的字段缺了)= null。buildRemote 与接手归档共用这一份,别分叉。 */
+function builtinFingerprint(cfg: RemoteSyncConfig): string | null {
+  switch (cfg.backend) {
+    case 'folder': { const p = cfg.folder?.path?.trim(); return p ? `folder:${p}` : null }
+    case 's3': { const s3 = cfg.s3; return s3?.endpoint && s3.bucket ? `s3:${s3.endpoint}/${s3.bucket}/${normPrefix(s3.prefix)}` : null }
+    case 'webdav': { const wd = cfg.webdav; return wd?.address ? `webdav:${wd.address}/${wd.baseDir ?? 'forsion-vault'}` : null }
+    case 'dropbox': {
+      const d = cfg.dropbox
+      const key = dbxAppKey(d)
+      // 指纹绑账号:换 Dropbox 账号 = 基线作废走首次合流,绝不带旧基线做删除判定
+      return key ? `dropbox:${d?.accountId || key}|${(d?.baseDir ?? '').trim() || '/'}` : null
+    }
+    default: return null
+  }
+}
 
 async function buildRemote(cfg: RemoteSyncConfig): Promise<BuiltRemote | { error: string }> {
   if (cfg.backend === 'folder') {
     const p = cfg.folder?.path?.trim()
     if (!p) return { error: 'no folder path' }
-    return { remote: createDirRemote(p), fingerprint: `folder:${p}` }
+    return { remote: createDirRemote(p), fingerprint: builtinFingerprint(cfg)! }
   }
   if (cfg.backend === 's3') {
     const s3 = cfg.s3
     if (!s3?.endpoint || !s3.bucket || !s3.accessKeyID || !s3.secretAccessKey) return { error: 's3 config incomplete' }
-    return { remote: createS3Remote(s3), fingerprint: `s3:${s3.endpoint}/${s3.bucket}/${normPrefix(s3.prefix)}` }
+    return { remote: createS3Remote(s3), fingerprint: builtinFingerprint(cfg)! }
   }
   if (cfg.backend === 'webdav') {
     const wd = cfg.webdav
     if (!wd?.address) return { error: 'webdav config incomplete' }
-    return { remote: createWebdavRemote(wd), fingerprint: `webdav:${wd.address}/${wd.baseDir ?? 'forsion-vault'}` }
+    return { remote: createWebdavRemote(wd), fingerprint: builtinFingerprint(cfg)! }
   }
   if (cfg.backend === 'dropbox') {
     const d = cfg.dropbox
@@ -109,8 +169,7 @@ async function buildRemote(cfg: RemoteSyncConfig): Promise<BuiltRemote | { error
     if (!key || !d?.refreshToken) return { error: 'dropbox-not-connected' }
     return {
       remote: createDropboxRemote({ appKey: key, refreshToken: d.refreshToken, baseDir: d.baseDir }),
-      // 指纹绑账号:换 Dropbox 账号 = 基线作废走首次合流,绝不带旧基线做删除判定
-      fingerprint: `dropbox:${d.accountId || key}|${(d.baseDir ?? '').trim() || '/'}`,
+      fingerprint: builtinFingerprint(cfg)!,
     }
   }
   if (cfg.backend === 'off') return { error: 'backend off' }
@@ -131,9 +190,10 @@ async function canon(p: string): Promise<string> {
 
 const overlaps = (a: string, b: string): boolean => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep)
 
-/** 同步根 = 钉住的同步库(没钉过 = 本地库);云镜像根拒绝(按 realpath 比较)。 */
-export async function resolveLocalSyncRoot(): Promise<{ root: string } | { error: string }> {
-  const am = await readAmadeusConfig()
+/** 同步根 = 钉住的同步库(没钉过 = 本地库);云镜像根拒绝(按 realpath 比较)。am = 调用方已经严格读好的那份(视图用);
+ *  不给就照旧读缓存那份。 */
+export async function resolveLocalSyncRoot(given?: AmadeusConfig): Promise<{ root: string } | { error: string }> {
+  const am = given ?? await readAmadeusConfig()
   const root = syncVaultRoot(am) ?? am.lastVault // 切库不换同步根
   if (!root) return { error: 'no-local-vault' }
   try {
@@ -147,19 +207,39 @@ export async function resolveLocalSyncRoot(): Promise<{ root: string } | { error
   return { root: r }
 }
 
-/** entrySync 绑定路径 → 忽略规则(双引擎不抢管辖)。 */
-async function entrySyncIgnores(root: string): Promise<string[]> {
-  const am = await readAmadeusConfig()
-  const out: string[] = []
-  for (const v of am.entrySync ?? []) {
-    if (path.resolve(v.vaultRoot) !== path.resolve(root)) continue
+/** entrySync 绑定路径 → 忽略规则(双引擎不抢管辖)。库根按物理路径比(realpath:解开符号链接、mac 上纠正大小写,
+ *  同 contentSyncHost.canonRoot 的口径):经软链登记的库也认得出;字面相同照旧算。
+ *  条目库根解析不了时:不存在(ENOENT / ENOTDIR)= 不可能是这个(在的)根;别的错(没权限、链接打转)= 不知道:
+ *  - 'fail'(旧 remotesync 自己那一轮,H3 Codex P1):整份回 null,这一轮不跑 —— 不能把解析不了当成「另一个库」;
+ *  - 'same'(给接手的视图,契约 H-2):当成同一个、让开它的条目(接手据此暂停)。 */
+async function ignoresOf(root: string, vaults: readonly EntrySyncVault[], onUnknown: 'fail' | 'same'): Promise<string[] | null> {
+  const here = await canon(root)
+  const out = new Set<string>()
+  for (const v of vaults) {
+    let same = path.resolve(v.vaultRoot) === path.resolve(root)
+    if (!same) {
+      try { same = (await fs.realpath(v.vaultRoot)) === here } catch (e) {
+        const code = (e as NodeJS.ErrnoException)?.code
+        if (code !== 'ENOENT' && code !== 'ENOTDIR') { if (onUnknown === 'fail') return null; same = true }
+      }
+    }
+    if (!same) continue
     for (const e of v.entries ?? []) {
-      if (e.kind === 'folder') out.push(`${e.path}/`)
-      else out.push(e.path)
-      if (e.kind === 'page' && e.path.endsWith('.md')) out.push(`${e.path.slice(0, -3)}.fd/`)
+      out.add(e.kind === 'folder' ? `${e.path}/` : e.path)
+      if (e.kind === 'page' && e.path.endsWith('.md')) out.add(`${e.path.slice(0, -3)}.fd/`)
     }
   }
-  return out
+  return [...out]
+}
+
+/** 旧 remotesync 一轮的条目忽略名单(H3 Codex P1,一条规矩):盘上**所有**条目同步登记里落在这个根上的路径 —— 当前账号的、
+ *  别的账号的(登录着 B、条目在 A 名下也让开)、待认领的 legacyCloudState —— 都从同一次严格读来。
+ *  不知道 = null(这一轮不跑):配置严格读不出来,或者哪个条目库根解析出 ENOENT / ENOTDIR 以外的错。
+ *  退出登录不再单独判:名单不按账号取,登出时照样算得出来。 */
+async function legacyRoundIgnores(root: string, accountId: string | null): Promise<string[] | null> {
+  let all: EntrySyncVault[]
+  try { all = (await readEntrySyncSnapshotStrict(accountId)).allEntrySync } catch { return null }
+  return ignoresOf(root, all, 'fail')
 }
 
 function sendAll(channel: string, payload: unknown): void {
@@ -197,7 +277,11 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
   })
   // 锁必须在任何 await 之前拿:定时器与手动点击并发穿过 config/root 解析会双跑同一基线
   if (running) return fail('already-running')
+  // 新同步接手了这份配置、这次启动正持有写权(legacySeal.ts):定时、启动那一轮、手动、预演一律不跑。也在任何 await 之前判
+  if (legacyGate().blocked()) return fail('sealed')
   running = true
+  const endRound = legacyGate().begin()
+  const recordAccount = currentCloudAccountId() // 这一轮记在开始时的账号名下(跑到一半换了账号,也不记到新账号里)
   progress = null
   broadcast()
   let lastProgressAt = 0
@@ -209,6 +293,10 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
     if ('error' in built) return fail(built.error)
     const rooted = await resolveLocalSyncRoot()
     if ('error' in rooted) return fail(rooted.error)
+    // 条目同步要让开的路径:盘上所有登记(不分账号)。算不出来 = 不知道,这一轮不跑、不当空名单(H3 第 5 件 + Codex P1:当空会把
+    // 条目里的文件换成远端那份、把远端的拉进条目文件夹,条目引擎之后当成用户改动推上云)
+    const entryIgnores = await legacyRoundIgnores(rooted.root, recordAccount)
+    if (!entryIgnores) return fail('entry-ignores-unknown')
     if (cfg.backend === 'folder' && cfg.folder?.path) {
       // folder 后端与同步根互相嵌套 = 递归自我复制,拒绝
       const target = await canon(cfg.folder.path)
@@ -223,7 +311,7 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
       remote: built.remote,
       statePath: path.join(app.getPath('userData'), 'remotesync-state', `${hash8(scope)}.json`),
       fingerprint: built.fingerprint,
-      ignoreGlobs: [...(cfg.ignore ?? []), ...(await entrySyncIgnores(rooted.root))],
+      ignoreGlobs: [...(cfg.ignore ?? []), ...entryIgnores],
       maxFileSize: effectiveMaxFileSize(cfg, built.maxFileBytes),
       direction: cfg.direction,
       concurrency: cfg.concurrency,
@@ -243,13 +331,43 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
     if (!opts?.dryRun) {
       lastReport = report
       confirmScope = report.pendingDeletions > 0 ? scope : null
+      recordRemoteRound(report, cfg.backend, rooted.root, recordAccount)
     }
     return report
   } finally {
     running = false
     progress = null
+    endRound()
     broadcast()
   }
+}
+
+const RECORD_TARGET: Record<string, SyncTarget> = { penzor: 'penzor', dropbox: 'dropbox', webdav: 'webdav', s3: 's3', folder: 'folder', gdrive: 'gdrive' }
+
+/** 上一行记录:连着几轮都没变化只留最新一行(和 Extend 的 RoundRecorder 同一口径,定时 5 分钟一轮不会挤掉别的记录)。 */
+let lastRemoteRecord: { id: string; idle: boolean; startedAt: number; pending: number; account: string | null; scope: string } | null = null
+
+/** 一轮跑完记一行同步记录(只观测,记不上也不影响同步)。 */
+function recordRemoteRound(report: SyncReport, backend: string, root: string, account: string | null): void {
+  try {
+    const { failures } = remoteReportProblems(report)
+    // 换了账号 / 去处 / 库:上一行不再是「同一路」,不并、删除闸也重新算
+    const scope = `${backend}|${root}`
+    const same = !!lastRemoteRecord && lastRemoteRecord.account === account && lastRemoteRecord.scope === scope
+    // held = 这一轮新拦下等用户定的;删除闸每轮都会重报同一批,不算新的
+    const held = report.pendingDeletions > 0 && !(same && lastRemoteRecord!.pending > 0) ? report.pendingDeletions : 0
+    const idle = report.ok && !report.pushed && !report.pulled && !report.deletedLocal && !report.deletedRemote && !report.conflicts && !held && !failures.length
+    const join = idle && same && lastRemoteRecord!.idle
+    const id = join ? lastRemoteRecord!.id : `remote#${report.startedAt.toString(36)}`
+    lastRemoteRecord = { id, idle, startedAt: report.startedAt, pending: report.pendingDeletions, account, scope }
+    appendSyncRecord({
+      id, feed: 'remote', engine: 'remote', vault: root, target: RECORD_TARGET[backend] ?? 'other',
+      startedAt: report.startedAt, finishedAt: report.finishedAt, completed: report.ok,
+      uploaded: report.pushed, downloaded: report.pulled, merged: 0, renamed: 0,
+      deletedCloud: report.deletedRemote, deletedLocal: report.deletedLocal, held,
+      failed: failures.slice(0, SYNC_RECORD_MAX_FAILED), failedCount: failures.length,
+    }, account)
+  } catch { /* 记录绝不影响同步 */ }
 }
 
 function resetTimer(cfg: RemoteSyncConfig): void {
@@ -275,6 +393,8 @@ const DBX_AUTH_TIMEOUT_MS = 5 * 60_000
 const dbxAppKey = (d?: { appKey?: string }): string => (d?.appKey ?? '').trim() || FORSION_DROPBOX_APP_KEY
 
 let dbxPending: { appKey: string; custom: boolean; verifier: string; redirectUri?: string } | null = null
+/** 新同步的去处授权每顶掉一次旧设置页的 Dropbox 授权就 +1(在途的换码据此作废)。 */
+let dbxSupersededEpoch = 0
 let dbxServer: { close: () => void } | null = null
 let dbxTimer: NodeJS.Timeout | null = null
 
@@ -309,18 +429,154 @@ async function startDbxLoopback(state: string): Promise<boolean> {
 async function finishDropboxAuth(code: string): Promise<{ ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }> {
   const pending = dbxPending
   if (!pending) return { ok: false, error: 'auth-not-started' }
+  const epoch = dbxSupersededEpoch
   try {
     const r = await dropboxExchangeCode(pending.appKey, code, pending.verifier, pending.redirectUri)
+    // 换码期间新同步的去处授权顶掉了这一次(契约 H-9):结果作废,不落配置。只有新授权会动这个数,旧设置页自己的流程一字不变
+    if (epoch !== dbxSupersededEpoch) return { ok: false, error: 'auth-superseded' }
     dbxPending = null
-    const cur = (await loadConfig()).dropbox
-    const config = await saveConfig({
+    const config = await saveConfig((c) => ({
       // 内置官方应用的 key 不落配置:否则日后换 key,旧值会一直盖住内置值
-      dropbox: { ...cur, appKey: pending.custom ? pending.appKey : '', refreshToken: r.refreshToken, accountId: r.accountId, email: r.email ?? r.name },
-    })
+      dropbox: { ...c.dropbox, appKey: pending.custom ? pending.appKey : '', refreshToken: r.refreshToken, accountId: r.accountId, email: r.email ?? r.name },
+    }))
     return { ok: true, email: r.email ?? r.name, config }
   } catch (e) {
     return { ok: false, error: String((e as Error)?.message || e) }
   }
+}
+
+// ── 新同步「同步到哪」的网盘去处授权(契约 H-9):Dropbox 授权完的凭据交给调用方(syncTargets.ts)存进
+//    sync-targets,不落 remotesync.json、不进渲染层、不进日志;报错只回固定码。同时只允许一次:和旧设置页的授权共用
+//    Dropbox 的回调口,谁后开谁顶掉前一个(被顶掉的那边收到 auth-superseded)。没开过新授权时,旧设置页的授权一字不变。
+export interface TargetAuthCreds { section: Record<string, unknown>; account: string }
+export type TargetAuthOutcome = { ok: true; creds: TargetAuthCreds } | { ok: false; error: string }
+interface TargetAuthAttempt {
+  id: string
+  kind: 'dropbox'
+  verifier: string
+  redirectUri?: string
+  dropbox?: { appKey: string; custom: boolean }
+  done: (attempt: string, r: TargetAuthOutcome) => void
+  close: () => void
+  exchanging?: boolean
+  /** Dropbox 回调口起不来、要用户手贴授权码的那一种;只有它收 finishTargetAuth。 */
+  manual?: boolean
+}
+let targetAttempt: TargetAuthAttempt | null = null
+/** 每个 authStart 进门就领一张票(在任何 await 之前):后领的赢。慢的那个查完 sync-targets 回来,票已经不是最新的 = 作废,
+ *  不去顶掉比它晚开始、先跑起来的那一次。 */
+let targetTicket = 0
+export function takeTargetAuthTicket(): number { return ++targetTicket }
+
+/** 新授权开始时顶掉旧设置页在途的 Dropbox 授权(同时只认一次)。 */
+function supersedeLegacyAuth(): void {
+  if (dbxPending || dbxServer) { stopDbxServer(); dbxPending = null; dbxSupersededEpoch++; sendAll('remotesync:dropboxAuth', { ok: false, error: 'auth-superseded' }) }
+}
+
+/** 回调页 / 换码的失败 → 固定码(提供方的 error_description 可能带账号信息,不往外带)。 */
+function callbackErrorCode(err: string): string {
+  if (err === 'state-mismatch') return 'auth-state-mismatch'
+  if (/^access_denied\b/.test(err)) return 'auth-denied'
+  return 'auth-failed'
+}
+
+/** 结束这一次(只结束一次):关回调、清计时,把结果交出去。 */
+function endTargetAuth(a: TargetAuthAttempt, r: TargetAuthOutcome): void {
+  if (targetAttempt !== a) return
+  targetAttempt = null
+  a.close()
+  a.done(a.id, r)
+}
+
+/** 旧设置页开授权之前调:顶掉在途的新授权。 */
+function supersedeTargetAuth(kind: 'dropbox'): void {
+  const a = targetAttempt
+  if (!a) return
+  // 同时只认一次授权(Dropbox 的回调口还是同一个 53682):旧设置页开授权,一律顶掉新授权
+  void kind
+  endTargetAuth(a, { ok: false, error: 'auth-superseded' })
+}
+
+async function exchangeTargetAuth(a: TargetAuthAttempt, code: string): Promise<void> {
+  if (targetAttempt !== a || a.exchanging) return
+  a.exchanging = true
+  let creds: TargetAuthCreds
+  try {
+    const d = a.dropbox!
+    const r = await dropboxExchangeCode(d.appKey, code, a.verifier, a.redirectUri)
+    // 内置官方应用的 key 不落(日后换 key,旧值会一直盖住内置值),同旧设置页
+    creds = { section: { appKey: d.custom ? d.appKey : '', refreshToken: r.refreshToken, accountId: r.accountId, email: r.email ?? r.name ?? '' }, account: r.email ?? r.name ?? '' }
+  } catch {
+    endTargetAuth(a, { ok: false, error: 'auth-exchange-failed' })
+    return
+  }
+  endTargetAuth(a, { ok: true, creds })
+}
+
+/** 打不开系统浏览器 = 这一次直接作废(不留着等超时;start 已经回了失败,done 不再调)。 */
+async function openAuthPage(a: TargetAuthAttempt, url: string): Promise<boolean> {
+  try { await shell.openExternal(url); return true } catch {
+    if (targetAttempt === a) { targetAttempt = null; a.close() }
+    return false
+  }
+}
+
+/** 开一次去处授权:打开系统浏览器。Dropbox 回调口起不来 = mode:'manual'(页面给授权码,用户贴回 finishTargetAuth)。
+ *  done 只会被调一次(成功 / 失败 / 超时 / 被顶掉 / 取消)。只认 Dropbox:别的 kind 回 bad-target-kind,什么都不开。 */
+export async function startTargetAuth(
+  kind: 'dropbox',
+  opts: { appKey?: string },
+  done: (attempt: string, r: TargetAuthOutcome) => void,
+  ticketIn?: number,
+): Promise<{ ok: true; attempt: string; mode: 'auto' | 'manual' } | { ok: false; error: string }> {
+  if (kind !== 'dropbox') return { ok: false, error: 'bad-target-kind' } // 别的种类不开、不领票,也不顶掉在途的那一次
+  const ticket = ticketIn ?? takeTargetAuthTicket()
+  if (ticket !== targetTicket) return { ok: false, error: 'auth-superseded' }
+  if (targetAttempt) endTargetAuth(targetAttempt, { ok: false, error: 'auth-superseded' })
+  const { verifier, challenge } = pkcePair()
+  const state = randomBytes(16).toString('hex')
+  const id = randomBytes(12).toString('hex')
+  let srv: { port: number; close: () => void } | null = null
+  let timer: NodeJS.Timeout | null = null
+  const a: TargetAuthAttempt = { id, kind, verifier, done, close: () => { if (timer) clearTimeout(timer); timer = null; srv?.close(); srv = null } }
+  const onCallback = (r: { code: string } | { error: string }): void => {
+    if (targetAttempt !== a) return
+    srv?.close(); srv = null
+    if ('error' in r) endTargetAuth(a, { ok: false, error: callbackErrorCode(r.error) })
+    else void exchangeTargetAuth(a, r.code)
+  }
+  const custom = (opts.appKey ?? '').trim()
+  const key = custom || FORSION_DROPBOX_APP_KEY
+  if (!key) return { ok: false, error: 'no-app-key' }
+  supersedeLegacyAuth() // 旧设置页的 Dropbox 授权和这里共用回调口
+  a.dropbox = { appKey: key, custom: !!custom }
+  targetAttempt = a
+  // 旧网页(被顶掉的那一次)晚到的回调带着别的 state:不算这一次的结果,接着等
+  srv = await dropboxCallbackServer(DBX_PORT, state, onCallback, { ignoreStateMismatch: true })
+  if (targetAttempt !== a) { srv?.close(); return { ok: false, error: 'auth-superseded' } }
+  const mode = srv ? 'auto' as const : 'manual' as const
+  a.manual = mode === 'manual'
+  a.redirectUri = srv ? DBX_REDIRECT_URI : undefined
+  timer = setTimeout(() => endTargetAuth(a, { ok: false, error: 'auth-timeout' }), DBX_AUTH_TIMEOUT_MS)
+  ;(timer as { unref?: () => void }).unref?.()
+  if (!(await openAuthPage(a, dropboxAuthUrl(key, challenge, srv ? { redirectUri: DBX_REDIRECT_URI, state } : {})))) return { ok: false, error: 'open-browser-failed' }
+  // 打开浏览器期间被顶掉了:结果事件已经发过(调用方那时还不知道这个 attempt),这里如实回失败,别让界面空等
+  if (targetAttempt !== a) return { ok: false, error: 'auth-superseded' }
+  return { ok: true, attempt: id, mode }
+}
+
+/** Dropbox 手贴授权码那条路(mode:'manual')。不是这一次 / 已经结束 = auth-not-started。 */
+export function finishTargetAuth(attempt: string, code: string): { ok: boolean; error?: string } {
+  const a = targetAttempt
+  if (!a || a.id !== attempt || !a.manual || typeof code !== 'string' || !code.trim()) return { ok: false, error: 'auth-not-started' }
+  void exchangeTargetAuth(a, code.trim())
+  return { ok: true }
+}
+
+/** 用户关了授权卡。 */
+export function cancelTargetAuth(attempt: string): void {
+  const a = targetAttempt
+  if (a && a.id === attempt) endTargetAuth(a, { ok: false, error: 'auth-cancelled' })
 }
 
 /** 本机笔记库多大(蓬洲云「同步」页 / 首登卡片写「412 MB · 用掉 2 GB 里的 20%」)。
@@ -359,6 +615,7 @@ async function adoptRemote(label: string): Promise<{ ok: boolean; moved: number;
     const rooted = await resolveLocalSyncRoot()
     return 'error' in rooted ? rooted : { root: rooted.root, fingerprint: built.fingerprint }
   }
+  if (legacyGate().blocked()) return { ok: false, moved: 0, error: 'sealed' }
   const before = await target()
   if ('error' in before) return { ok: false, moved: 0, error: before.error }
   const dry = await runNow({ dryRun: true })
@@ -367,7 +624,9 @@ async function adoptRemote(label: string): Promise<{ ok: boolean; moved: number;
   const forget = dry.plan.filter((i) => i.kind === 'pushDelete').map((i) => i.key) // 这台删了、云端还在:用云端那份 = 拉回来
   if (!keys.length && !forget.length) return { ok: true, moved: 0 }
   if (running) return { ok: false, moved: 0, error: 'already-running' }
+  if (legacyGate().blocked()) return { ok: false, moved: 0, error: 'sealed' }
   running = true
+  const endRound = legacyGate().begin()
   try {
     const now = await target()
     if ('error' in now) return { ok: false, moved: 0, error: now.error }
@@ -381,11 +640,341 @@ async function adoptRemote(label: string): Promise<{ ok: boolean; moved: number;
     return { ok: !r.error, moved: r.moved, backupDir: r.moved ? dir : undefined, error: r.error }
   } finally {
     running = false
+    endRound()
     broadcast()
   }
 }
 
+// ── 智库同步第 2 步(契约 §3.8 D、实现期修订 H-1 第 1、2 条):新同步接手 remotesync 的宿主那一半 ──────────────
+
+const syncTargetsFile = (): string =>
+  path.join(app.getPath('userData'), isDevMode() ? 'sync-targets.dev.json' : 'sync-targets.json')
+/** 宿主的「同步到哪」存档(凭据只在主进程里)。syncTargets.ts 与这里共用一份。 */
+export const syncTargetsStore = createSyncTargetsStore(syncTargetsFile)
+
+let gate: LegacyGate | null = null
+function legacyGate(): LegacyGate {
+  gate ??= createLegacyGate({
+    loadHold: () => syncTargetsStore.readLegacy(),
+    saveHold: (h) => syncTargetsStore.writeLegacy(h),
+    log: (m) => console.warn(m),
+  })
+  return gate
+}
+
+/** 封口和归档都早于 Extend 接手完成。没有完成信号时，只允许没有旧同步配置或历史痕迹的设备挪钉子。 */
+export async function withUnusedLegacyRemoteSync<T>(work: () => Promise<T>): Promise<T | 'legacy-remotesync-not-paused'> {
+  const result = await legacyGate().exclusiveIfUnused(() => inConfigQueue(async () => {
+    try {
+      const stored = await syncTargetsStore.read()
+      if (stored.legacy || Object.values(stored.targets).some((target) => target.source?.startsWith('remotesync:'))) return undefined
+      const file = path.basename(configFile())
+      const files = await fs.readdir(app.getPath('userData'))
+      if (files.some((name) => name === file || name.startsWith(`${file}.`) || name === 'remotesync-state')) return undefined
+    } catch {
+      return undefined // 无法确认没有旧配置或旧基线
+    }
+    return work()
+  }))
+  return result ?? 'legacy-remotesync-not-paused'
+}
+
+/** 接手归档要挪的基线:remotesync-state/ 里**这个根 × 这个指纹**那份(runNow 的文件名 = hash8(根|指纹).json)。
+ *  - 后端 off:没有当前的去处,一份都不挪;
+ *  - 认不出根(库不在 / 云镜像)→ 抛 legacy-root-unavailable(不记 archived:交还后从零基线跑的前提就是基线已挪走);
+ *  - 内置后端:指纹只看配置(builtinFingerprint,不出网),按文件名直接认;
+ *  - 外置后端(penzor 的指纹要 whoami 出网,这里不调它的工厂)或内置但认身份的字段缺了:按每个基线文件里记的指纹认 ——
+ *    文件名正是 hash8(这个根|它记的指纹) 才算这个根的,再要后端前缀一致(penzor 再要库名一致;同一个根、同一个库、
+ *    不同账号的也挪:宁可多挪,挪走 = 交还后首次合流、不做删除判定)。读不了 / 解析不了的基线引擎本来就当空的用,不挪。 */
+/** 只给日志用的错误码:不带异常正文(配置解析的报错带原文片段)。 */
+function errorCode(e: unknown): string {
+  const x = e as { code?: unknown; message?: unknown } | null
+  if (typeof x?.code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(x.code)) return x.code
+  if (typeof x?.message === 'string' && /^[a-z][a-z0-9_-]{2,63}$/.test(x.message)) return x.message
+  return 'error'
+}
+
+/** 归档原件里的自动同步两项写回现在的配置(在封口闸的锁里调,配置写队列里读改写)。现在的值不是归档写下的 0 / false = 用户改过,不动。 */
+async function restoreAutoSync(): Promise<boolean> {
+  const orig = await archivedAutoSync()
+  if (!orig) return false
+  return inConfigQueue(async () => writeAutoSyncBack(await readLegacyConfigStrict(), orig.interval, orig.onStart))
+}
+
+/** 档案原件里自动同步两项(读不出 / 都是关着 = null)。在封口闸的锁里调。 */
+async function archivedAutoSync(): Promise<{ interval: number; onStart: boolean } | null> {
+  const st = legacyGate().state()
+  if (!st.archived || !st.archiveDir) return null
+  let orig: { intervalMin?: unknown; syncOnStart?: unknown }
+  try { orig = JSON.parse(await fs.readFile(path.join(st.archiveDir, path.basename(configFile())), 'utf8')) } catch { throw new Error('archive-original-unreadable') }
+  const interval = typeof orig?.intervalMin === 'number' && Number.isFinite(orig.intervalMin) && orig.intervalMin >= 0 ? orig.intervalMin : 0
+  const onStart = orig?.syncOnStart === true
+  return interval === 0 && !onStart ? null : { interval, onStart }
+}
+
+/** 写回那两项。调用方占着配置写队列、给的是这一段里严格读到的那份。现在的值不是归档写下的 0 / false = 用户改过,不动。 */
+async function writeAutoSyncBack(strict: Awaited<ReturnType<typeof readLegacyConfigStrict>>, interval: number, onStart: boolean): Promise<boolean> {
+  if (!strict) return false
+  if ((strict.cfg.intervalMin ?? 0) !== 0 || strict.cfg.syncOnStart === true) return false
+  const obj = JSON.parse(strict.raw) as Record<string, unknown>
+  obj.intervalMin = interval
+  obj.syncOnStart = onStart
+  const file = configFile()
+  const mode = (await fs.stat(file)).mode & 0o777
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
+  await fs.writeFile(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8', mode })
+  await fs.rename(tmp, file)
+  cache = { ...DEFAULT_CONFIG, ...(obj as unknown as RemoteSyncConfig) }
+  loadBroken = false
+  resetTimer(cache)
+  return true
+}
+
+/** remotesync.json 里认得、这一版不支持的后端(同 syncTargetsStore 的 UNSUPPORTED_SYNC_TARGET_KINDS):归档一律拒。 */
+const UNSUPPORTED_LEGACY_BACKENDS = ['gdrive'] as const
+
+/** 「根 × 去处」的不透明键:内置后端用基线指纹,算不出的(penzor 等)用后端 + 目录 + 库名。只是 hash,不含凭据。 */
+function legacyKeyOf(cfg: RemoteSyncConfig, root: string): string {
+  const penzorVault = cfg.backend === 'penzor' ? (typeof cfg.penzor?.vault === 'string' ? cfg.penzor.vault : 'default').trim() || 'default' : ''
+  const where = builtinFingerprint(cfg) ?? `${cfg.backend}:${legacyDirOf(cfg)}|${penzorVault}`
+  return createHash('sha256').update(`${root}\n${where}`).digest('hex').slice(0, 32)
+}
+
+async function legacyBaselines(cfg: RemoteSyncConfig, stateDir: string): Promise<string[]> {
+  if (cfg.backend === 'off') return []
+  const rooted = await resolveLocalSyncRoot()
+  if ('error' in rooted) throw new Error('legacy-root-unavailable')
+  let names: string[] = []
+  try { names = (await fs.readdir(stateDir)).filter((n) => n.endsWith('.json')) } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return []
+    throw e
+  }
+  const exact = builtinFingerprint(cfg)
+  if (exact) {
+    const want = `${hash8(`${rooted.root}|${exact}`)}.json`
+    return names.includes(want) ? [want] : []
+  }
+  const penzorVault = cfg.backend === 'penzor' ? (typeof cfg.penzor?.vault === 'string' ? cfg.penzor.vault : 'default').trim() || 'default' : null
+  const out: string[] = []
+  for (const name of names) {
+    let fp: unknown
+    try { fp = (JSON.parse(await fs.readFile(path.join(stateDir, name), 'utf8')) as { fingerprint?: unknown })?.fingerprint } catch { continue }
+    if (typeof fp !== 'string' || `${hash8(`${rooted.root}|${fp}`)}.json` !== name) continue
+    if (!fp.startsWith(`${cfg.backend}:`)) continue
+    if (penzorVault !== null && !fp.endsWith(`|${penzorVault}`)) continue
+    out.push(name)
+  }
+  return out
+}
+
+/** 封口三态给设置页(契约 §3.9):v2-holds = 这次启动新同步持有写权、旧入口拦着;imported = 接手过、现在交还着(只能手动、从零基线跑);
+ *  user-off = 用户自己关着(没选后端);active = 照旧在用。 */
+function legacySealView(cfg: RemoteSyncConfig): LegacyGateState & { state: 'v2-holds' | 'imported' | 'user-off' | 'active' } {
+  const st = legacyGate().state()
+  const state = st.blocked ? 'v2-holds' : st.archived || st.hold === 'v2' ? 'imported' : cfg.backend === 'off' ? 'user-off' : 'active'
+  return { ...st, state }
+}
+
+/** 设置页要显示的目录(各后端原样):文件夹 = 路径;S3 = 前缀;WebDAV = baseDir(缺省 forsion-vault);Dropbox = baseDir(缺省根);
+ *  蓬洲云 = 库名。 */
+export function legacyDirOf(cfg: RemoteSyncConfig): string {
+  switch (cfg.backend) {
+    case 'folder': return cfg.folder?.path ?? ''
+    case 's3': return normPrefix(cfg.s3?.prefix)
+    case 'webdav': return (cfg.webdav?.baseDir ?? 'forsion-vault').replace(/^\/+|\/+$/g, '') || 'forsion-vault'
+    case 'dropbox': return cfg.dropbox?.baseDir ?? ''
+    case 'penzor': return cfg.penzor?.vault ?? 'default'
+    default: return ''
+  }
+}
+
+export interface LegacyRemoteSyncView {
+  config: { backend: RemoteSyncConfig['backend']; dir: string; direction: 'both' | 'push' | 'pull'; ignore: string[]; maxFileMB: number; intervalMin: number; syncOnStart: boolean; concurrency: number | null }
+  root: string | null
+  rootError: string | null
+  running: boolean
+  hold: 'none' | 'v2'
+  archived: boolean
+  handshake: 'pending' | 'ok' | 'released'
+  /** 「让开条目绑定的路径」(契约 H-2 第 2 条):当前账号登记在这个根上的条目,现算(条目库根解析不了按同一个算)。非空 = 这个根也配着条目同步。
+   *  旧同步自己那一轮另按全部账号算(legacyRoundIgnores),这份口径不变(给 E-19)。 */
+  entryIgnores: string[]
+  /** 这份配置「根 × 去处」的不透明键(不含凭据):接手前后各取一次比对、交给 archive 核对,换了根 / 桶 / 账号就对不上。根解析不了 = null。 */
+  legacyKey: string | null
+}
+
+/** 一份严格读到的配置 → 给 Extend 的视图(不含凭据)。 */
+async function viewOf(cfg: RemoteSyncConfig): Promise<LegacyRemoteSyncView> {
+  // 库根、键、条目排除项都从同一份严格读的设置快照算(Codex P2):读不了整个调用抛固定码,不回 root:null + 空的 entryIgnores
+  const snap = await readEntrySyncSnapshotStrict()
+  const rooted = await resolveLocalSyncRoot(snap.config)
+  const st = legacyGate().state()
+  if (st.hold === 'unknown') await syncTargetsStore.readLegacy() // 持有状态读不了:这里抛出去,别回一份「没持有」
+  return {
+    config: {
+      backend: cfg.backend,
+      dir: legacyDirOf(cfg),
+      direction: cfg.direction === 'push' || cfg.direction === 'pull' ? cfg.direction : 'both',
+      ignore: Array.isArray(cfg.ignore) ? cfg.ignore.filter((x): x is string => typeof x === 'string') : [],
+      maxFileMB: cfg.maxFileMB ?? 100,
+      intervalMin: cfg.intervalMin ?? 0,
+      syncOnStart: cfg.syncOnStart === true,
+      concurrency: typeof cfg.concurrency === 'number' ? cfg.concurrency : null,
+    },
+    root: 'root' in rooted ? rooted.root : null,
+    rootError: 'error' in rooted ? rooted.error : null,
+    legacyKey: 'root' in rooted ? legacyKeyOf(cfg, rooted.root) : null,
+    entryIgnores: 'root' in rooted ? (await ignoresOf(rooted.root, snap.config.entrySync ?? [], 'same')) ?? [] : [],
+    running,
+    hold: st.hold === 'v2' ? 'v2' : 'none',
+    archived: st.archived,
+    handshake: st.handshake,
+  }
+}
+
+/** 新同步(Extend)用的那几样;syncTargets.ts 包成 CloudHost.syncTargets。凭据只经 legacySection() 给宿主自己,永不进 Extend。 */
+export const legacyRemoteSync = {
+  /** 握手:Extend 调了 syncTargets 的任一成员。v2 持有时等在途那一轮跑完。 */
+  touch: (): Promise<void> => legacyGate().touch(),
+  /** 宿主装载完内置包时调。 */
+  extendLoaded: (present: boolean): void => legacyGate().extendLoaded(present),
+  /** 没配置(文件不在)= null;读不了就抛。 */
+  async view(): Promise<LegacyRemoteSyncView | null> {
+    const strict = await readLegacyConfigStrict()
+    return strict ? viewOf(strict.cfg) : null
+  },
+  /** 宿主内部用(syncTargets 算 currentTargetId):同一次严格读里的视图 + 当前后端那一段配置(含凭据,只在主进程里比位置,
+   *  不出 syncTargets)。没配置 = null;读不了就抛。 */
+  async viewWithSection(): Promise<{ view: LegacyRemoteSyncView; backend: RemoteSyncConfig['backend']; section: Record<string, unknown> } | null> {
+    const strict = await readLegacyConfigStrict()
+    if (!strict) return null
+    const { backend } = strict.cfg
+    const section = backend === 'off' ? undefined : (strict.cfg as unknown as Record<string, unknown>)[backend]
+    return { view: await viewOf(strict.cfg), backend, section: section && typeof section === 'object' && !Array.isArray(section) ? structuredClone(section as Record<string, unknown>) : {} }
+  },
+  /** 宿主内部用(导入 sync-targets):原样那一段后端配置,含凭据。没配置 / 读不了 / 没选后端 → 抛。 */
+  async section(): Promise<{ backend: RemoteSyncConfig['backend']; section: Record<string, unknown> }> {
+    const strict = await readLegacyConfigStrict()
+    if (!strict) throw new Error('no-legacy-config')
+    const { backend } = strict.cfg
+    if (backend === 'off') throw new Error('no-legacy-backend')
+    const section = (strict.cfg as unknown as Record<string, unknown>)[backend]
+    return { backend, section: section && typeof section === 'object' ? structuredClone(section as Record<string, unknown>) : {} }
+  },
+  seal: (): Promise<void> => legacyGate().seal(),
+  /** 交还。opts.restoreAutoSync(契约 H-8,只给接手失败到头 / 用户退回):已归档的,先在还封着的时候把档案原件里的
+   *  intervalMin / syncOnStart 写回去,再交还 —— 否则首轮连败(U 盘没插)后旧自动同步也不回来,同步悄悄停了。
+   *  只在现在的值仍是归档写下的那两个(0 / false)时写回,用户之后自己改过的不动;基线已挪走,旧引擎回来按首次合流跑(不删)。
+   *  写回失败只记错误码、照样交还(退回到「只能手动」,不卡在封口里)。
+   *  opts.expectKey(契约 H-13):先核再交还,见下面那段;不带 = 照旧(老 Extend)。 */
+  async unseal(opts?: { restoreAutoSync?: boolean; expectKey?: string }): Promise<void> {
+    const expectKey = typeof opts?.expectKey === 'string' ? opts.expectKey : null
+    if (expectKey !== null) {
+      // 契约 H-13:核对和交还在同一次操作里。锁的顺序同 archive:闸 → 配置写队列;remotesync:set 排在整段之前或之后,
+      // 插不进「核完、还没交还」那一下。对不上 / 文件没了 → legacy-config-changed;根认不出 → legacy-root-unavailable;
+      // 读不了配置照抛(读失败 ≠ 空)。这几种都在写回自动同步之前抛:封口和配置都不动。
+      await legacyGate().unsealChecked((handBack) => inConfigQueue(async () => {
+        const strict = await readLegacyConfigStrict()
+        if (!strict) throw new Error('legacy-config-changed')
+        const rooted = await resolveLocalSyncRoot()
+        if ('error' in rooted) throw new Error('legacy-root-unavailable')
+        if (legacyKeyOf(strict.cfg, rooted.root) !== expectKey) throw new Error('legacy-config-changed')
+        if (opts?.restoreAutoSync === true && legacyGate().state().hold === 'v2') {
+          try {
+            const orig = await archivedAutoSync()
+            if (orig) await writeAutoSyncBack(strict, orig.interval, orig.onStart)
+          } catch (e) { console.warn(`[remotesync] restore auto-sync skipped: ${errorCode(e)}`) }
+        }
+        await handBack()
+      }))
+      return
+    }
+    if (opts?.restoreAutoSync === true && legacyGate().state().hold === 'v2') {
+      await legacyGate().exclusive(async () => {
+        try { await restoreAutoSync() } catch (e) { console.warn(`[remotesync] restore auto-sync skipped: ${errorCode(e)}`) }
+      }).catch((e) => console.warn(`[remotesync] restore auto-sync skipped: ${errorCode(e)}`))
+    }
+    await legacyGate().unseal()
+  },
+  /** 只在持有时:remotesync.json 原样复制进档案,原文件只改 intervalMin=0 / syncOnStart=false,remotesync-state/ 里
+   *  **这个根 × 这个指纹**的基线挪进档案(契约 H-1 第 2 条;用户以前同步过的别的根 / 去处的基线留着)。幂等。
+   *  整段在封口闸的锁里跑(gate.exclusive):闸关着、没有在途的一轮,中途来的 unseal 排在后面;
+   *  读 remotesync.json 和改写它在同一个写队列里(saveConfig 排在前或后,不会被改写盖掉)。锁的顺序:闸 → 配置队列,别反过来。 */
+  async archive(archiveDir: string, opts?: { expectKey?: string }): Promise<{ copied: string[]; moved: string[] }> {
+    if (typeof archiveDir !== 'string' || !path.isAbsolute(archiveDir)) throw new Error('bad-archive-dir')
+    const expectKey = typeof opts?.expectKey === 'string' ? opts.expectKey : null
+    return legacyGate().exclusive(async (g) => {
+      if (running) throw new Error('already-running')
+      const copied: string[] = []
+      const moved: string[] = []
+      const stateDir = path.join(app.getPath('userData'), 'remotesync-state')
+      const pick = await inConfigQueue(async () => {
+        const strict = await readLegacyConfigStrict()
+        if (!strict) throw new Error('no-legacy-config')
+        // 认得、这一版不支持的后端(带它的版本写过、再降回这一版):不复制、不改写、不挪基线 —— 这一版算不出它的指纹,认不准该挪哪份
+        if ((UNSUPPORTED_LEGACY_BACKENDS as readonly string[]).includes(strict.cfg.backend)) throw new Error('legacy-backend-unsupported')
+        // 接手时看到的「根 × 去处」和现在的对不上(封口期间用户改了旧同步的根 / 桶 / 账号):什么都不动,交接手重来
+        if (expectKey !== null) {
+          const rooted = await resolveLocalSyncRoot()
+          if ('error' in rooted) throw new Error('legacy-root-unavailable')
+          if (legacyKeyOf(strict.cfg, rooted.root) !== expectKey) throw new Error('legacy-config-changed')
+        }
+        // 先认出要挪哪份基线(认不出根就抛,什么都不动):不能一边改了原文件一边留着认不出的基线还记 archived
+        const names = await legacyBaselines(strict.cfg, stateDir)
+        await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 })
+        const dest = path.join(archiveDir, path.basename(configFile()))
+        // 只复制一次:重跑时档案里那份是改之前的原件,不能被已经关了自动同步的新内容盖掉。复制的是这次严格读到的那份字节。
+        // 先写满临时文件并刷盘,再 link 独占发布:写到一半(磁盘满 / 断电)留下的只是临时文件,EEXIST 才真表示档案里有完整原件
+        const tmp = `${dest}.tmp-${process.pid}-${Date.now()}`
+        const fh = await fs.open(tmp, 'wx', 0o600)
+        try { await fh.writeFile(strict.bytes); await fh.sync() } catch (e) { await fh.close().catch(() => {}); await fs.rm(tmp, { force: true }).catch(() => {}); throw e }
+        await fh.close()
+        try { await fs.link(tmp, dest); copied.push(dest) } catch (e) {
+          if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') { await fs.rm(tmp, { force: true }).catch(() => {}); throw e }
+        }
+        await fs.rm(tmp, { force: true })
+        await fs.chmod(dest, 0o600).catch(() => {})
+        if ((strict.cfg.intervalMin ?? 0) !== 0 || strict.cfg.syncOnStart) {
+          const obj = JSON.parse(strict.raw) as Record<string, unknown>
+          obj.intervalMin = 0
+          obj.syncOnStart = false
+          const file = configFile()
+          const mode = (await fs.stat(file)).mode & 0o777
+          const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
+          await fs.writeFile(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8', mode })
+          await fs.rename(tmp, file)
+          cache = { ...DEFAULT_CONFIG, ...(obj as unknown as RemoteSyncConfig) }
+          loadBroken = false
+          resetTimer(cache)
+        }
+        return names
+      })
+      if (pick.length) await fs.mkdir(path.join(archiveDir, 'remotesync-state'), { recursive: true, mode: 0o700 })
+      for (const name of pick) {
+        const from = path.join(stateDir, name)
+        let to = path.join(archiveDir, 'remotesync-state', name)
+        if (await fs.access(to).then(() => true, () => false)) to = `${to}.${Date.now()}`
+        try { await fs.rename(from, to) } catch (e) {
+          if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') continue
+          if ((e as NodeJS.ErrnoException)?.code !== 'EXDEV') throw e
+          await fs.copyFile(from, to, fs.constants.COPYFILE_EXCL)
+          await fs.unlink(from)
+        }
+        moved.push(to)
+      }
+      await g.markArchived(archiveDir)
+      return { copied, moved }
+    })
+  },
+}
+
+/** syncTargets.ts 打开 Dropbox 目标时用:和 remotesync 同一套生效凭据口径。 */
+export const remoteSyncNet = {
+  dropboxAppKey: (d?: { appKey?: string }): string => dbxAppKey(d),
+}
+
 export function registerRemoteSync(): void {
+  legacyGate() // 尽早读持有状态:启动那一轮之前就要知道拦不拦
   ipcMain.handle('remotesync:get', async () => {
     const cfg = await loadConfig()
     const rooted = await resolveLocalSyncRoot()
@@ -400,6 +989,8 @@ export function registerRemoteSync(): void {
       dropboxBuiltin: FORSION_DROPBOX_APP_KEY !== '',
       // 外置后端(Forsion Extend 注册的 kind,如 penzor):渲染层只列这里有的选项
       backends: extraBackendKinds(),
+      // 智库同步第 2 步:新同步接手了没有、这次启动谁持有写权(设置页据此显示「已交给新同步」/ 兼容模式照旧)
+      seal: legacySealView(cfg),
     }
   })
   ipcMain.handle('remotesync:set', async (_e, patch: Partial<RemoteSyncConfig>) => {
@@ -424,6 +1015,7 @@ export function registerRemoteSync(): void {
   // Dropbox OAuth PKCE:start 开浏览器授权页(verifier 主进程暂存)。回环回调服务器起得来
   // 就自动回填授权码(mode:auto,结果经 remotesync:dropboxAuth 广播);起不来退回手贴(mode:manual)。
   ipcMain.handle('remotesync:dropboxAuthStart', async (_e, appKey: string) => {
+    supersedeTargetAuth('dropbox') // 没开过新授权 = 什么都不做
     const custom = (appKey ?? '').trim()
     const key = custom || FORSION_DROPBOX_APP_KEY
     if (!key) return { ok: false, error: 'no-app-key' }

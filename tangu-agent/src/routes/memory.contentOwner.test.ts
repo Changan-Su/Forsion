@@ -1,10 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import express from 'express';
 import type { Server } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agentSyncDefault, cloudAccountScope, registerAgentSyncIdentity, setAgentSyncDefault } from '../services/cloudSyncAccount.js';
+import { agentSyncDefault, cloudAccountScope, contentSyncOwnership, registerAgentSyncIdentity, setAgentSyncDefault } from '../services/cloudSyncAccount.js';
+import { agentsDir } from '../core/tanguHome.js';
 import type { AgentFilesBrain } from '../seams/cloudBrain.js';
 
 const state = vi.hoisted(() => ({ hostExec: true, brain: {} as AgentFilesBrain, mirror: vi.fn(async () => {}) }));
@@ -80,4 +81,80 @@ it('claims only the matching account and retains compatibility with an old deskt
   expect((await put({ enabled: true })).status).toBe(200);
   expect(agentSyncDefault(beta)).toBe(false);
   expect(state.mirror).toHaveBeenCalledTimes(2);
+});
+
+const call = (method: string, path: string, body?: Record<string, unknown>) => fetch(url.replace('/agent/sync/content-owner', path), {
+  method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
+});
+
+it('GET reads both bits back; the new body changes only the bit it names; the old body still changes both', async () => {
+  expect(await (await call('GET', '/agent/sync/content-owner')).json()).toEqual({ human: false, agents: false });
+  expect((await put({ human: true, expectedAccount: origin + '::alpha' })).status).toBe(200);
+  expect(await (await call('GET', '/agent/sync/content-owner')).json()).toEqual({ human: true, agents: false });
+  expect(agentSyncDefault(alpha)).toBe(false);
+  expect((await put({ agents: true })).status).toBe(200);
+  expect((await put({ human: false })).status).toBe(200);
+  expect(contentSyncOwnership(alpha)).toEqual({ human: false, agents: true });
+  expect(agentSyncDefault(alpha)).toBe(true); // human 还给引擎:总闸的同意照旧有效
+  expect((await put({ enabled: false })).status).toBe(200);
+  expect(contentSyncOwnership(alpha)).toEqual({ human: false, agents: false });
+  expect((await put({ enabled: true, human: false })).status).toBe(400);
+  expect((await put({})).status).toBe(400);
+  expect(contentSyncOwnership(beta)).toEqual({ human: false, agents: false });
+});
+
+it('GET refuses a stale account and does not report a corrupt owner file as "nobody owns it"', async () => {
+  expect((await call('GET', '/agent/sync/content-owner?expectedAccount=' + encodeURIComponent(origin + '::beta'))).status).toBe(409);
+  writeFileSync(join(agentsDir(), '.cloudsync-default.json'), '{"accounts":');
+  expect((await call('GET', '/agent/sync/content-owner')).status).toBe(500);
+  expect((await put({ human: true })).status).toBe(500);
+  expect(readFileSync(join(agentsDir(), '.cloudsync-default.json'), 'utf8')).toBe('{"accounts":');
+});
+
+it('a wrongly typed owner bit is unreadable, never read as "the engine owns human/"', async () => {
+  for (const entry of [{ contentOwns: { human: 'true', agents: false } }, { contentOwns: { human: 1 } }, { contentOwns: 'content' }, { owner: 5 }, 'x']) {
+    const body = JSON.stringify({ accounts: { [alpha]: entry } });
+    writeFileSync(join(agentsDir(), '.cloudsync-default.json'), body);
+    expect(() => contentSyncOwnership(alpha), JSON.stringify(entry)).toThrow('malformed');
+    expect((await call('GET', '/agent/sync/content-owner')).status).toBe(500);
+    expect(readFileSync(join(agentsDir(), '.cloudsync-default.json'), 'utf8')).toBe(body);
+  }
+});
+
+it('content-touched never writes the owner and mirrors human/ only while content owns it', async () => {
+  const file = join(agentsDir(), '.cloudsync-default.json');
+  const before = readFileSync(file, 'utf8');
+  expect((await call('POST', '/agent/sync/content-touched', {})).status).toBe(200);
+  expect(readFileSync(file, 'utf8')).toBe(before);
+  expect(state.mirror).not.toHaveBeenCalled();
+  expect((await put({ human: true })).status).toBe(200);
+  state.mirror.mockClear();
+  const owned = readFileSync(file, 'utf8');
+  expect((await call('POST', '/agent/sync/content-touched', {})).status).toBe(200);
+  expect(readFileSync(file, 'utf8')).toBe(owned);
+  expect(state.mirror).toHaveBeenCalledTimes(1);
+});
+
+it('the old body keeps the old file shape and the old answer: owner only, no contentOwns, {ok:true}', async () => {
+  const file = join(agentsDir(), '.cloudsync-default.json');
+  const on = await put({ enabled: true, expectedAccount: origin + '::alpha' });
+  expect(on.status).toBe(200);
+  expect(await on.json()).toEqual({ ok: true });
+  const entry = JSON.parse(readFileSync(file, 'utf8')).accounts[alpha];
+  expect(entry).toMatchObject({ enabled: true, owner: 'content' });
+  expect(entry).not.toHaveProperty('contentOwns');
+  expect(contentSyncOwnership(alpha)).toEqual({ human: true, agents: true }); // 老文件读作两位
+  const off = await put({ enabled: false });
+  expect(await off.json()).toEqual({ ok: true });
+  const after = JSON.parse(readFileSync(file, 'utf8')).accounts[alpha];
+  expect(after).not.toHaveProperty('owner');
+  expect(after).not.toHaveProperty('contentOwns');
+});
+
+it('a new-body change already on disk is not reported as failed when only the mirror step fails', async () => {
+  state.mirror.mockRejectedValueOnce(new Error('mirror down'));
+  const r = await put({ human: true });
+  expect(r.status).toBe(200);
+  expect(await r.json()).toMatchObject({ ok: true, human: true, agents: false });
+  expect(contentSyncOwnership(alpha)).toEqual({ human: true, agents: false });
 });

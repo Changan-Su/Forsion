@@ -3,18 +3,62 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC, type AmadeusApi } from '@amadeus-shared/ipc'
+import { VAULT_CREATE_IPC, type VaultFolderRequest, type VaultFolderStatus } from '@amadeus-shared/vaultCreate'
 import { ASSET_SCHEME } from '@amadeus-shared/assets'
 import { SYNC_IPC } from './sync/ipcKeys'
+import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
 import { cloudPresent } from '../cloudPresent'
+
+const subscribe = <T>(channel: string, cb: (payload: T) => void): (() => void) => {
+  const listener = (_event: IpcRendererEvent, payload: T): void => cb(payload)
+  ipcRenderer.on(channel, listener)
+  return () => { ipcRenderer.removeListener(channel, listener) }
+}
+
+const floating = new URLSearchParams(globalThis.location.search).get('window') === 'floating'
+async function folderInvoke<T>(request: VaultFolderRequest): Promise<T> {
+  const id = globalThis.crypto.randomUUID()
+  let status: VaultFolderStatus = await ipcRenderer.invoke(VAULT_CREATE_IPC.request, id, request)
+  while (status.state === 'pending') {
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    status = await ipcRenderer.invoke(VAULT_CREATE_IPC.status, id)
+  }
+  if (status.state === 'failed') throw new Error(status.error)
+  return status.value as T
+}
+
+if (!floating) {
+  ipcRenderer.on(VAULT_CREATE_IPC.relay, (_event, id: string) => {
+    void ipcRenderer.invoke(VAULT_CREATE_IPC.accept, id).catch(() => {})
+  })
+}
 
 const api: AmadeusApi = {
   openVault: () => ipcRenderer.invoke(IPC.openVault),
   restoreVault: (reuseActive?: boolean) => ipcRenderer.invoke(IPC.restoreVault, reuseActive),
   listVaults: () => ipcRenderer.invoke(IPC.listVaults),
+  listVaultsForMenu: () => ipcRenderer.invoke(IPC.listVaultsForMenu),
   switchVault: (root) => ipcRenderer.invoke(IPC.switchVault, root),
   createVault: (name) => ipcRenderer.invoke(IPC.createVault, name),
+  vaultCreate: (args) => folderInvoke({ kind: 'create', args }),
+  vaultSyncActions: () => {
+    const channels = cloudPresent()
+    return { download: channels.has('vaultsync:downloadCheck') && channels.has('vaultsync:download'), create: channels.has('vaultsync:create'), unbind: channels.has('vaultsync:unbind') }
+  },
+  vaultDefaultParent: () => folderInvoke({ kind: 'parent' }),
+  vaultEnsureDefaultParent: () => folderInvoke({ kind: 'ensureParent' }),
+  vaultRollback: (operationId) => folderInvoke({ kind: 'rollback', operationId }),
+  vaultFileHashes: (root, paths) => ipcRenderer.invoke(VAULT_CREATE_IPC.hashes, root, paths),
+  moveSyncVaultPin: (root, check) => folderInvoke({ kind: 'movePin', root, check }),
   forgetVault: (root) => ipcRenderer.invoke(IPC.forgetVault, root),
   revealVault: (root) => ipcRenderer.invoke(IPC.revealVault, root),
+  // 在线库(智库同步第 3 步 H3):读写当前在线库、主窗收「在线打开」并报失败 / 报装好了转发壳
+  activeVaultGet: () => ipcRenderer.invoke(ACTIVE_VAULT_IPC.get),
+  activeVaultSet: (ref, requestId) => ipcRenderer.invoke(ACTIVE_VAULT_IPC.set, ref, requestId),
+  onActiveVaultChanged: (cb) => subscribe(ACTIVE_VAULT_IPC.changed, cb),
+  onOpenOnline: (cb) => subscribe(ACTIVE_VAULT_IPC.openOnline, cb),
+  openOnlineResult: (r) => ipcRenderer.send(ACTIVE_VAULT_IPC.openOnlineResult, r),
+  onlineCapable: () => ipcRenderer.send(ACTIVE_VAULT_IPC.onlineCapable),
   listPages: () => ipcRenderer.invoke(IPC.listPages),
   listFiles: () => ipcRenderer.invoke(IPC.listFiles),
   loadPage: (pagePath) => ipcRenderer.invoke(IPC.loadPage, pagePath),
@@ -147,6 +191,8 @@ const syncPresent = cloudPresent().has(SYNC_IPC.get)
 const collabPresent = cloudPresent().has(SYNC_IPC.collabCall)
 if (syncPresent) contextBridge.exposeInMainWorld('amadeusSync', {
   get: () => ipcRenderer.invoke(SYNC_IPC.get),
+  // 全部旧引擎(含空闲的条目同步);老 Extend 不接 → 不暴露,状态源回落 get() + 事件
+  ...(cloudPresent().has(SYNC_IPC.getAll) ? { getAll: () => ipcRenderer.invoke(SYNC_IPC.getAll) } : {}),
   setEnabled: (on: boolean) => ipcRenderer.invoke(SYNC_IPC.setEnabled, on),
   syncNow: () => ipcRenderer.invoke(SYNC_IPC.syncNow),
   confirmDeletions: () => ipcRenderer.invoke(SYNC_IPC.confirmDeletions),

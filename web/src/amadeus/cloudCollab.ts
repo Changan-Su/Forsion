@@ -2,12 +2,16 @@
  * 页面级共享(P2)+ 发布(P3)的浏览器端 API 面:挂 window.amadeusCollab(web 专属)。
  * 模型:同步共享=页+子页面,参与者须登录+同意邀请(可设密码/有效期/角色);发布=公开只读链接。
  * 活动 vault id 与 cloudBridge 同源;切库 = localStorage + reload(干净重建)。
+ * 库清单(智库同步第 3 步 E1):listLibraries 读 /libraries(原位置库也是一项),老服务端 404 退回 GET /vaults;
+ * listVaults 语义不变(真 vault id,ownVaults / 跨库汇总要它)。
+ * 原位置库以 `X/` 为根打开时,发给服务端的页面路径(共享 / 发布 / 在场 / 文件地址)经 activeCloudWirePath 补上前缀。
  */
 import { subscribePresence, type PresenceUser } from './cloudPresence'
-import { ensureActiveVault, ACTIVE_VAULT_KEY } from './cloudBridge'
-import { contentStorageKey } from '@lcl/engine/contentStorageScope'
+import { activeCloudFileLocation, activeCloudNoteLocation, activeCloudViewPath, ensureActiveLibrary, ensureActiveVault } from './cloudBridge'
+import { CLOUD_CONTENT_CAPS, cloudLibraryKeys, rememberCloudLibrary, type LibraryDto } from './cloudScope'
 import { cloudAccountIdentity } from '@/services/cloudAccountCache'
 import { fileAddress } from '../openTarget'
+import type { AmadeusPageShare } from '@/types'
 
 export interface CollabCfg {
   apiBase: string
@@ -31,8 +35,11 @@ const j = async <T>(res: Response): Promise<T> => {
   return res.json() as Promise<T>
 }
 
+/** 面板用的一行库(/libraries 的一项,或老服务端 GET /vaults 换算的)。 */
+export interface CloudLibraryRow { id: string; name: string; kind: 'default' | 'own' | 'legacy'; vaultId: string; isDefault: boolean }
+
 export function installCloudCollab(cfg: CollabCfg): void {
-  const activeVaultKey = contentStorageKey(ACTIVE_VAULT_KEY)
+  const libraryKeys = cloudLibraryKeys() // 装的时候取一次:换号以后旧账号的 UI 只写回旧账号的键
   const initialToken = cfg.getToken()
   const owner = cloudAccountIdentity(cfg.apiBase, initialToken)
   const assertActive = () => {
@@ -54,6 +61,7 @@ export function installCloudCollab(cfg: CollabCfg): void {
       headers: {
         Authorization: `Bearer ${token}`,
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        'X-Content-Caps': CLOUD_CONTENT_CAPS,
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       // 桌面端 collabMain 每个请求都挂 20s 超时;这里对齐 —— 否则某个 vault 的连接建起来却不回,
@@ -69,6 +77,8 @@ export function installCloudCollab(cfg: CollabCfg): void {
   }
 
   const vid = (): Promise<string> => ensureActiveVault()
+  /** 服务端回的当前库里的路径 → 视图路径;视图外的原样留着(只用于显示,不再发回去)。 */
+  const vp = (path: string, vaultId: string): string => activeCloudViewPath(path, vaultId) ?? path
 
   /**
    * 分享/邀请链接的 web 入口基址。
@@ -111,26 +121,55 @@ export function installCloudCollab(cfg: CollabCfg): void {
   cfg.signal?.addEventListener('abort', stopHeartbeat, { once: true })
   const beat = (): void => {
     if (cfg.signal?.aborted) return
-    void vid().then((v) =>
-      call('POST', `/vaults/${encodeURIComponent(v)}/presence`, { page: hbPage }),
-    ).catch(() => {})
+    const page = hbPage
+    const target = page === null ? vid().then((vaultId) => ({ vaultId, path: null })) : activeCloudFileLocation(page)
+    void target.then(({ vaultId, path }) => call('POST', `/vaults/${encodeURIComponent(vaultId)}/presence`, { page: path })).catch(() => {})
   }
 
   window.amadeusCollab = {
     listVaults: () => call<{ vaults: any[] }>('GET', '/vaults').then((r) => r.vaults),
+    // 只有 404 才是老服务端(退回 /vaults);别的失败照抛,不当空清单
+    listLibraries: async (): Promise<CloudLibraryRow[]> => {
+      try {
+        const r = await call<{ libraries: LibraryDto[] }>('GET', '/libraries')
+        return (r.libraries || []).filter((l) => !l.deleted).map((l) => ({ id: l.id, name: l.name, kind: l.kind, vaultId: l.vaultId, isDefault: l.kind === 'default' }))
+      } catch (e) {
+        if ((e as { status?: number }).status !== 404) throw e
+        const { vaults } = await call<{ vaults: Array<{ id: string; name: string; isDefault?: unknown }> }>('GET', '/vaults')
+        return vaults.map((v) => {
+          const isDefault = typeof v.isDefault === 'boolean' ? v.isDefault : v.name === 'My Vault'
+          return { id: v.id, name: v.name, kind: isDefault ? 'default' as const : 'own' as const, vaultId: v.id, isDefault }
+        })
+      }
+    },
     activeVaultId: vid,
+    activeLibraryId: () => ensureActiveLibrary(),
     switchVault(id: string, path?: string) {
       assertActive()
-      try { localStorage.setItem(activeVaultKey, id) } catch { /* ignore */ }
+      rememberCloudLibrary(id, libraryKeys)
       if (path) location.assign(fileAddress(location.href, id, path))
       else location.reload()
     },
+    // 切库照旧整页刷新(契约 §3.9)
+    switchLibrary(id: string) {
+      assertActive()
+      rememberCloudLibrary(id, libraryKeys)
+      location.reload()
+    },
     fileUrl: (vaultId: string, path: string) => fileAddress(`${linkBase()}/`, vaultId, path),
+    fileViewPath: (vaultId, path) => activeCloudViewPath(path, vaultId),
+    noteLocation: activeCloudNoteLocation,
     // ── 同步共享(owner)──
-    pageShare: async (path: string) =>
-      call<{ share: any; quota: { collab: number; publish: number } }>('GET', `/vaults/${encodeURIComponent(await vid())}/page-shares?path=${encodeURIComponent(path)}`),
-    createPageShare: async (path: string, opts: { role?: 'editor' | 'viewer'; expiresDays?: number | null; password?: string | null; attachments?: boolean }) =>
-      call<any>('POST', `/vaults/${encodeURIComponent(await vid())}/page-shares`, { path, ...opts }),
+    pageShare: async (path: string) => {
+      const target = await activeCloudFileLocation(path)
+      const result = await call<{ share: AmadeusPageShare | null; quota: { collab: number; publish: number } }>('GET', `/vaults/${encodeURIComponent(target.vaultId)}/page-shares?path=${encodeURIComponent(target.path)}`)
+      return { ...result, share: result.share && { ...result.share, vaultId: target.vaultId } }
+    },
+    createPageShare: async (path: string, opts: { role?: 'editor' | 'viewer'; expiresDays?: number | null; password?: string | null; attachments?: boolean }) => {
+      const target = await activeCloudFileLocation(path)
+      const share = await call<AmadeusPageShare>('POST', `/vaults/${encodeURIComponent(target.vaultId)}/page-shares`, { path: target.path, ...opts })
+      return { ...share, vaultId: target.vaultId }
+    },
     updatePageShare: async (id: string, patch: { role?: 'editor' | 'viewer'; password?: string | null; expiresDays?: number | null; rotate?: boolean }, vaultId?: string) =>
       call<any>('PATCH', `/vaults/${encodeURIComponent(vaultId ?? await vid())}/page-shares/${encodeURIComponent(id)}`, patch),
     revokePageShare: async (id: string) => { await call('DELETE', `/vaults/${encodeURIComponent(await vid())}/page-shares/${encodeURIComponent(id)}`) },
@@ -140,10 +179,13 @@ export function installCloudCollab(cfg: CollabCfg): void {
     removeParticipant: async (id: string, userId: string, vaultId?: string) => {
       await call('DELETE', `/vaults/${encodeURIComponent(vaultId ?? await vid())}/page-shares/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`)
     },
-    relatedItems: async (id: string) =>
-      call<{ items: Array<{ path: string; title: string; kind: 'page' | 'file'; included: boolean }>; subpages: number }>('GET', `/vaults/${encodeURIComponent(await vid())}/page-shares/${encodeURIComponent(id)}/related`),
-    setShareItem: async (id: string, path: string, included: boolean) => {
-      await call('POST', `/vaults/${encodeURIComponent(await vid())}/page-shares/${encodeURIComponent(id)}/items`, { path, included })
+    relatedItems: async (id: string, vaultId?: string) => {
+      const vault = vaultId ?? await vid()
+      const r = await call<{ items: Array<{ path: string; title: string; kind: 'page' | 'file'; included: boolean }>; subpages: number }>('GET', `/vaults/${encodeURIComponent(vault)}/page-shares/${encodeURIComponent(id)}/related`)
+      return { ...r, items: (r.items || []).map((it) => ({ ...it, vaultId: vault, displayPath: vp(it.path, vault) })) }
+    },
+    setShareItem: async (id: string, path: string, included: boolean, vaultId?: string) => {
+      await call('POST', `/vaults/${encodeURIComponent(vaultId ?? await vid())}/page-shares/${encodeURIComponent(id)}/items`, { path, included })
     },
     // ── 参与者 ──
     sharedWithMe: () => call<{ items: Array<{ shareId: string; vaultId: string; path: string; title: string; role: string; ownerName: string | null; expiresAt: string | null; items: string[] }> }>('GET', '/shared-with-me').then((r) => r.items),
@@ -154,9 +196,15 @@ export function installCloudCollab(cfg: CollabCfg): void {
     },
     inviteUrl: (token: string) => `${linkBase()}/invite/${token}`,
     // ── 发布(公开链接)──
-    publishes: async () => call<{ shares: Array<{ token: string; mode: string; path: string; createdAt: string }>; quota: { collab: number; publish: number } }>('GET', `/vaults/${encodeURIComponent(await vid())}/shares`),
+    publishes: async (path?: string) => {
+      const target = path ? await activeCloudFileLocation(path) : undefined
+      const vaultId = target?.vaultId ?? await vid()
+      const r = await call<{ shares: Array<{ token: string; mode: string; path: string; createdAt: string }>; quota: { collab: number; publish: number } }>('GET', `/vaults/${encodeURIComponent(vaultId)}/shares`)
+      return { ...r, shares: r.shares.map((share) => ({ ...share, vaultId })), target }
+    },
     createPublish: async (mode: 'page' | 'subtree', path: string) => {
-      const r = await call<{ token: string; mode: string; path: string }>('POST', `/vaults/${encodeURIComponent(await vid())}/shares`, { mode, path })
+      const target = await activeCloudFileLocation(path)
+      const r = await call<{ token: string; mode: string; path: string }>('POST', `/vaults/${encodeURIComponent(target.vaultId)}/shares`, { mode, path: target.path })
       return { ...r, url: `${linkBase()}/share/${r.token}` }
     },
     revokePublish: async (token: string) => { await call('DELETE', `/vaults/${encodeURIComponent(await vid())}/shares/${encodeURIComponent(token)}`) },

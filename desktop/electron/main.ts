@@ -1,7 +1,7 @@
 import type { WindowDropPoint, WindowView } from '../shared/windowDrop'
 import { applyMcpSnapshot, mergeMcpImport, parseMcpInput } from '../shared/mcpConfig'
 import { assertMarketplaceRequirements } from '../shared/marketplace'
-import { mergeSyncContent,withContentWriteLock,contentSyncOwnership,agentContentHooks,CONTENT_MERGE_FAMILIES } from './contentSyncHost'
+import { mergeSyncContent,withContentWriteLock,contentSyncOwnership,contentSyncOwnershipV2,contentSyncOwnedStrict,agentContentHooks,CONTENT_MERGE_FAMILIES,MIRROR_RETIRE } from './contentSyncHost'
 import { asrBackendFor } from './asrSelection'
 import { qwenVoiceInputUrl, registerVoiceInputStream } from './voiceInputStream'
 import { voiceInputCloudUrl } from '../shared/voiceInputStream'
@@ -83,6 +83,7 @@ import { initMainLocale, mainLocale, mt, mtFor } from './mainI18n'
 import { createQuitGuards } from './quitGuard'
 import { closeDialogOptions, closeDialogPick, storedCloseAction, type CloseAction } from './closeAction'
 import { createContentFlush } from './contentSyncFlush'
+import { createRendererQuitGateUi, createSyncQuitGate } from './syncQuitGate'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
 import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' // P1-K3
 import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
@@ -149,9 +150,12 @@ import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { gatePluginManifest } from '@amadeus-shared/ipc'
-import { readConfig as readAmadeusConfig } from './amadeus/settings'
+import { currentCloudAccountId as currentAmadeusAccountId, readConfig as readAmadeusConfig, readSyncOwnershipV2, writeSyncOwnershipV2 } from './amadeus/settings'
+import { createActiveVaultHost, migrateOnStartup } from './amadeus/activeVault'
 import { syncVaultRoot } from './amadeus/vaultList'
-import { registerRemoteSync } from './remotesyncIpc'
+import { legacyRemoteSync, registerRemoteSync } from './remotesyncIpc'
+import { createSyncTargets, registerSyncTargetsIpc } from './syncTargets'
+import { flushSyncRecords, registerSyncRecordsIpc, syncRecordSink } from './syncRecordsIpc'
 import { registerRemoteSyncBackend } from './remotesync/backends'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
 import { createSampler, nativeProbe } from './activeWindow'
@@ -1165,6 +1169,15 @@ let isQuitting = false
 const contentFlush = createContentFlush({ focused: () => !!BrowserWindow.getFocusedWindow(), log: (m) => console.warn(m) })
 // Workspace .md tabs still holding typed text (electron/editorQuitSave.ts): before quitting, the windows that have one save it
 const editorQuitSave = createEditorQuitSave({ events: ipcMain, log: (m) => console.warn(m) })
+// 退出门禁(electron/syncQuitGate.ts;智库同步第 2 步):新 Extend 经 CloudHost.addQuitCheck 登记了检查才生效,没登记 = 下面的退出链一字不变。
+// 放在任何不可逆清理之前:先存编辑器、冲刷,再问引擎还有没有没同步的;有就把结果推给订阅了门禁卡的窗口,等「直接退出 / 取消退出」
+const syncQuitGate = createSyncQuitGate({
+  ui: createRendererQuitGateUi({ events: ipcMain as never, isTrusted: (e) => isTrustedSender(e as never), reveal: () => showMainWindow() }),
+  log: (m) => console.warn(m),
+})
+/** 这一次退出已经过了门禁(重启 / 装更新那条路自己先过,紧跟着的 before-quit 不再拦)。退出没成时清掉。 */
+let syncGatePassed = false
+let syncGateChain: Promise<void> | null = null
 // 退出前问一次(electron/quitGuard.ts):内置包的主进程半身经 CloudHost.addQuitGuard 登记「还有事没做完」
 const quitGuards = createQuitGuards({
   locale: mainLocale,
@@ -1251,6 +1264,14 @@ let restartAmadeusSync: (() => Promise<void>) | null = null
 let stopAmadeusSync: (() => Promise<void>) | null = null
 // Amadeus 云同步引擎住在 Forsion Extend(0.4 起):Extend 装载时登记工厂,registerAmadeusIpc 里 vault 建好后再调(amadeus/cloudSeam.ts)
 let amadeusSyncFactory: AmadeusSyncFactory | null = null
+// 在线库(智库同步第 3 步 H3):active-vault IPC + CloudHost.openLibrary / canOpenOnline 共用这一份状态(amadeus/activeVault.ts)
+const activeVaultHost = createActiveVaultHost({
+  isTrusted: isTrustedSender,
+  mainContents: () => (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed() ? mainWindow.webContents : null),
+  focusMain: () => showMainWindow(),
+  accountId: () => currentAmadeusAccountId(),
+  broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send(channel, payload) },
+})
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
 /** 本机名册 id 的记忆(units:hostStatus.selfUnitId;互联关着时 unitHub.status().unitId 是 null)。 */
@@ -3937,6 +3958,10 @@ app.whenReady().then(async () => {
     await seedBuiltinBundles(join(forsionHomeDir(), 'plugins'), bundleSources, { appVersion: app.getVersion() })
       .catch((e) => console.warn('[builtin-plugins] 播种失败(忽略):', (e as Error)?.message))
     if (firstBootPrefetch !== 'skipped') corePluginUpdater.reset()
+    // 在线库:老配置迁移(lastVault 停在这个账号的云镜像 → activeVault)必须早于 Extend 装载和第一个窗口;失败只记日志、不改配置。
+    // 受 MIRROR_MIGRATION_ENABLED 控制,U3a 之前关着(activeVault.ts)
+    await migrateOnStartup(currentAmadeusAccountId()).catch((e) => console.warn('[amadeus] active vault migration skipped:', (e as Error)?.message))
+    activeVaultHost.register(ipcMain)
     const host: CloudHost = {
       getCloud: async () => {
         const stored = await loadConfig()
@@ -3984,8 +4009,12 @@ app.whenReady().then(async () => {
       addQuitGuard: (fn) => quitGuards.add(fn),
       // ── 2.13.8 起(新同步频率 F2):失焦 / 合盖 / 退出时叫一次 ──
       addFlushHook: (fn) => contentFlush.add(fn),
+      // ── 智库同步第 2 步:退出门禁的检查(syncQuitGate.ts)。没人登记 = 退出链照旧 ──
+      addQuitCheck: (fn) => syncQuitGate.add(fn),
       // ── 2.13.8 起:帮助改进 Forsion 的宿主事件(崩溃 / 性能 / 功能使用),见 telemetryHost.ts ──
       telemetry: telemetry.seam,
+      // ── 智库同步第 1 步起:两套引擎每轮交一行同步记录(存取在 syncRecords.ts,按账号一份)──
+      syncRecords: syncRecordSink,
       contentSync: {
         roots: async () => {
           const cfg=await readAmadeusConfig()
@@ -3998,12 +4027,29 @@ app.whenReady().then(async () => {
           ensureBackend: () => ensureBackend('engine_restart'), loadConfig, backendStatus: () => backend.getStatus(), engineToken: () => backend.getToken(),
           dataDir: tanguDataDir, stopSync: () => stopAmadeusSync?.(), restartSync: () => restartAmadeusSync?.(),
         }),
+        // 智库同步第 2 步:按库根认领(契约 §3.7)。新 Extend 有它就不调上面的 claim / changed
+        ownership: contentSyncOwnershipV2({
+          accountId: () => { const c = loadTanguCreds(); return forsionAccountId(c.cloudUrl || '', c.token || '') },
+          ensureBackend: () => ensureBackend('engine_restart'), loadConfig, backendStatus: () => backend.getStatus(), engineToken: () => backend.getToken(),
+          dataDir: tanguDataDir, stopSync: () => stopAmadeusSync?.(), restartSync: () => restartAmadeusSync?.(),
+          readV2: (account) => readSyncOwnershipV2(account),
+          writeV2: (account, next) => writeSyncOwnershipV2(account, next),
+          entryRoots: async (account) => (await readAmadeusConfig(account)).entrySync?.map((v) => v.vaultRoot) ?? [],
+          legacyOwned: (account) => contentSyncOwnedStrict(account),
+          log: (m) => console.warn(m),
+        }),
         merge: (path,ours,base,theirs) => mergeSyncContent(path,ours,base,theirs,tanguDataDir()),
         mergeFamilies: CONTENT_MERGE_FAMILIES,
+        mirrorRetire: MIRROR_RETIRE, // 智库同步第 3 步:认 ownership 的 mirrorRetired(只停镜像)
         agentFiles: agentContentHooks(tanguDataDir(),()=>{const c=loadTanguCreds();return forsionAccountId(c.cloudUrl||'',c.token||'')}),
         withWriteLock:(path,commit)=>withContentWriteLock(path,tanguDataDir(),commit),
         trash: (p) => shell.trashItem(p),
       },
+      // ── 智库同步第 2 步:「同步到哪」(凭据留在宿主,Extend 只拿句柄;接手旧 remotesync 的封口 / 归档也在这里)──
+      syncTargets: createSyncTargets(),
+      // ── 智库同步第 3 步:在主窗里打开在线库(amadeus/activeVault.ts)──
+      openLibrary: (ref) => activeVaultHost.openLibrary(ref),
+      canOpenOnline: () => activeVaultHost.canOpenOnline(),
     }
     // 插件页停用了的:不装主进程半身 —— 与没装 Extend 同一个形态(cloud:present 空,云端界面整套隐藏)。
     const off = (await loadConfig()).disabledBundles
@@ -4011,6 +4057,8 @@ app.whenReady().then(async () => {
     for (const s of bundleSources) if (s.desktop && bundleOff(s.id)) console.log(`[cloud-host] ${s.id} 已在插件页停用,不装载主进程半身`)
     const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources.filter((s) => !bundleOff(s.id)), appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
     if (!loaded.includes('forsion-extend')) { cloudChannels.clear(); unitsListHandler = null }
+    // 旧 remotesync 的握手(remotesync/legacySeal.ts):Extend 不在 = 这次启动没有新同步,交还给 remotesync;在 = 等它在 60 秒内握手
+    legacyRemoteSync.extendLoaded(loaded.includes('forsion-extend'))
   }
   ipcMain.on('cloud:present', (e) => { e.returnValue = [...cloudChannels] })
   // 插件页拨带主进程半身的内置包(Forsion Extend):只改下次开机装不装,回「是否待重启」。别的 id 一律拒(开关名单不收杂项)。
@@ -4046,22 +4094,40 @@ app.whenReady().then(async () => {
       return (await dialog.showMessageBox(mainWindow, options)).response === 1
     },
     restart: async (install) => {
+      // 没人登记退出检查(老 Extend / 兼容模式)= 原来的顺序一字不变:先关 Unit 再问。登记了才挪到两道问询之后(Codex 评审)
+      const gated = syncQuitGate.has()
       // 装更新前先关掉这台电脑上在跑的文件夹 Unit(同一份安装,文件被它们占着):最多等 15 秒,还有没关的就不装、提示一声。
       // 放在 isQuitting 之前:挡下来时这一份照常能用。
-      if (install && localUnitsHost) {
+      if (!gated && install && localUnitsHost) {
         const left = await localUnitsHost.quitRunningForInstall(15_000)
         if (left !== 0) { await showInstallBlocked(mainWindow, left); return { ok: false } }
       }
       // 还有文件在传(蓬洲云):重启 / 装更新前先问一次;点了退出,后面的 before-quit 就不再问
       if (!(await quitGuards.confirmFirst())) return
+      // 同步门禁(新 Extend 登记了才有):先存编辑器、冲刷,再问还有没有没同步的;取消 = 什么都没清理,应用照常用
+      if (!syncGatePassed && syncQuitGate.has()) {
+        await Promise.all([contentFlush.quit(), editorQuitSave.quit()])
+        if (!(await syncQuitGate.run())) { quitGuards.reset(); contentFlush.reset(); editorQuitSave.reset(); return }
+        syncGatePassed = true
+      }
+      // 登记了退出检查:关 Unit 放在上面两道问询之后(用户在那儿取消时 Unit 还开着)、isQuitting 之前;挡下来时问过的都退回去
+      if (gated && install && localUnitsHost) {
+        const left = await localUnitsHost.quitRunningForInstall(15_000)
+        if (left !== 0) {
+          quitGuards.reset(); syncGatePassed = false; contentFlush.reset(); editorQuitSave.reset()
+          await showInstallBlocked(mainWindow, left)
+          return { ok: false }
+        }
+      }
       // mac:先让 Squirrel.Mac 取包验签,成了才停后端;不成已退回「下载安装包」,应用照常用(见 updater.prepareInstall)
-      if (install && !(await prepareInstall())) { quitGuards.reset(); return }
+      if (install && !(await prepareInstall())) { quitGuards.reset(); syncGatePassed = false; contentFlush.reset(); editorQuitSave.reset(); return }
       isQuitting = true
       // Stop before relaunch/quitAndInstall so before-quit cannot bypass either with app.exit.
       try {
         // 还在静默期里的改动先推上去(最多等 5 秒);工作区 .md 标签里还没存的字先存。两样都是一次退出只做一次:
         // 紧跟着的 before-quit 拿到 null,不会把这次退出改走 app.exit;停引擎期间再打的字由关窗时的 pagehide 存
         await Promise.all([contentFlush.quit(), editorQuitSave.quit()])
+        await flushSyncRecords().catch(() => {}) // 冲刷那一轮刚交上来的同步记录也落盘
         deferredEngineRestart.cancel()
         // 装更新 = app_update;只重启不装 = 和退出一样(app_quit)。都在发信号前写进 shutdown-intent.json
         await backend.stop(install ? 'app_update' : 'app_quit')
@@ -4070,6 +4136,7 @@ app.whenReady().then(async () => {
       } catch (error) {
         isQuitting = false
         quitGuards.reset()
+        syncGatePassed = false
         contentFlush.reset()
         editorQuitSave.reset()
         throw error
@@ -5386,9 +5453,10 @@ app.whenReady().then(async () => {
     },
     needsElevation: () => process.platform === 'win32' && !installDirWritable(),
     prepare: () => prepareInstall(),
-    flush: async () => (await contentFlush.quit()) !== 'timeout',
+    // 无人值守:冲刷没超时、新同步也不是「还在同步」才装(同步门禁不弹卡,syncQuitGate.unattended)
+    flush: async () => (await contentFlush.quit()) !== 'timeout' && await syncQuitGate.unattended(),
     resetFlush: () => contentFlush.reset(),
-    beginQuit: () => { appQuitStarted = false; isQuitting = true; quitGuards.pass(); deferredEngineRestart.cancel() },
+    beginQuit: () => { appQuitStarted = false; isQuitting = true; quitGuards.pass(); syncGatePassed = true; deferredEngineRestart.cancel() },
     stopEngine: () => backend.stop('app_update'),
     install: (v) => installPinned(v),
     quitStarted: (ms) => new Promise<boolean>((resolve) => {
@@ -5400,6 +5468,7 @@ app.whenReady().then(async () => {
     abortQuit: () => {
       isQuitting = false
       quitGuards.reset()
+      syncGatePassed = false
       contentFlush.reset()
       void ensureBackend('engine_restart').catch((err) => console.error('[idle-install] engine restart failed:', err))
     },
@@ -6433,7 +6502,9 @@ app.whenReady().then(async () => {
     },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
-  const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, devPluginRoots, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
+  // 第三个参数:同步门禁拦着这次退出时(syncGateChain 在跑),旧引擎的 before-quit 钩子不停同步(取消退出后照常在跑)
+  const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, devPluginRoots, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory, () => syncGateChain !== null, () =>
+    floatingTargets.get('settings')?.builtin === 'settings' ? floatingWindows.get('settings') ?? null : null)
   amadeusReadPlugins = readExternalPlugins
   amadeusDevPluginRoots = devPluginRoots
   amadeusVaultFace = vaultFace
@@ -6443,6 +6514,8 @@ app.whenReady().then(async () => {
   registerAmadeusAssetProtocol(getVaultRoot, resolveSharedAsset, () => join(tanguDataDir(), 'plugin-data'))
   registerIuiLibProtocol()
   registerRemoteSync() // 本地库远程同步(remotely-save 式;隔离层见 electron/remotesync/)
+  registerSyncTargetsIpc() // 「同步到哪」的网盘列表(设置 › 同步;凭据只进主进程,见 syncTargets.ts)
+  registerSyncRecordsIpc() // 同步记录(同步面板 / 全部记录读;Extend 经 cloudHost.syncRecords 写)
   app.on('activate', () => showMainWindow()) // dock/tray 唤起:隐藏则显示,销毁则重建
   // GPU 进程崩溃(Windows 驱动 TDR / 睡眠恢复常见)会级联拖垮渲染器 → 白屏。监听并自愈。
   app.on('child-process-gone', (_e, d) => {
@@ -6645,10 +6718,34 @@ function installHostTelemetry(): void {
 let exitChain: Promise<void> | null = null
 app.on('before-quit', (e) => {
   telemetry.flushCounts() // 本小时还没发的计数先交给 Extend(退出被拦下也无妨:之后的照常再攒)
+  void flushSyncRecords() // 刚交上来、还在 300ms 合并窗里的同步记录
   if (exitChain) { e.preventDefault(); return }
   // 第一件事:有插件说还没做完就拦下问(别先做下面那些收尾 —— 取消的话应用还要接着用)。
   // 托盘「退出」在 app.quit() 之前就把 isQuitting 置了 true:拦下时还原,否则取消后关窗就真关了
   if (quitGuards.intercept()) { e.preventDefault(); isQuitting = false; return }
+  // 同步门禁(新 Extend 登记了退出检查才有;没有 = 下面照旧):在任何不可逆清理之前。先存编辑器、冲刷,再问引擎;
+  // 「取消退出」= 宿主原样留着、什么都没清理;门禁自己出错不困住用户,照常退
+  if (!syncGatePassed && syncQuitGate.has()) {
+    e.preventDefault()
+    if (syncGateChain) return
+    syncGateChain = (async () => {
+      await Promise.all([editorQuitSave.quit(), contentFlush.quit()])
+      return syncQuitGate.run()
+    })().then((go) => {
+      syncGateChain = null
+      if (go) { syncGatePassed = true; app.quit(); return }
+      isQuitting = false
+      quitGuards.reset()
+      contentFlush.reset()
+      editorQuitSave.reset()
+    }, (err) => {
+      syncGateChain = null
+      console.warn('[quit-gate] failed, quitting as before:', (err as Error)?.message || err)
+      syncGatePassed = true
+      app.quit()
+    })
+    return
+  }
   isQuitting = true // 放行 window close 拦截(否则 hide 会吞掉退出)
   pluginDesktop?.persistNow() // 插件桌面小窗的位置(去抖里还没写的)
   for (const state of persistedDetached) {
@@ -6685,6 +6782,7 @@ app.on('before-quit', (e) => {
   if (flushing || saving || st === 'ready' || st === 'starting') {
     e.preventDefault()
     exitChain = Promise.all([flushing, saving])
+      .then(() => flushSyncRecords().catch(() => {})) // 冲刷那一轮刚交上来的同步记录也落盘
       .then(() => { const now = backend.getStatus().state; return now === 'ready' || now === 'starting' ? backend.stop('app_quit') : undefined })
       .finally(() => app.exit(0))
     void exitChain

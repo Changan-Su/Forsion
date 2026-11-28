@@ -61,6 +61,7 @@ beforeEach(() => {
     const end = url.pathname.split('/').pop()
     const tail = url.pathname.split('/vaults/v1/')[1] ?? ''
     calls.push(`${method} ${end}`)
+    if (end === 'libraries') return Response.json({}, { status: 404 })
     if (end === 'vaults') return json(200, { vaults: [{ id: 'v1' }] })
     if (end === 'tree') {
       const entries = [...rows].map(([path, r]) => ({ path, kind: r.kind === 'text' ? 'page' : 'binary', seq: r.seq }))

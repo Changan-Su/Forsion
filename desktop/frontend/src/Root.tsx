@@ -27,6 +27,7 @@ import { NotificationHost } from './components/NotificationHost'
 import { SandboxChrome } from './sandbox/SandboxChrome'
 import { WhatsNewHost } from './components/WhatsNewDialog'
 import { SyncSetupHost } from './components/SyncSetupCard'
+import { SyncQuitCard } from './components/SyncQuitCard'
 import { TermsUpdateHost } from './components/TermsUpdateDialog'
 import { setPopupsBlocked } from './stores/popupQueue'
 import { DesktopStatusBar, installStatusBarItems } from './statusbar/items'
@@ -281,6 +282,8 @@ export function Root() {
 
       {/* 首登同步卡片:只在桌面主窗(要本地库远程同步);手机 / 网页没有,组件自己判 */}
       <SyncSetupHost />
+      {/* 退出卡(智库同步第 2 步 5C):主进程退出门禁问到时才出;旧主进程没有 quitGate 就不挂 */}
+      <SyncQuitCard />
 
       <AnimatePresence>
         {pluginFloating?.view && <FloatingPanelFrame key={pluginFloating.id} title={pluginFloating.title} onClose={closeWebFloatingPanel}>

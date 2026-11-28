@@ -1,4 +1,5 @@
-import { contentSyncOwned } from '../contentSyncHost'
+import { contentSyncOwned, contentSyncOwnedStrict, readMaskedAmadeusConfig } from '../contentSyncHost'
+import { onQuitProceeding } from '../syncQuitGate'
 import { readExternalPdf, writeExternalPdfAnnotations, exportExternalPdfCopy } from './externalPdf'
 import { constants as fsConstants, promises as fs, readdirSync, readFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
@@ -19,7 +20,9 @@ export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig, type AmadeusConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, looseConfigReadFailed, quarantineCorruptConfig, readConfig, readSyncOwnershipV2, readVaultMenuRegistry, updateConfig, updateLocalVaultConfig, withVaultRegistry, writeConfig, type AmadeusConfig } from './settings'
+import { registerVaultCreateIpc } from './vaultCreate'
+import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
 import { externalCreations } from '../productTrust'
@@ -32,7 +35,7 @@ import { logActivity, logNoteEdit } from '../activityLog'
 import { loadTanguCreds } from '../forsionAuth'
 import { fetchLinkMeta, searchImages } from './linkMeta'
 import { cloudVaultDir, isManagedCloudVault, migrateCloudMirrorDir } from './cloudPaths'
-import { forgetPatch, normalizeLocal, samePath, switchPatch, syncVaultRoot, vaultDirName, vaultList } from './vaultList'
+import { forgetPatch, normalizeLocal, samePath, switchPatch, syncVaultRoot, vaultDirName, vaultList, type VaultFields } from './vaultList'
 import type { AmadeusSyncFactory } from './cloudSeam'
 import { readPluginIconDataUrl } from '../pluginIcon'
 import { mt } from '../mainI18n'
@@ -171,7 +174,9 @@ const offTangu = ctx.tangu?.subscribe(() => { /* 重画你的 UI */ })
 return () => { offTangu?.() }
 `
 
-export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory: AmadeusSyncFactory | null = null): {
+/** quitHeld:这一次 before-quit 正被同步门禁拦着问用户(main.ts 递 syncGateChain 在不在)。旧引擎的退出钩子那次不停同步,
+ *  放行时才停;「取消退出」= 旧引擎一直在跑(syncQuitGate.onQuitProceeding)。缺省恒假 = 和原来的 app.once 一样。 */
+export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory: AmadeusSyncFactory | null = null, quitHeld: () => boolean = () => false, getSettingsWindow: () => BrowserWindow | null = () => null): {
   getVaultRoot: () => string | null
   resolveSharedAsset: (vaultRel: string) => string | null
   restartSync: () => Promise<void>
@@ -294,6 +299,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     },
   )
 
+  // registerVaultHandlers 统一捕获并记录 lastPage 写失败;已提交的笔记操作仍然成功。
   const rememberPage = (pagePath: string): Promise<void> => writeConfig({ lastPage: vaultRel(pagePath) })
   const defaultVaultRoot = (): string => path.join(defaultWorkspaceDir(), 'Amadeus')
 
@@ -322,7 +328,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   const ensureDefaultVault = async (): Promise<{ root: string; pages: string[]; folders: string[] }> => {
     const root = defaultVaultRoot()
     await fs.mkdir(root, { recursive: true })
-    await writeConfig({ lastVault: root, localVault: root, lastPage: undefined })
+    // restoreVault / Extend switchSide 的 IPC 接收 reject:配置没存上就不切根。回落不清在线库。
+    await writeConfig({ lastVault: root, localVault: root, lastPage: undefined }, undefined, { keepActiveVault: true })
     return activateRoot(root, false)
   }
 
@@ -333,9 +340,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   const switchLocalVault = async (root: string): Promise<Awaited<ReturnType<typeof activateRoot>>> => {
     if (isManagedCloudVault(root)) throw new Error('cloud-vault-forbidden')
     if (!(await fs.stat(root).then((s) => s.isDirectory(), () => false))) throw new Error('vault-missing')
-    await updateConfig((cfg) => { Object.assign(cfg, switchPatch(normalizeLocal(cfg, isManagedCloudVault), root)) })
+    // 切本机库 = 不再恢复在线库:和 switchPatch 同一次落盘清掉 activeVault(H3 定稿第 2 节)
+    const physicalRoot = await fs.realpath(root)
+    const leftOnline = await updateLocalVaultConfig((cfg) => {
+      adoptVaultCreation(physicalRoot)
+      Object.assign(cfg, switchPatch(normalizeLocal(cfg, isManagedCloudVault), root))
+    })
     while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites])
-    return activateRoot(root, true) // 同步跑到 vault.setRoot
+    // 换完根再广播:别的窗口收到就 restoreVault(true),拿到的得是新根
+    try { return await activateRoot(root, true) } finally { if (leftOnline) notifyWindows(ACTIVE_VAULT_IPC.changed, { ref: null }) } // 同步跑到 vault.setRoot
   }
 
   handle(IPC.openVault, async () => {
@@ -354,15 +367,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     const dir = vaultDirName(name)
     if (!dir) throw new Error('invalid-name')
     const parent = path.join(defaultWorkspaceDir(), 'Vaults')
+    await withVaultRegistry(async () => {})
     await fs.mkdir(parent, { recursive: true })
     const root = path.join(parent, dir)
     await fs.mkdir(root)
     return switchLocalVault(root)
   })
 
+  const adoptVaultCreation = registerVaultCreateIpc(ipcMain, getWindow, getSettingsWindow)
+
   // 清单 / 移出 / 显示不绑根:别的窗口还停在旧库时也要能看菜单。
-  ipcMain.handle(IPC.listVaults, async () => {
-    const cfg = await localConfig()
+  const listVaultRows = async (fields: VaultFields) => {
+    const cfg = normalizeLocal(fields, isManagedCloudVault)
     const pinned = syncVaultRoot(cfg)
     const owned = contentSyncOwned(currentCloudAccountId())
     const home = app.getPath('home')
@@ -375,15 +391,28 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       pinned: samePath(v.root, pinned),
       exists: await fs.stat(v.root).then((s) => s.isDirectory(), () => false),
     })))
+  }
+  ipcMain.handle(IPC.listVaults, async () => listVaultRows(await withVaultRegistry(async (stored) => stored)))
+  ipcMain.handle(IPC.listVaultsForMenu, async () => {
+    const { config, degraded } = await readVaultMenuRegistry()
+    return { rows: await listVaultRows(config), degraded }
   })
   ipcMain.handle(IPC.forgetVault, async (_e, root: unknown) => {
+    if (typeof root !== 'string') return false
     let ok = false
-    if (typeof root === 'string') await updateConfig((cfg) => {
-      const patch = forgetPatch(normalizeLocal(cfg, isManagedCloudVault), root)
-      if (!patch) return false
-      Object.assign(cfg, patch)
-      ok = true
-    })
+    try {
+      const physicalRoot = await fs.realpath(root).catch(() => path.resolve(root))
+      await withVaultRegistry(async (cfg, save) => {
+        const patch = forgetPatch(normalizeLocal(cfg, isManagedCloudVault), root)
+        if (!patch) return
+        await save(patch.vaults)
+        adoptVaultCreation(physicalRoot)
+        ok = true
+      })
+    } catch {
+      console.warn('[amadeus] could not save the vault list')
+      return false
+    }
     return ok
   })
   ipcMain.handle(IPC.revealVault, async (_e, root: unknown) => {
@@ -391,6 +420,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     if (listed) shell.showItemInFolder(listed.root)
   })
 
+  let bootRestoreDone = false // 只有启动那一下(第一次真去读配置的 restoreVault)才会把内容坏了的配置挪到一边
   handle(IPC.restoreVault, async (_e, reuseActive?: boolean) => {
     // A new View window shares the mounted vault. Do not switch the global root or restart its watcher.
     const root = reuseActive === true ? vault.getRoot() : null
@@ -398,15 +428,29 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       const [pages, folders] = await Promise.all([vault.listPages(), vault.listFolders()])
       return { root, pages, folders, strictExistingWrites: true }
     }
+    const atBoot = !bootRestoreDone
+    bootRestoreDone = true
     let { lastVault } = await readConfig()
-    if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区(不再落欢迎页)
+    if (!lastVault && looseConfigReadFailed()) ({ lastVault } = await readConfig()) // 配置读失败过:再读一次盘
+    if (!lastVault && looseConfigReadFailed() && atBoot) {
+      // 启动时内容确定坏了(零字节 / 解析不了 / 不是对象):原样挪到一边、从空配置起;I/O 读不了的不挪,照旧拒绝
+      const moved = await quarantineCorruptConfig()
+      if (moved) console.warn(`[amadeus] config at startup was unreadable content; moved aside as ${moved}, starting from an empty config`)
+      ;({ lastVault } = await readConfig())
+    }
+    if (!lastVault) {
+      // 读不出 ≠ 首启:不拿默认库盖掉用户选过的库(写会重读,读得到就以真底稿为底写默认库)
+      if (looseConfigReadFailed()) throw new Error('amadeus-config-unreadable')
+      return ensureDefaultVault() // 首启:自带默认工作区(不再落欢迎页)
+    }
     // A saved cloud root may belong to a previous account (or the old unowned
     // mirror). Never mount it for a different account, including signed-out boot.
     if (isManagedCloudVault(lastVault) && (!cloud || !currentCloudAccountId() || lastVault !== cloudVaultDir())) {
       const cfg = await readConfig()
       if (!cfg.localVault || isManagedCloudVault(cfg.localVault)) return ensureDefaultVault()
       lastVault = cfg.localVault
-      await writeConfig({ lastVault, lastPage: undefined })
+      // restoreVault 的 IPC 将失败传给渲染层;先确认写成功再切根。回落不清在线库。
+      await writeConfig({ lastVault, lastPage: undefined }, undefined, { keepActiveVault: true })
     }
     try {
       const stat = await fs.stat(lastVault)
@@ -1226,7 +1270,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     workspaceDir: defaultWorkspaceDir,
     userDataDir: () => app.getPath('userData'),
     isDevMode,
-    readConfig: async () => { const cfg=await readConfig();return contentSyncOwned(currentCloudAccountId())?{...cfg,cloudSync:{...cfg.cloudSync,enabled:false},entrySync:[]}:cfg },
+    // 认领遮罩(智库同步第 2 步,契约 §3.7):有 syncOwnershipV2 只滤掉接手的根;老的全局认领(.owned)或配置读不了 = 整份遮掉。磁盘上一条不动。
+    // 遮罩依赖的读(这次宽松读的底稿、syncOwnershipV2、新同步状态文件的 .owned)任何一样读不出也整份遮掉(H3 清单第 6 件)
+    readConfig: () => readMaskedAmadeusConfig({
+      readConfig: () => readConfig(),
+      looseReadFailed: looseConfigReadFailed,
+      readV2: readSyncOwnershipV2,
+      legacyOwned: contentSyncOwnedStrict,
+    }),
+    // Extend 取得写入 Promise,由它的 IPC / 引擎调用方处理失败;宿主不吞掉失败。
     writeConfig, updateConfig, adoptLegacyCloudState,
     cloudVaultDir, isManagedCloudVault,
     vaultRoot: () => vault.getRoot(),
@@ -1237,7 +1289,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     awaitPendingVaultWrites: async () => { while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites]) },
     relatedClosure: (rootRel, kind) => index.relatedClosure(rootRel, kind),
     notifyAll,
-    onBeforeQuit: (cb) => { app.once('before-quit', cb); return () => { app.removeListener('before-quit', cb) } },
+    onBeforeQuit: (cb) => onQuitProceeding(app, quitHeld, cb),
     log: (m) => console.warn(m),
   }) ?? null
   cloud?.start() // 云镜像同步独立于活动 vault,应用启动即拉起(未登录/显式停用时安静待命)

@@ -14,6 +14,9 @@ vi.mock('../stores/entrySyncStore', () => ({
   isSyncedEntry: () => false,
 }))
 vi.mock('./CloudSyncDialog', () => ({ openCloudSyncDialog: vi.fn() }))
+// 智库同步第 2 步的入口(entries → 设置落点 → syncSetup 一长串):这里只测分享卡的竞态,入口按旧同步在管画
+vi.mock('../sync/v2/entries', () => ({ entryLabel: () => '', isFullSyncNow: () => false, runEntry: vi.fn(), useV2EntrySync: () => null }))
+vi.mock('../sync/v2/mode', () => ({ useSyncMode: (pick: (s: { mode: string }) => unknown) => pick({ mode: 'legacy' }), useLegacySync: () => true }))
 vi.mock('@lcl/engine', () => ({ OverlayAt: ({ children, className }: { children: React.ReactNode; className: string }) => React.createElement('section', { className }, children) }))
 vi.mock('../i18n', () => ({ registerMessages: () => {}, translate: (key: string) => key, useI18n: () => ({ t: (key: string) => key }) }))
 
@@ -76,6 +79,26 @@ async function click(label: string) {
 const urls = () => [...host.querySelectorAll('input[readonly]')].map((n) => (n as HTMLInputElement).value)
 
 describe('sharing UI keeps asynchronous results with their original note', () => {
+  it('revoke uses the token for the exact vault and server path of a legacy note', async () => {
+    const revokePublishIn = vi.fn(async () => {})
+    const revokePublish = vi.fn(async () => {})
+    Object.assign(window.amadeusCollab!, { revokePublishIn, revokePublish })
+    await render('a.md')
+    await act(async () => {
+      reads[0].result.resolve({ share: null, quota })
+      lists[0].resolve({ quota, target: { vaultId: 'vault', path: 'Notes/a.md' }, shares: [
+        { vaultId: 'vault', path: 'a.md', token: 'root-publication', mode: 'page', createdAt: '' },
+        { vaultId: 'other-vault', path: 'Notes/a.md', token: 'other-publication', mode: 'page', createdAt: '' },
+        { vaultId: 'vault', path: 'Notes/a.md', token: 'legacy-publication', mode: 'page', createdAt: '' },
+      ] })
+    })
+    await click('share.tabPublish')
+    expect(urls()).toEqual(['/published/legacy-publication'])
+    await click('share.unpublish')
+    expect(revokePublishIn).toHaveBeenCalledExactlyOnceWith('vault', 'legacy-publication')
+    expect(revokePublish).not.toHaveBeenCalled()
+  })
+
   it('late sharing and publishing responses for the old path cannot replace the new path', async () => {
     await render('A.md'); await render('folder/A.md')
     await resolveRead(1, 'folder/A.md'); await resolveRead(0, 'A.md')

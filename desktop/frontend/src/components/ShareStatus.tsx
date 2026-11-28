@@ -6,6 +6,7 @@ import { useEffect, useState, type MouseEvent } from 'react'
 import { Users, Globe2 } from 'lucide-react'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useEntrySync, cloudPathFor } from '../stores/entrySyncStore'
+import { useSyncMode } from '../sync/v2/mode'
 import { sharedEntryFor, useSharedVault } from '../stores/sharedVaultStore'
 import { publishStateFor, type PublishState } from '../amadeus/lib/shareState'
 import { registerMessages, useI18n } from '../i18n'
@@ -36,7 +37,9 @@ export function ShareStatus({ path: localPath, refreshKey, onOpen }: ShareStatus
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const vaultSide = usePageStore((s) => s.vaultSide)
   const vaults = useEntrySync((s) => s.vaults)
-  const path = cloudPathFor(vaults, vaultRoot, vaultSide, localPath)
+  // 完整模式下本机库的旧注册前缀不可信(见 ShareCard):不按它显示共享 / 发布状态
+  const full = useSyncMode((s) => s.mode === 'full')
+  const path = vaultSide === 'local' && full ? null : cloudPathFor(vaults, vaultRoot, vaultSide, localPath)
   const { t } = useI18n()
   const shared = useSharedVault((s) => sharedEntryFor(s, localPath))
   if (shared) {
@@ -63,7 +66,7 @@ function ShareStatusTarget({ path, refreshKey, onOpen }: ShareStatusProps) {
     let alive = true
     // pageShare/publishes 都要 owner;非 owner(参与者页)会 404 → 静默不显示。
     void collab.pageShare(path).then((r) => alive && setShared(!!r.share)).catch(() => alive && setShared(false))
-    void collab.publishes().then((r) => alive && setPub(publishStateFor(path, r.shares))).catch(() => alive && setPub({ kind: 'none' }))
+    void collab.publishes(path).then((r) => alive && setPub(publishStateFor(path, r.shares, r.target))).catch(() => alive && setPub({ kind: 'none' }))
     return () => { alive = false }
   }, [collab, path, refreshKey])
 

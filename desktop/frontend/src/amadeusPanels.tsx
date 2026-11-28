@@ -21,6 +21,7 @@ import { askString } from '@amadeus/components/askString'
 import { registerMessages, useI18n } from './i18n'
 import { graphTopology } from '@amadeus/lib/localGraph'
 import { listFirstNow, useSpaceStore, useWorkspace } from '@lcl/engine'
+import { isCloudRootOfVault } from '@amadeus/lib/cloudLibraryRoot'
 
 registerMessages({
   'amxpanel.searchHead': { zh: '全文搜索', en: 'Full-text search' },
@@ -77,7 +78,7 @@ export function AmadeusSearchView({ onBack, innerBack }: { onBack?: () => void; 
   const [query, setQuery] = useState('')
   const [replaceRoot, setReplaceRoot] = useState<string | null>(null)
   useEffect(() => { setReplaceRoot(null) }, [vaultRoot])
-  const readOnlyShare = useSharedVault(s => !!s.activeVault && vaultRoot === `cloud://${s.activeVault}` && !s.ownVaults.includes(s.activeVault)
+  const readOnlyShare = useSharedVault(s => !!s.activeVault && isCloudRootOfVault(vaultRoot, s.activeVault) && !s.ownVaults.includes(s.activeVault)
     && s.items.some(item => item.vaultId === s.activeVault)
     && !s.items.some(item => item.vaultId === s.activeVault && item.role === 'editor'))
   const writableRoot = vaultRoot && canBatchReplace() && !vaultRoot.startsWith('share:') && !readOnlyShare ? vaultRoot : null

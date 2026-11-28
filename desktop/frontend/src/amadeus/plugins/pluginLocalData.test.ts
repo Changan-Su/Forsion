@@ -27,6 +27,9 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
+// 这里测插件数据同步放开时的行为:封着(PLUGIN_DATA_SYNC_SEALED,2026-11-27)的在 pluginDataSync.test.ts / pluginDataSync.wiring.test.ts
+vi.mock('../../services/syncSeal', () => ({ AGENT_SYNC_SEALED: true, PLUGIN_DATA_SYNC_SEALED: false }))
+
 const files = new Map<string, string>()
 const failing = new Map<string, unknown>()
 const failWrite = new Set<string>()
