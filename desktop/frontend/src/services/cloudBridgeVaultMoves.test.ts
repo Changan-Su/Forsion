@@ -314,6 +314,26 @@ describe('E1 / E2: library list and choice', () => {
     await expect(collab.listLibraries!()).rejects.toBeTruthy()
   })
 
+  it('collab keeps known file counts and the deduplicated devices for the picker', async () => {
+    installCloudCollab({ apiBase: 'https://cloud.test/api', getToken: () => jwt })
+    srv.state.intercept = ({ route }) => route === '/libraries' ? new Response(JSON.stringify({
+      libraries: [
+        { id: V, kind: 'default', vaultId: V, name: 'My Vault', files: 0, devices: [] },
+        { id: LEGACY, kind: 'legacy', vaultId: V, name: 'Notes', files: 5,
+          devices: [{ deviceId: 'a', name: 'Laptop' }],
+          markerDevices: [{ id: 'a', name: 'Old laptop' }, { id: 'b', name: 'Desktop' }, { id: 'c', name: 'Retired device', superseded: true }] },
+        { id: T, kind: 'own', vaultId: T, name: 'Work', deleted: { at: '2026-11-20', purgeAt: '2026-12-20' } },
+      ],
+    })) : undefined
+    await expect(window.amadeusCollab!.listLibraries!()).resolves.toEqual([
+      expect.objectContaining({ id: V, files: 0, deviceNames: [] }),
+      expect.objectContaining({ id: LEGACY, files: 5, deviceNames: ['Laptop', 'Desktop'] }),
+    ])
+    srv.state.intercept = ({ route }) => route === '/libraries' ? new Response('{}') : undefined
+    await expect(window.amadeusCollab!.listLibraries!()).rejects.toThrow()
+    expect(srv.reqs.some(({ route }) => route === '/vaults')).toBe(false)
+  })
+
   it('new key amadeus.cloudLibrary wins; an old-key-only writer (older tab) wins back; account switch clears the new key', () => {
     rememberCloudLibrary(LEGACY)
     expect(store.getItem('amadeus.cloudLibrary')).toBe(LEGACY)

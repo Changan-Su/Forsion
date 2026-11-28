@@ -1,0 +1,20 @@
+.mb-sheet.us-sheet.cloud-vault-sheet { max-height: 50%; }
+
+.cloud-vault-sheet-hint {
+  flex: none;
+  padding: 8px 12px 4px;
+  color: var(--text-muted);
+  font-size: var(--ui-font-meta);
+  line-height: var(--ui-line-meta);
+}
+
+.cloud-vault-saved {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--ui-font-meta);
+  line-height: var(--ui-line-meta);
+  white-space: nowrap;
+}
