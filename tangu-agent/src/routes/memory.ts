@@ -13,7 +13,7 @@ import { syncNow, getSyncStatus } from '../services/memorySyncService.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { getAgent, listAgents, resolveMemorySlug, isValidSlug } from '../agents/agentRegistry.js';
 import { MemoryRepositoryError } from '../services/memoryRepository.js';
-import { agentSyncDefault, agentSyncIdentity, agentSyncScope, setAgentSyncDefault, setContentSyncOwner } from '../services/cloudSyncAccount.js';
+import { AGENT_SYNC_SEALED, agentSyncDefault, agentSyncIdentity, agentSyncScope, setAgentSyncDefault, setContentSyncOwner } from '../services/cloudSyncAccount.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { mirrorLegacyHuman } from '../agents/humanFolder.js';
 import { factWithScope, runTagContext } from '../services/deviceTagContext.js';
@@ -104,13 +104,16 @@ router.get('/agent/sync/status', authMiddleware, (req: AuthRequest, res) => {
 });
 
 // 账号级「Agents 与记忆」总闸(蓬洲云「同步」页 / 首登卡片 / 引导):enabled = null 表示这个账号在这台电脑上还没点过。
+// sealed = Agents 同步先封着(AGENT_SYNC_SEALED):enabled 照实返回存着的值(human/ 的同意靠它),界面据 sealed 锁住开关。
 router.get('/agent/sync/default', authMiddleware, async (req: AuthRequest, res) => {
-  if (!deps().profile.capabilities.hostExec) return void res.json({ enabled: null, agents: 0, available: false });
+  if (!deps().profile.capabilities.hostExec) return void res.json({ enabled: null, agents: 0, available: false, sealed: AGENT_SYNC_SEALED });
   const scope = agentSyncScope(deps().brain.agentFiles, req.user!.userId);
-  res.json({ enabled: agentSyncDefault(scope), agents: (await listAgents().catch(() => [])).length, available: !!scope });
+  res.json({ enabled: agentSyncDefault(scope), agents: (await listAgents().catch(() => [])).length, available: !!scope, sealed: AGENT_SYNC_SEALED });
 });
 router.put('/agent/sync/default', authMiddleware, (req: AuthRequest, res) => {
   if (!deps().profile.capabilities.hostExec) return void res.status(404).json({ detail: 'Agent sync is only available on desktop.' });
+  // 封着:存着的总闸一个字不改(放开后原样恢复),不顺手发同步
+  if (AGENT_SYNC_SEALED) return void res.status(409).json({ detail: 'agent_sync_sealed' });
   if (typeof req.body?.enabled !== 'boolean') return void res.status(400).json({ detail: 'enabled must be a boolean' });
   const uid = req.user!.userId;
   const scope = agentSyncScope(deps().brain.agentFiles, uid);

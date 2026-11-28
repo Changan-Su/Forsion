@@ -306,6 +306,50 @@ describe('remotesync engine 双设备', () => {
   })
 })
 
+describe('新同步的文件夹标记 .forsion-sync-id.json(2026-11-27)', () => {
+  const MARK = '.forsion-sync-id.json'
+  it('本机的标记不上传,远端已有的标记不拉也不删', async () => {
+    await write(rootA, MARK, '{"id":"this-device"}')
+    await write(rootA, `Projects/${MARK}`, '{"id":"this-device-sub"}')
+    await write(rootA, 'note.md', 'A')
+    await write(remoteDir, MARK, '{"id":"other-device"}') // 老版本没跳过它时别的设备传上去的
+    await write(remoteDir, `Archive/${MARK}`, '{"id":"other-device-sub"}')
+    const r = await syncA()
+    expect(r.errors).toEqual([])
+    expect([r.pushed, r.pulled, r.deletedLocal, r.deletedRemote, r.conflicts]).toEqual([1, 0, 0, 0, 0])
+    expect(await read(rootA, MARK)).toBe('{"id":"this-device"}')
+    expect(await exists(rootA, `Archive/${MARK}`)).toBe(false)
+    expect(await read(remoteDir, MARK)).toBe('{"id":"other-device"}')
+    expect(await exists(remoteDir, `Projects/${MARK}`)).toBe(false)
+    // 基线里也不记它:下一轮照样不动
+    const prev = JSON.parse(await fs.readFile(stateA(), 'utf8'))
+    expect(Object.keys(prev.entries)).toEqual(['note.md'])
+    expect((await syncA()).pushed).toBe(0)
+  })
+
+  it('基线里还记着标记(加这条规则之前同步过):本机没了不删远端,远端没了不删本机', async () => {
+    await write(rootA, 'note.md', 'A')
+    await syncA()
+    // 手写一份旧基线:两处标记当年都同步过(远端身份 = 现在远端那份,不加忽略时会判成「本机删了 → 删远端」/「远端删了 → 删本机」)
+    await write(remoteDir, MARK, '{"id":"old"}')
+    await write(rootA, `Projects/${MARK}`, '{"id":"old-sub"}')
+    const remoteMark = (await remote.walk()).find((e) => e.key === MARK)!
+    const localSub = await fs.stat(path.join(rootA, 'Projects', MARK))
+    const prev = JSON.parse(await fs.readFile(stateA(), 'utf8'))
+    const sha = (await import('node:crypto')).createHash('sha256')
+    prev.entries[MARK] = { h: sha.copy().update('{"id":"old"}').digest('hex'), r: remoteMark.id, sz: 0, mt: 0 }
+    prev.entries[`Projects/${MARK}`] = { h: sha.copy().update('{"id":"old-sub"}').digest('hex'), r: 'gone-from-remote', sz: localSub.size, mt: localSub.mtimeMs }
+    await fs.writeFile(stateA(), JSON.stringify(prev), 'utf8')
+    const r = await syncA()
+    expect(r.errors).toEqual([])
+    expect([r.pushed, r.pulled, r.deletedLocal, r.deletedRemote, r.pendingDeletions]).toEqual([0, 0, 0, 0, 0])
+    expect(await read(remoteDir, MARK)).toBe('{"id":"old"}') // 本机没有、基线有:远端那份不删
+    expect(await exists(rootA, MARK)).toBe(false) // 也不拉下来
+    expect(await read(rootA, `Projects/${MARK}`)).toBe('{"id":"old-sub"}') // 远端没有、基线有:本机这份不删
+    expect(await exists(remoteDir, `Projects/${MARK}`)).toBe(false) // 也不传上去
+  })
+})
+
 describe('演算标出一样的 join', () => {
   it('后端给了内容 hash:两边一样的 join 带 same,不一样的不带;不给 hash 一律不带', async () => {
     await write(rootA, 'same.md', '一样')

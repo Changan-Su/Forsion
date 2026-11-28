@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CloudBrainServices } from '../seams/cloudBrain.js';
 import { agentSyncScope, setAgentSyncPermission } from './cloudSyncAccount.js';
+// 这里测的是 Agents 同步放开时的行为:封着(AGENT_SYNC_SEALED,2026-11-27 智库同步统一方案第 0 步)的效果在 test/agentSyncSeal.test.ts
+vi.mock('./cloudSyncAccount.js', async (original) => ({ ...(await original<typeof import('./cloudSyncAccount.js')>()), AGENT_SYNC_SEALED: false }));
 
 const { agentFilesSync, memorySync } = vi.hoisted(() => ({ agentFilesSync: vi.fn(), memorySync: vi.fn() }));
 vi.mock('./agentFileSync.js', () => ({ runAgentFilesSync: agentFilesSync }));

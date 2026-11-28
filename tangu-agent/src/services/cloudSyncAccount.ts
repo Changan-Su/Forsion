@@ -6,6 +6,17 @@ import { withMemoryDirectoryLock } from './memoryRepository.js';
 import type { AgentFilesBrain } from '../seams/cloudBrain.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 
+/**
+ * Agents(及记忆)同步先封住(AGENT_SYNC_SEALED,开关本身在 contracts/agentSyncSeal.ts,桌面界面共用;2026-11-27 智库同步统一方案第 0 步)。
+ * 封法:入口锁住、不再跑;用户存下的选择一个字不改;云端已有的那份不删;放开时改成 false 即原样恢复。
+ * 在**动作层**封,不伪造读数:agentSyncPermission / agentSyncDefault 照实返回存着的值 ——
+ * human/(「我的资料」与默认日历)的同意来自总闸或某个 Agent 的 shared,它照常同步,读数一假日历就停更。
+ * 封着时:不推不拉任何 Agent 文件夹、不发现云端 Agent、不执行本机删 Agent 记下的云端删除(记录留着)、
+ * 默认 Agent 记忆的旧全局同步不跑、总闸不能改(409)、保存 Agent 不写 cloudSync。
+ * 引擎里一律从这里引(测试按模块打桩放开)。
+ */
+export { AGENT_SYNC_SEALED } from '../contracts/agentSyncSeal.js';
+
 interface AgentSyncIdentity { account: string; scope: string }
 const identities = new WeakMap<AgentFilesBrain, () => AgentSyncIdentity | null>();
 

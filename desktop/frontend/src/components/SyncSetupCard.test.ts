@@ -16,7 +16,7 @@ const sync = vi.hoisted(() => {
     subscribe: (f: () => void) => { subs.add(f); return () => subs.delete(f) },
   }
 })
-const spy = vi.hoisted(() => ({ decided: vi.fn(), setSync: vi.fn(async () => ({ ok: true })), focus: vi.fn() }))
+const spy = vi.hoisted(() => ({ decided: vi.fn(), setSync: vi.fn(async () => ({ ok: true })), focus: vi.fn(), apply: vi.fn(async () => []) }))
 vi.mock('../windowKind', () => ({ windowKind: () => 'main' }))
 vi.mock('./OnboardingWizard', () => ({ ONBOARDING_DISMISS_KEY: 'test-onboarding-done' }))
 vi.mock('../services/accountName', () => ({ watchAccountName: () => () => {} }))
@@ -24,7 +24,7 @@ vi.mock('@lcl/engine', () => ({ setActiveSpace: () => {}, useSpaceStore: { getSt
 vi.mock('../services/syncSetup', async (orig) => ({
   wantsSyncCard: ((await orig()) as typeof import('../services/syncSetup')).wantsSyncCard,
   getSync: sync.get, subscribeSync: sync.subscribe,
-  startSyncSetup: () => {}, markSyncDecided: spy.decided, setSync: spy.setSync, applySyncChoices: async () => [], openPenzorSync: spy.focus,
+  startSyncSetup: () => {}, markSyncDecided: spy.decided, setSync: spy.setSync, applySyncChoices: spy.apply, openPenzorSync: spy.focus,
 }))
 
 import { SyncSetupHost } from './SyncSetupCard'
@@ -156,4 +156,68 @@ it('新同步:勾的 Agent 云端已有一份且不一样,卡片里问一次(缺
   await act(async () => { radios()[2]!.click() })
   await act(async () => { btn('开始同步').click() })
   expect(invoke).toHaveBeenCalledWith('penzor:sync:apply', 't-ask', { research: 'local' })
+})
+
+// 2026-11-27 智库同步统一方案第 0 步:快照里 sealed 的两类(Agents 与记忆、插件)画成锁住的一行:没有勾,写「暂不同步」
+const SEALED = { agents: true, plugins: true }
+const lockedRows = () => [...host.querySelectorAll<HTMLElement>('.sync-setup-row.is-locked')]
+
+it('封着:新同步那版只剩笔记和我的资料两个勾,Agents 与插件各一行锁住;预览和开始都不带它们', async () => {
+  spy.decided.mockClear(); spy.setSync.mockClear()
+  const invoke = content((p) => ({ ok: true, value: { token: `t-${['notes', 'profile'].filter((k) => p[k]).join('+')}`, upload: 3, download: 0, bytes: 10 } }))
+  sync.set({ ...snap(true), contentRules: true, sealed: SEALED })
+  await act(async () => root.render(React.createElement(SyncSetupHost)))
+  await act(async () => { vi.advanceTimersByTime(2600) })
+  const boxes = () => [...host.querySelectorAll<HTMLInputElement>('.sync-setup-row > input')]
+  expect(boxes().map((b) => b.checked)).toEqual([true, true]) // 笔记、我的资料
+  expect(lockedRows().map((r) => r.dataset.sealed)).toEqual(['agents', 'plugins'])
+  for (const r of lockedRows()) { expect(r.querySelector('input')).toBeNull(); expect(r.querySelector('.sync-setup-lk')?.textContent).toBe('暂不同步') }
+  expect(host.querySelectorAll('.sync-setup-kid')).toHaveLength(0) // Agent 逐个勾那组不列
+  expect(host.textContent).not.toContain('逐个选')
+  expect(invoke).toHaveBeenLastCalledWith('penzor:sync:setup', { notes: true, profile: true, plugins: false, agents: false, agentSlugs: [] })
+  // 只要笔记或我的资料还勾着就能开始;两个都不勾才灰
+  await act(async () => { boxes()[0]!.click() })
+  expect(invoke).toHaveBeenLastCalledWith('penzor:sync:setup', { notes: false, profile: true, plugins: false, agents: false, agentSlugs: [] })
+  expect(btn('开始同步').disabled).toBe(false)
+  await act(async () => { boxes()[1]!.click() })
+  expect(btn('开始同步').disabled).toBe(true)
+  await act(async () => { boxes()[1]!.click() })
+  await act(async () => { btn('开始同步').click() })
+  expect(invoke).toHaveBeenCalledWith('penzor:sync:apply', 't-profile')
+  expect(spy.setSync).not.toHaveBeenCalled() // 插件那一行的开关不碰
+  expect(spy.decided).toHaveBeenCalled()
+})
+
+it('封着:老 Extend(没有 setup 通道)那版的插件一行也锁住', async () => {
+  content(() => { throw new Error('not a Forsion Extend channel: penzor:sync:setup') })
+  sync.set({ ...snap(true), contentRules: true, sealed: SEALED })
+  await act(async () => root.render(React.createElement(SyncSetupHost)))
+  await act(async () => { vi.advanceTimersByTime(2600) })
+  expect(btn('选择同步范围')).toBeTruthy()
+  expect(host.querySelectorAll('.sync-setup-row > input')).toHaveLength(0)
+  expect(lockedRows().map((r) => r.dataset.sealed)).toEqual(['plugins'])
+})
+
+it('封着:旧同步那版只有智库能勾,Agents 与插件锁住;开始照常交给 applySyncChoices(它跳过封着的)', async () => {
+  spy.apply.mockClear()
+  sync.set({ ...snap(true), sealed: SEALED })
+  await act(async () => root.render(React.createElement(SyncSetupHost)))
+  await act(async () => { vi.advanceTimersByTime(2600) })
+  expect(host.querySelectorAll('.sync-setup-row > input')).toHaveLength(1)
+  expect(lockedRows().map((r) => r.dataset.sealed)).toEqual(['agents', 'plugins'])
+  expect(lockedRows().every((r) => r.textContent!.includes('暂不同步'))).toBe(true)
+  await act(async () => { btn('开始同步').click() })
+  expect(spy.apply).toHaveBeenCalledTimes(1)
+})
+
+it('封着:笔记已经开着就不弹,但也不记「点过了」(放开后该弹的卡片照弹);三样都开着照旧记', async () => {
+  spy.decided.mockClear()
+  const on = { ...snap(true), notes: { ...snap(true).notes, on: true } }
+  sync.set({ ...on, sealed: SEALED })
+  await act(async () => root.render(React.createElement(SyncSetupHost)))
+  await act(async () => { vi.advanceTimersByTime(2600) })
+  expect(host.querySelector('.sync-setup')).toBeNull()
+  expect(spy.decided).not.toHaveBeenCalled()
+  await act(async () => { sync.set({ ...on, agents: { on: true }, plugins: { on: true }, sealed: SEALED }) })
+  expect(spy.decided).toHaveBeenCalled()
 })
