@@ -120,6 +120,8 @@ export function beginNavSpace(from: string, to: string): void {
   cancelAll(); switching = true; scope = to
   useNav.setState({ stacks: {} })
 }
+/** A Space switch is between beginNavSpace and finishNavSpace (its layout being swapped in and landed on). */
+export function navSpaceSwitching(): boolean { return switching }
 /** Only histories whose stable View ids exist in the restored layout can return. */
 export function finishNavSpace(leafIds?: string[]): void {
   const saved = spaces.get(scope) ?? {}

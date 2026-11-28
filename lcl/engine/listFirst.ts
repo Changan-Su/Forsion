@@ -10,9 +10,14 @@ import { getView } from './viewRegistry'
 import { useWorkspace } from './singleColumnStore'
 
 export function listFirstNow(): boolean {
+  return !useWorkspace.getState().wideMode && listFirstNarrow()
+}
+
+/** listFirstNow without the wide layout's say: would two-level navigation hold once the screen is narrow again.
+ *  SingleColumnHost reads it on the way out of the wide layout, before it says the screen is narrow. */
+export function listFirstNarrow(): boolean {
   if (!nativeChromeDrawsSpaces()) return false
   const ws = useWorkspace.getState()
-  if (ws.wideMode) return false
   // 左栏得拿得出**能画**的视图,否则「第一层」就是一张白页(主区被推在屏外,只剩底栏):
   //  · leaf 在就看 leaf;桶还空着、抽屉也没开过就看缺省(首开才按缺省填,见 toggleSidebar);
   //  · 桶空着却开着 = 视图被关光了(插件自己关的);类型没注册 = 卸掉的插件留下的 leaf / 缺省。

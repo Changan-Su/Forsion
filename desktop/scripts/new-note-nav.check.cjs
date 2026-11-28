@@ -109,8 +109,8 @@ async function main() {
     )
     check(
       '2 笔记确实建出来了,工作区列表里有它(用户看到的那一半,修复前也绿)',
-      fs.existsSync(path.join(vault, 'untitled.md')) && after.treeRows.some((t) => t.includes('untitled')),
-      `disk=${fs.existsSync(path.join(vault, 'untitled.md'))} tree=${JSON.stringify(after.treeRows)}`,
+      fs.existsSync(path.join(vault, '未命名.md')) && after.treeRows.some((t) => t.includes('未命名')),
+      `disk=${fs.existsSync(path.join(vault, '未命名.md'))} tree=${JSON.stringify(after.treeRows)}`,
     )
     check(
       '3 后台的「欢迎」标签没被顶掉(护栏;v3 笔记走同一条链会被 effect③ 改写)',
@@ -141,7 +141,7 @@ async function main() {
     const zero = await win.evaluate(SNAP)
     check(
       '5 一个编辑器都没有时也就地开(当前标签变编辑器)',
-      zero.launcherVisible === 0 && fs.existsSync(path.join(vault, 'untitled-2.md')),
+      zero.launcherVisible === 0 && fs.existsSync(path.join(vault, '未命名-2.md')),
       JSON.stringify({ tabs: zero.tabs, launcherVisible: zero.launcherVisible }),
     )
 

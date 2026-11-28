@@ -885,13 +885,17 @@ function makePageStore(opts: PageStoreOptions = {}) {
     async createPageInFolder(folder) {
       await get().flushSave() // 换页前落盘,防 400ms 待存的上一页内容被丢/写错对象
       const norm = folder.replace(/\\/g, '/').replace(/\/+$/, '')
-      const existing = new Set(get().pages)
+      // 文件名跟界面语言走(落盘命名规矩,见 i18n 的 amadeus.default.*):中文界面下曾是 `untitled.md`(手机走查 2026-11-19)。
+      // 撞名按不分大小写判:英文的 `Untitled.md` 碰上旧库里的 `untitled.md`,在不分大小写的盘上是同一个文件 ——
+      // 出生会报「已存在」并把那篇旧的打开。扩展名大写的(`未命名.MD`)不在 pages 里、在 files 里,一起算。
+      const existing = new Set([...get().pages, ...get().files].map((p) => p.toLowerCase()))
       const join = (base: string): string => (norm ? `${norm}/${base}` : base)
-      let base = 'untitled.md'
+      const stem = translate('amadeus.default.note')
+      let base = `${stem}.md`
       let n = 1
-      while (existing.has(join(base))) {
+      while (existing.has(join(base).toLowerCase())) {
         n++
-        base = `untitled-${n}.md`
+        base = `${stem}-${n}.md`
       }
       const path = join(base)
       // v4(2026-08-13):新建笔记以**素文件**出生(空纯 md,零 frontmatter 零标记)——

@@ -33,8 +33,8 @@ import { SPRING_PAGE, springEasing } from './spring'
 import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
-import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension, setAfterLayoutHook, setBeforeMainOpenHook } from './singleColumnStore'
-import { listFirstNow } from './listFirst'
+import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension, setAfterLayoutHook, setBeforeMainOpenHook, mainOpenCount } from './singleColumnStore'
+import { listFirstNarrow, listFirstNow } from './listFirst'
 import { installListTrips, returnTripOrigin, endReturnTrip } from './listTrips'
 import { onePageLanding } from './pinnedViews'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
@@ -1280,12 +1280,35 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     useWorkspace.getState().toggleSidebar(lastOpened.current === 'left' ? 'right' : 'left')
   }, [leftVisible, rightVisible, wide])
   // 进入宽屏布局:左栏默认并排展开(用户拍板);离开宽屏回抽屉形态(visible 状态原样保留)。
+  // 手机横过来再转回去(两级导航,走查 2026-11-19 g;用户拍板):回到转之前那一层。并排停靠把左栏打开了,出宽屏后
+  // 它还开着 = 列表层,以前一律落在列表。进宽屏时记下「左栏开没开、主区打开过几次」(停靠之前记);出宽屏时横着期间在
+  // 主区点开过东西就落在它(详情层),否则回到进来时那一层。只管出宽屏后是两级导航的那一头(手机 / 竖屏平板),别的形态照旧。
+  // ⚠️ 先摆左栏、再公布窄屏:公布的那一下左栏要是还开着,就是列表层 —— 列表行程(listTrips)当场把页内历史截成一页,
+  //    回到详情后返回就跳过了这一趟里走过的页(Codex 评审)。
+  const wideEntry = useRef<{ list: boolean; opens: number } | null>(null)
+  const wideSeen = useRef(false)
   useEffect(() => {
-    useWorkspace.getState().setWideMode(wide) // store 据此决定主区导航后是否自动收左抽屉
-    if (!wide) return
     const ws = useWorkspace.getState()
-    if (!ws.leftVisible && (ws.leftLeaves.length > 0 || ws.sidebarDefaults.left.length > 0)) ws.toggleSidebar('left')
+    const cold = !wideSeen.current // 挂载时这一趟:一启动就是横着的,没有「转之前那一层」—— 转回竖屏按进 Space 的落点(列表层)
+    wideSeen.current = true
+    if (wide) {
+      ws.setWideMode(true) // store 据此决定主区导航后是否自动收左抽屉
+      wideEntry.current = { list: cold || ws.leftVisible, opens: mainOpenCount() }
+      if (!ws.leftVisible && (ws.leftLeaves.length > 0 || ws.sidebarDefaults.left.length > 0)) ws.toggleSidebar('left')
+      return
+    }
+    const entry = wideEntry.current
+    wideEntry.current = null
+    const list = entry && listFirstNarrow() ? mainOpenCount() === entry.opens && entry.list : null
+    if (list === false && ws.leftVisible) ws.toggleSidebar('left')
+    ws.setWideMode(false)
+    if (list === true && !useWorkspace.getState().leftVisible) ws.toggleSidebar('left')
   }, [wide])
+  // 横着换了 Space:进来时那一层不再作数,从新 Space 的落点(停靠着的列表)重新记。同步订阅、不走 effect:从主页「继续」
+  // 点开一篇笔记是「先切到笔记 Space、再开那篇」一口气做完的,effect 里再记就把那一下开也吞了(Codex 评审)。
+  useEffect(() => useSpaceStore.subscribe((s, p) => {
+    if (s.activeSpaceId !== p.activeSpaceId && wideEntry.current) wideEntry.current = { list: true, opens: mainOpenCount() }
+  }), [])
 
   // 关抽屉(dim 层点击):窄屏一次只开一侧,右优先(右开着必是最上)。横滑关闭走 useDrawerDrag。
   const closeDrawers = (): void => {

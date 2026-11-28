@@ -52,7 +52,10 @@ async function freshStore() {
     // 宿主未接管(台架/单测):dispatchEvent 返 true → createPageInFolder 退回就地 loadPage。
     dispatchEvent: (e: { type: string; defaultPrevented: boolean }) => { dispatched.push(e.type); return !e.defaultPrevented },
   })
-  return await import('./pageStore')
+  const mod = await import('./pageStore')
+  // resetModules 换了一份 i18n:它按本机系统语言起步(testSetup 钉的是旧那份)。新建笔记的文件名跟语言走,这里钉回 zh
+  ;(await import('../../i18n')).setLocaleGlobal('zh')
+  return mod
 }
 
 afterEach(() => {
@@ -65,14 +68,33 @@ describe('createPageInFolder 素文件出生', () => {
     store.setState({ vaultRoot: '/v', pages: [], status: 'ready' })
     await store.getState().createPageInFolder('')
     expect(newPage).not.toHaveBeenCalled()
-    expect(writes).toEqual([{ path: 'untitled.md', text: '' }])
+    expect(writes).toEqual([{ path: '未命名.md', text: '' }]) // 跟界面语言(vitest 钉 zh);中文界面曾生出 untitled.md
   })
 
-  it('撞名顺延 untitled-2.md', async () => {
+  it('撞名顺延 未命名-2.md', async () => {
     const { usePageStore: store } = await freshStore()
-    store.setState({ vaultRoot: '/v', pages: ['untitled.md'], status: 'ready' })
+    store.setState({ vaultRoot: '/v', pages: ['未命名.md'], status: 'ready' })
     await store.getState().createPageInFolder('')
-    expect(writes[0]?.path).toBe('untitled-2.md')
+    expect(writes[0]?.path).toBe('未命名-2.md')
+  })
+
+  it('英文界面叫 Untitled.md;撞名不分大小写(旧库里的 untitled.md 在不分大小写的盘上是同一个文件)', async () => {
+    const { usePageStore: store } = await freshStore()
+    const { setLocaleGlobal } = await import('../../i18n') // resetModules 之后同一份实例(pageStore 的 translate 读它)
+    setLocaleGlobal('en')
+    try {
+      store.setState({ vaultRoot: '/v', pages: [], status: 'ready' })
+      await store.getState().createPageInFolder('')
+      expect(writes[0]?.path).toBe('Untitled.md')
+      writes.length = 0
+      store.setState({ pages: ['untitled.md'] })
+      await store.getState().createPageInFolder('')
+      expect(writes[0]?.path).toBe('Untitled-2.md')
+      writes.length = 0
+      store.setState({ pages: [], files: ['UNTITLED.MD'] }) // 扩展名大写的不在 pages、在 files
+      await store.getState().createPageInFolder('')
+      expect(writes[0]?.path).toBe('Untitled-2.md')
+    } finally { setLocaleGlobal('zh') }
   })
 
   it('在页面开始加载前就发布标题聚焦请求（编辑器首次挂载即可认领）', async () => {
@@ -81,11 +103,11 @@ describe('createPageInFolder 素文件出生', () => {
     let finish!: (value: Awaited<ReturnType<typeof loadPage>>) => void
     loadPage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
     const creating = store.getState().createPageInFolder('')
-    await vi.waitFor(() => expect(loadPage).toHaveBeenCalledWith('untitled.md'))
+    await vi.waitFor(() => expect(loadPage).toHaveBeenCalledWith('未命名.md'))
     // 信号住模块级、按 path 认领:落点面板由宿主 openNote 现算(可能是新开的 leaf),
     // 存进创建时那个 scope 的话,跨面板导航后永远没人消费得到。
-    expect(claimTitleFocus('untitled.md')).toBe(true)
-    expect(claimTitleFocus('untitled.md')).toBe(false) // 一次性
+    expect(claimTitleFocus('未命名.md')).toBe(true)
+    expect(claimTitleFocus('未命名.md')).toBe(false) // 一次性
     finish({
       manifest: {
         schema: 'amadeus.page/3', id: 'pg_t', title: 'untitled.md', createdAt: '', updatedAt: '',
@@ -103,7 +125,7 @@ describe('createPageInFolder 素文件出生', () => {
     store.setState({ vaultRoot: '/v', pages: [], status: 'ready' })
     await store.getState().createPageInFolder('')
     expect(dispatched).toContain('amadeus:navigate-note')
-    expect(loadPage).toHaveBeenCalledWith('untitled.md') // 无监听 → 退回就地装载
+    expect(loadPage).toHaveBeenCalledWith('未命名.md') // 无监听 → 退回就地装载
 
     // 宿主接管(preventDefault)→ 一律由 openNote 决定落点,绝不再自己 loadPage
     const { usePageStore: s2 } = await freshStore()

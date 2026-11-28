@@ -19,7 +19,7 @@ import type { Leaf, ViewLocation, SidebarDefaults } from './types'
 import { identitySig, label } from './types'
 import { getView } from './viewRegistry'
 import { aliasViewType } from './viewAlias'
-import { useNav } from './navStore'
+import { navSpaceSwitching, useNav } from './navStore'
 import type { PersistedPanel } from './layoutPersist'
 import { contentStorageKey } from './contentStorageScope'
 import { isLastPinned, isPinned, missingPinned, type PinnedViews } from './pinnedViews'
@@ -223,7 +223,8 @@ function renameLeaves(arr: LeafRec[], count: { n: number; live: number }): LeafR
   })
 }
 
-function applySCBlob(stored: unknown): boolean {
+function applySCBlob(stored: unknown): boolean { return rebuild(() => applySCBlobNow(stored)) }
+function applySCBlobNow(stored: unknown): boolean {
   if (!isBlob(stored)) return false
   const renamed = { n: 0, live: 0 }
   const raw: SCBlob = { ...stored, main: renameLeaves(stored.main, renamed), left: renameLeaves(stored.left, renamed), right: renameLeaves(stored.right, renamed) }
@@ -254,6 +255,17 @@ function applySCBlob(stored: unknown): boolean {
   useWorkspace.getState().refreshTabs()
   afterLayout?.()
   return true
+}
+
+/** 主区打开 / 换到一样东西的次数(openView、navigateLeaf、activateLeaf 落到主区,即 autoCloseDrawers 的每一次)。
+ *  SingleColumnHost 用它判「横着的时候在主区点开过东西没有」(转回竖屏落在哪一层)。布局整份换新(还原、重置、切 Space
+ *  连同它的落点)时开出来的不算 —— 那不是人点开的。只增不减;不进 store,不触发重画。 */
+let mainOpens = 0
+let rebuilding = 0
+export function mainOpenCount(): number { return mainOpens }
+function rebuild<T>(fn: () => T): T {
+  rebuilding++
+  try { return fn() } finally { rebuilding-- }
 }
 
 /** 宽屏(横屏平板 / 手机)的左栏是与主区并排的版面,不是抽屉:布局整份换新(切 Space / 冷启动还原 / 重置)之后
@@ -433,6 +445,7 @@ export const useWorkspace = create<WS>((set, get) => {
   /** 主区导航/激活后自动收抽屉:窄屏抽屉=全屏接管,选中条目即收回(用户拍板);
    *  宽屏 docked 左栏不收(wideMode 由 Host 同步),右栏恒浮层恒收。 */
   const autoCloseDrawers = (): void => {
+    if (!rebuilding && !navSpaceSwitching()) mainOpens++
     const s = get()
     const patch: Partial<WS> = {}
     if (!s.wideMode && s.leftVisible) patch.leftVisible = false
@@ -788,7 +801,7 @@ export const useWorkspace = create<WS>((set, get) => {
       get().ensurePinned()
     },
 
-    resetLayout() {
+    resetLayout() { rebuild(() => {
       restoredOwner = undefined // 默认布局按当前画像的 Space 建,不再是启动时还原出来的那份
       rightKey = null
       set({
@@ -808,7 +821,7 @@ export const useWorkspace = create<WS>((set, get) => {
       } catch { /* 私密模式 */ }
       get().refreshTabs()
       afterLayout?.()
-    },
+    }) },
 
     saveCurrent() { if (!notLaidOut()) writeJSON(SC_LAYOUT_KEY, snapshot()) }, // 还没摆就存 = 拿空布局盖掉要还原的那份
     // 命名布局 = spaceRegistry 的每-Space 布局槽(`space:<id>`):切走时存、切回来时还原。
