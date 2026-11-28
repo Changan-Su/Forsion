@@ -204,7 +204,10 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         if (r.status === 413) throw new AmadeusTooLargeError(relPath);
         if (r.status === 404) throw new AmadeusNotFoundError(relPath);
         if (!r.ok) throw new Error(`amadeus write ${r.status}: ${await r.text().catch(() => '')}`);
-        const j: any = await r.json().catch(() => ({}));
+        const j: any = await r.json().catch(() => null);
+        if (scoped && (!Number.isSafeInteger(j?.seq) || j.seq <= (opts?.baseSeq ?? 0))) {
+          throw new Error('Save result unconfirmed. Read the note to check its current contents before retrying.');
+        }
         return { seq: Number(j?.seq) || 0 };
       },
     };
@@ -221,7 +224,9 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       return { ...amadeusHeaders(token), 'X-Content-Caps': 'vaults' };
     };
     try {
-      const r = await fetch(`${base}/api/amadeus/libraries`, { headers: headers(), signal: reqSignal(signal) });
+      const timeout = AbortSignal.timeout(5_000);
+      const verificationSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+      const r = await fetch(`${base}/api/amadeus/libraries`, { headers: headers(), signal: verificationSignal });
       if (!r.ok) return null;
       const response = await r.json() as { libraries?: Array<{ id: string; kind: string; vaultId: string; prefix: string; deleted?: unknown }> } | null;
       const libraries = response?.libraries;

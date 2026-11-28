@@ -15,7 +15,7 @@ export interface OnlineVaultRef {
 interface VaultSelectionSource {
   readonly managed: boolean;
   // Used only to deny stand-in access, never as an online or unknown vault's working root.
-  readonly protectedRoot: string;
+  readonly protectedRoots: readonly string[];
 }
 
 export type AmadeusVault = VaultSelectionSource & (
@@ -41,47 +41,54 @@ function parseOnlineRef(value: unknown): OnlineVaultRef | null {
   return { kind, account, libraryId, vaultId, prefix, name };
 }
 
-export function readAmadeusVault(brain?: AmadeusBrain): AmadeusVault {
+export function readAmadeusVault(accountNamespace?: () => string | null): AmadeusVault {
   const config = process.env.FORSION_AMADEUS_CONFIG?.trim();
   const explicit = process.env.FORSION_AMADEUS_VAULT?.trim();
   const fallback = path.join(os.homedir(), 'Forsion', 'Amadeus');
   if (!config) {
     const root = explicit || fallback;
-    return { kind: 'local', root, protectedRoot: root, managed: false };
+    return { kind: 'local', root, protectedRoots: [root], managed: false };
   }
+
+  const unavailable: AmadeusVault = { kind: 'none', protectedRoots: explicit ? [fallback, explicit] : [fallback], managed: true };
 
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(config, 'utf8'));
   } catch {
-    return { kind: 'none', protectedRoot: fallback, managed: true };
+    return unavailable;
   }
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { kind: 'none', protectedRoot: fallback, managed: true };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return unavailable;
   const { activeVault, lastVault } = raw as Record<string, unknown>;
   const root = typeof lastVault === 'string' && path.isAbsolute(lastVault.trim()) && !lastVault.includes('\0')
     ? lastVault.trim()
     : null;
-  const source = { protectedRoot: root ?? fallback, managed: true };
+  const source = { protectedRoots: [...new Set([root ?? fallback, ...(explicit ? [explicit] : [])])], managed: true };
   if (lastVault !== undefined && !root) return { ...source, kind: 'none' };
   if (activeVault != null) {
     const ref = parseOnlineRef(activeVault);
     if (!ref) return { ...source, kind: 'none' };
-    if (ref.account === brain?.accountNamespace?.()) return { ...source, kind: 'online', ref };
-    return root ? { ...source, kind: 'local', root } : { ...source, kind: 'none' };
+    if (ref.account === accountNamespace?.()) return { ...source, kind: 'online', ref };
   }
   // An explicit CLI root can override a known local selection, never an unreadable config or an online selection.
   const local = explicit || root;
-  return local ? { kind: 'local', root: local, protectedRoot: local, managed: true } : { ...source, kind: 'none' };
+  return local ? { ...source, kind: 'local', root: local } : { ...source, kind: 'none' };
 }
 
-export async function pinAmadeusVault(generation: string, brain?: AmadeusBrain, signal?: AbortSignal): Promise<RunAmadeusVault> {
-  const vault = readAmadeusVault(brain);
-  if (vault.kind !== 'online') return { ...vault, generation };
-  // Legacy libraries share the default vault's ID. The adapter also checks the server's kind:
-  // an actual default vault ID may be a UUID, just like an independent library.
+/** Capture the selection before the network check or any other run setup. */
+export function pinAmadeusVault(generation: string, brain?: AmadeusBrain): RunAmadeusVault {
+  return { ...readAmadeusVault(() => brain?.accountNamespace?.() ?? null), generation };
+}
+
+export async function verifyAmadeusNotes(vault: RunAmadeusVault, brain?: AmadeusBrain, signal?: AbortSignal): Promise<RunAmadeusVault> {
+  if (vault.kind !== 'online') return vault;
+  // A real default vault can have a UUID too, so the adapter also checks the server's kind.
   const { ref } = vault;
-  const notes = ref.libraryId === ref.vaultId && ref.prefix === 'Amadeus/'
-    ? await brain?.library?.(ref, ref.account, signal)
-    : undefined;
-  return { ...vault, generation, notes: notes ?? undefined };
+  if (ref.libraryId !== ref.vaultId || ref.prefix !== 'Amadeus/') return vault;
+  try {
+    const notes = await brain?.library?.(ref, ref.account, signal);
+    return notes ? { ...vault, notes } : vault;
+  } catch {
+    return vault;
+  }
 }

@@ -47,7 +47,7 @@ export interface DrainDeps {
   disableTriggersWithReasons?: (reasons: Record<string, string>) => Promise<string[]>;
   /** 活动日志行(event_seen 数据源;调用方读一次,只在第 1 轮用)。 */
   activityLines: string[];
-  currentVault?: string;
+  currentVault?: string | null;
   readDbFile?: (rel: string) => Promise<DbLike | null>;
   log: (msg: string) => void;
   now?: () => Date;
@@ -119,7 +119,8 @@ export async function drainAutomation(deps: DrainDeps, opts: { maxRounds?: numbe
       outIssues,
       outNotices,
       log: deps.log,
-      ...(hasDb ? { currentVault: deps.currentVault, dbCursors, outDbCursors, readDbFile: deps.readDbFile } : {}),
+      currentVault: deps.currentVault,
+      ...(hasDb ? { dbCursors, outDbCursors, readDbFile: deps.readDbFile } : {}),
     });
     // 游标提交时机(codex 抓的 S0):没命中 → 立刻提交(纯基线推进);命中 → 等动作被**接受**才提交,
     // 否则让位/单飞 busy/无模型这些「本轮没跑成」的路径会把事件当成已消费,事件永久丢。

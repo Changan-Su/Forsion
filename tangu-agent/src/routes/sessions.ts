@@ -15,6 +15,7 @@ import { acknowledgeSessionRead } from '../services/sessionRead.js';
  *   POST   /agent/sessions/:id/suggest { run_id? }  输入建议(JSON { suggestion };空串 = 没有)
  */
 import { Router, type Response } from 'express';
+import { markedAmadeusRoots } from '../contracts/sessionDefaults.js';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { getDbType, messageTimeOrder, query } from '../core/db.js';
@@ -439,7 +440,7 @@ router.post('/agent/sessions/:id/team-members/:slug', authMiddleware, async (req
     const a = {
       teamSessionId: parent.id, userId: req.user!.userId, appId: parent.app_id, modelId: parent.model_id,
       member, inlineDef: !!inline, teamRunId: '', delta: '', cycle: 0, roster: (cfg.groupAgents || []).join(', '),
-      execMode: cfg.execMode || 'host', cwd: cfg.cwd || parent.project_path || undefined, extraRoots: cfg.extraRoots,
+      execMode: cfg.execMode || 'host', cwd: cfg.cwd || parent.project_path || undefined, extraRoots: cfg.extraRoots, amadeusExtraRoots: cfg.amadeusExtraRoots,
       wsProject: cfg.workspaceProject, approvalMode: cfg.approvalMode, signal: new AbortController().signal,
     };
     const id = await ensureMemberSession(a);
@@ -1249,6 +1250,12 @@ async function writeSessionConfig(req: AuthRequest, res: Response, body: Record<
     // 团队模式下没有计划模式(settleTeamPlanMode):在身份锁与远程白名单都合并完的最终值上结算 —— 开团队的那一笔顺手关掉计划模式,
     // 团队会话里开计划模式的那一笔落成关。不报错:客户端不等这个响应就改了本地值,报错只会让两边对不上。
     cfg = settleTeamPlanMode(cfg);
+    if (cfg.amadeusExtraRoots !== undefined || storedObj.amadeusExtraRoots !== undefined) {
+      cfg.amadeusExtraRoots = markedAmadeusRoots({
+        extraRoots: cfg.extraRoots,
+        amadeusExtraRoots: cfg.amadeusExtraRoots ?? storedObj.amadeusExtraRoots,
+      });
+    }
     // 锁合并之后再校验一次:请求体单看合法(只带 soloEngineId),合并回存值的 soloAgentSlug 就成了双身份 —— 这种写整条拒绝(creview 09-16 P0)。
     const mergedErr = validSessionFacts(cfg);
     if (mergedErr) return void res.status(400).json({ detail: mergedErr });

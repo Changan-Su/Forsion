@@ -92,6 +92,10 @@ export function setRunAmadeusVault(amadeusVault: RunAmadeusVault): void {
   if (run?.runId === amadeusVault.generation) als.enterWith({ ...run, amadeusVault });
 }
 
+export function withoutRunContext<T>(fn: () => T): T {
+  return als.exit(fn);
+}
+
 export function currentRunAmadeusVault(): RunAmadeusVault | undefined {
   return als.getStore()?.amadeusVault;
 }

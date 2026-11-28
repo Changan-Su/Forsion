@@ -43,6 +43,7 @@ export interface MemberActivation {
   execMode: 'sandbox' | 'host';
   cwd?: string;
   extraRoots?: string[];
+  amadeusExtraRoots?: string[];
   wsProject?: string | null;
   approvalMode?: string;
   /** 团队 run 的轮数上限(会话 /loop,或后台讨论 / Historian 协助的 BACKGROUND_MAX_ITERATIONS),套到每个成员的单次发言;
@@ -114,6 +115,7 @@ export function memberRunConfig(a: MemberActivation): Record<string, unknown> {
     execMode: a.execMode,
     cwd: a.cwd,
     extraRoots: a.extraRoots,
+    amadeusExtraRoots: a.amadeusExtraRoots,
     workspaceProject: a.wsProject || undefined,
     // 团队会话的档优先,成员定义只在会话没设时由 applyAgentActivation 补(与主循环「会话显式值优先」同口径)。
     // 反过来(旧 runGroupTurn 口径)= 会话选了完全通行、成员 config.toml 里一句 auto-edit 照样逐次弹;会话选自动编辑、成员写 full-auto 则被它自己提权。

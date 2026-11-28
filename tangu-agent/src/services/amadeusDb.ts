@@ -216,8 +216,7 @@ export async function withDbLock<T>(abs: string, fn: () => Promise<T>): Promise<
  * 读-改-写(串行 + 原子 + 跨进程互斥)。`fn` 拿到的是**刚从磁盘读出来**的最新副本,直接就地改即可;
  * 返回 false = 什么都没改(不落盘,也就不会白白触发别人的 watcher)。
  */
-export async function mutateDb(rel: string, fn: (db: DbFile) => boolean | void): Promise<void> {
-  const root = amadeusVaultPath();
+export async function mutateDb(rel: string, fn: (db: DbFile) => boolean | void, root = amadeusVaultPath()): Promise<void> {
   const run = async (): Promise<void> => {
     const abs = await inVaultDb(rel, root);
     // 锁必须裹住**读**:只裹写的话,我们读到的仍可能是对方写之前的版本,rename 照样抹掉它。

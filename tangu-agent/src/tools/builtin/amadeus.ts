@@ -36,13 +36,13 @@ import { defaultCalendarFile, ensureHumanFolder, humanDir, tanguHome } from '../
 import { atomicSyncWrite, readSyncBytes } from '../../services/agentSyncPaths.js';
 import { withMemoryDirectoryLock } from '../../services/memoryRepository.js';
 import { detectZh } from '../../tui/i18n.js';
-import { readAmadeusVault } from '../../core/amadeusVault.js';
+import { readAmadeusVault, type AmadeusVault } from '../../core/amadeusVault.js';
 import { currentRunAmadeusVault, currentStandIn } from '../../seams/runContext.js';
 
 type VaultContext = Pick<ToolContext, 'amadeusVault'>;
 
 function selectedVault(ctx?: VaultContext) {
-  return ctx?.amadeusVault ?? currentRunAmadeusVault() ?? readAmadeusVault(cloudAmadeus() ?? undefined);
+  return ctx?.amadeusVault ?? currentRunAmadeusVault() ?? readAmadeusVault(() => cloudAmadeus()?.accountNamespace?.() ?? null);
 }
 
 export function amadeusVaultPath(ctx?: VaultContext): string | null {
@@ -229,15 +229,19 @@ interface AmadeusBackend {
   mutateHuman(apply: CalMutation): Promise<string>;
 }
 
-function localBackend(root: string): AmadeusBackend {
+function localBackend(root: string | null): AmadeusBackend {
   return {
-    exists: () => existsSync(root),
+    exists: () => !!root && existsSync(root),
     ensureVault: async () => {
-      if (!existsSync(root)) await fs.mkdir(root, { recursive: true });
+      if (root && !existsSync(root)) await fs.mkdir(root, { recursive: true });
     },
-    list: (pred) => listVault(root, pred),
-    read: async (rel) => ({ content: await fs.readFile(inVault(root, rel), 'utf8') }),
+    list: (pred) => root ? listVault(root, pred) : Promise.resolve([]),
+    read: async (rel) => {
+      if (!root) throw new Error('No local Amadeus vault is available');
+      return { content: await fs.readFile(inVault(root, rel), 'utf8') };
+    },
     write: async (rel, content) => {
+      if (!root) throw new Error('No local Amadeus vault is available');
       const abs = inVault(root, rel);
       await fs.mkdir(path.dirname(abs), { recursive: true });
       // 原子写(tmp+rename):vault 同时还有渲染端与桌面 main 两个写者/读者,直接 writeFile 会让
@@ -249,12 +253,12 @@ function localBackend(root: string): AmadeusBackend {
     human: async () => {
       try {
         const cal = readHumanCal();
-        return cal && { cal, isMirror: (rel) => isHumanMirror(root, rel) };
+        return cal && { cal, isMirror: (rel) => !!root && isHumanMirror(root, rel) };
       } catch {
         return null; // 跳过损坏的,同全库 .db
       }
     },
-    mutateHuman: (apply) => mutateHumanCal(apply),
+    mutateHuman: (apply) => mutateHumanCal(apply, !!root && existsSync(root)),
   };
 }
 
@@ -350,7 +354,7 @@ const hostUseFileTools =
 
 function backendFor(ctx: ToolContext | undefined): AmadeusBackend | null {
   const vault = selectedVault(ctx);
-  if (ctx?.execMode === 'host') return vault.kind === 'local' ? localBackend(vault.root) : null;
+  if (ctx?.execMode === 'host') return localBackend(vault.kind === 'local' ? vault.root : null);
   const facet = vault.managed ? null : cloudAmadeus();
   return facet ? cloudBackend(facet, ctx?.uiSettings?.locale?.value) : null;
 }
@@ -360,9 +364,64 @@ function onlineNotes(ctx?: VaultContext): AmadeusNotes | undefined {
   return vault.kind === 'online' ? vault.notes : undefined;
 }
 
+interface OnlineNoteTicket {
+  seq: number;
+  fileId: string;
+}
+
+// The pinned selection identifies the run, account and library. Keys use the server's normalized note path.
+const onlineNoteTickets = new WeakMap<AmadeusVault, Map<string, OnlineNoteTicket>>();
+
+function noteTickets(vault: AmadeusVault): Map<string, OnlineNoteTicket> {
+  let tickets = onlineNoteTickets.get(vault);
+  if (!tickets) {
+    tickets = new Map();
+    onlineNoteTickets.set(vault, tickets);
+  }
+  return tickets;
+}
+
+const onlineNoteReread = 'Error: The note changed or was replaced. Read it again with amadeus_read_note before deciding whether to overwrite it.';
+
+async function writeOnlineNote(notes: AmadeusNotes, vault: AmadeusVault, rel: string, content: string): Promise<string> {
+  const tickets = noteTickets(vault);
+  const ticket = tickets.get(rel);
+  let existing: string | undefined;
+  try {
+    existing = (await notes.read(rel)).content;
+  } catch (e) {
+    if (!(e instanceof AmadeusNotFoundError)) throw e;
+  }
+  if (existing !== undefined && hasOnlineNoteMetadata(existing)) {
+    return 'Error: This note cannot currently be overwritten online because it contains frontmatter, layout metadata, or block anchors. Tell the user it needs to be edited in the app.';
+  }
+  if (existing !== undefined && !ticket) return 'Error: Read this note with amadeus_read_note before overwriting it.';
+  if (existing === undefined && ticket) {
+    if (tickets.get(rel) === ticket) tickets.delete(rel);
+    return onlineNoteReread;
+  }
+  try {
+    await notes.write(rel, content, { baseSeq: ticket?.seq ?? 0, expectedFileId: ticket?.fileId });
+  } catch (e) {
+    if (e instanceof AmadeusConflictError) return onlineNoteReread;
+    throw e;
+  } finally {
+    if (tickets.get(rel) === ticket) tickets.delete(rel);
+  }
+  return `Saved note ${rel}.`;
+}
+
+function hasOnlineNoteMetadata(content: string): boolean {
+  return /^\uFEFF?---[ \t]*\r?(?:\n|$)/.test(content) ||
+    /^(?:[ \t]*["']?amadeus_(?:page|schema|layout|canvas|next_id)["']?[ \t]*:)/m.test(content) ||
+    /<!--\s*a\s+[A-Za-z0-9_-]+\s*-->/.test(content);
+}
+
 function notesBackendFor(ctx: ToolContext): AmadeusBackend | null {
-  const notes = onlineNotes(ctx);
-  return notes ? cloudBackend(notes) : backendFor(ctx);
+  const vault = selectedVault(ctx);
+  if (vault.kind === 'online') return vault.notes ? cloudBackend(vault.notes) : null;
+  if (ctx?.execMode === 'host' && vault.kind !== 'local') return null;
+  return backendFor(ctx);
 }
 
 // ── 日历装配(后端无关)────────────────────────────────────────────────────
@@ -413,7 +472,7 @@ function readHumanCal(): Cal | null {
   return toCal(HUMAN_CAL, db);
 }
 /** 读—改—写整段在 human/ 那把锁里,写完当场镜像:和日历视图的 PUT /agent/human/CALENDAR.db 同一个写法。 */
-async function mutateHumanCal(apply: CalMutation): Promise<string> {
+async function mutateHumanCal(apply: CalMutation, mirror: boolean): Promise<string> {
   ensureHumanFolder();
   const r = withMemoryDirectoryLock(humanDir(), () => {
     const cal = readHumanCal();
@@ -422,7 +481,7 @@ async function mutateHumanCal(apply: CalMutation): Promise<string> {
     if (res.ok) atomicSyncWrite(tanguHome(), humanCalFile(), serializeDb(cal.db));
     return res;
   });
-  if (r.ok) {
+  if (r.ok && mirror) {
     // 动态 import:humanFolder → amadeusDb → 本文件,静态引入成环
     const { mirrorLegacyHuman } = await import('../../agents/humanFolder.js');
     try { await mirrorLegacyHuman(); } catch (e) { console.warn('[human mirror]', e instanceof Error ? e.message : e); }
@@ -452,10 +511,8 @@ async function calendars(be: AmadeusBackend): Promise<Cal[]> {
   return out;
 }
 /** 本机全部日历事件(给自动化「日历事件开始前」用:rel + 行 + 解析好的时间;整张表读不了的跳过)。 */
-export async function localCalendarRows(): Promise<Array<{ rel: string; columns: DbColumn[]; row: DbRow; start: string; allDay: boolean }>> {
+export async function localCalendarRows(root = amadeusVaultPath()): Promise<Array<{ rel: string; columns: DbColumn[]; row: DbRow; start: string; allDay: boolean }>> {
   const out: Array<{ rel: string; columns: DbColumn[]; row: DbRow; start: string; allDay: boolean }> = [];
-  const root = amadeusVaultPath();
-  if (!root) return out;
   for (const c of await calendars(localBackend(root))) {
     for (const row of c.db.rows) {
       const d = decodeCalDate(row.cells[c.cal.id]);
@@ -579,8 +636,10 @@ function mk(
     capabilities: caps,
     isEnabledFor: (profile: AppProfile, ctx: ToolContext) => {
       const vault = selectedVault(ctx);
-      if (vault.kind === 'online') return !!onlineDescription && !!vault.notes && profile.capabilities.hostExec;
-      if (ctx?.execMode === 'host') return !cloudOnly && profile.capabilities.hostExec && vault.kind === 'local';
+      if (onlineDescription && vault.kind === 'online') return !!vault.notes && profile.capabilities.hostExec;
+      if (ctx?.execMode === 'host') {
+        return !cloudOnly && profile.capabilities.hostExec && (!onlineDescription || vault.kind === 'local');
+      }
       return !vault.managed && !!cloudAmadeus();
     },
     ...(onlineDescription ? {
@@ -641,7 +700,10 @@ export const amadeusProvider: ToolProvider = {
         if (!rel) return 'Error: path is required';
         if (!/\.md$/i.test(rel)) rel += '.md';
         if (STRUCTURED_RE.test(rel)) throw new Error(structuredRefusal(rel));
-        const { content: raw } = await be.read(rel);
+        const notes = onlineNotes(ctx);
+        if (notes) rel = rel.normalize('NFC');
+        const { content: raw, seq, fileId } = await be.read(rel);
+        if (notes && seq && fileId) noteTickets(selectedVault(ctx)).set(rel, { seq, fileId });
         return pageInstructionsForFile(raw, rel) + (toCleanMarkdown(raw) || '(empty note)');
       },
       true,
@@ -665,6 +727,11 @@ export const amadeusProvider: ToolProvider = {
         if (!rel) return 'Error: path is required';
         if (!/\.md$/i.test(rel)) rel += '.md';
         if (STRUCTURED_RE.test(rel)) throw new Error(structuredRefusal(rel));
+        const notes = onlineNotes(ctx);
+        if (notes) {
+          if (typeof args.content !== 'string') return 'Error: content must be a string. Pass an explicit empty string to clear the note.';
+          return writeOnlineNote(notes, selectedVault(ctx), rel.normalize('NFC'), args.content);
+        }
         // 扩展名之外还要看**内容**:原生画布笔记是普通 `.md`,几何存在 frontmatter 的
         // `amadeus_canvas` 单行 JSON 里,整篇覆盖会把它连同锚一起抹掉(Canvas 双模式方案 §6.1
         // 点名的运行时闸)。
@@ -673,24 +740,17 @@ export const amadeusProvider: ToolProvider = {
         // force 覆盖,画布几何当场没了。只有明确的「不存在」才等于新建;其余错误一律抬出去,
         // 让模型看到失败去重试 —— 宁可写不进,也不能糊掉用户的画布。
         let existing = '';
-        let baseSeq = 0;
-        let expectedFileId: string | undefined;
         try {
-          const file = await be.read(rel);
-          existing = file.content;
-          baseSeq = file.seq ?? 0;
-          expectedFileId = file.fileId;
+          existing = (await be.read(rel)).content;
         } catch (e) {
           if (!(e instanceof AmadeusNotFoundError)) throw e;
         }
         if (hasCanvasFrontmatter(existing)) throw new Error(canvasRefusal(rel));
-        // An online edit must still target the revision checked for canvas metadata.
-        // The Worker's existing whole-file overwrite uses force.
-        await be.write(rel, String(args.content ?? ''), onlineNotes(ctx) ? { baseSeq, expectedFileId } : { overwrite: true });
+        await be.write(rel, String(args.content ?? ''), { overwrite: true });
         return `Saved note ${rel}.`;
       },
       true,
-      'Create or overwrite a plain markdown note in the current online Amadeus library. Overwriting resets the note to a simple linear layout. Do not use on canvas, mind map, whiteboard or database files.',
+      'Create a plain markdown note in the current online Amadeus library, or overwrite one you read in this run. Notes with frontmatter, layout metadata, or block anchors cannot be overwritten online. Use an explicit empty string to clear a plain note.',
     ),
 
     // ── 日历(同时是待办:带勾选列的日历表里的行就是用户的待办)──
@@ -706,7 +766,6 @@ export const amadeusProvider: ToolProvider = {
       async (_args, ctx) => {
         const be = backendFor(ctx);
         if (!be) return noBackend;
-        if (!be.exists()) return noVault;
         const cals = await calendars(be);
         if (!cals.length) return 'No calendars found (a calendar is a table with a "calendarDate" column).';
         const dflt = defaultCalOf(cals);
@@ -747,7 +806,6 @@ export const amadeusProvider: ToolProvider = {
       async (args, ctx) => {
         const be = backendFor(ctx);
         if (!be) return noBackend;
-        if (!be.exists()) return noVault;
         const all = args.calendar ? [await findCalendar(be, String(args.calendar))] : await calendars(be);
         if (!all.length) return 'No calendars found.';
         const from = String(args.from ?? '').slice(0, 10);
@@ -801,7 +859,6 @@ export const amadeusProvider: ToolProvider = {
       async (args, ctx) => {
         const be = backendFor(ctx);
         if (!be) return noBackend;
-        if (!be.exists()) return noVault;
         return mutateCalendar(be, args.calendar ? String(args.calendar) : undefined, (cal) => {
           const start = optStr(args.start);
           const end = optStr(args.end);
@@ -850,7 +907,6 @@ export const amadeusProvider: ToolProvider = {
       async (args, ctx) => {
         const be = backendFor(ctx);
         if (!be) return noBackend;
-        if (!be.exists()) return noVault;
         return mutateCalendar(be, String(args.calendar), (cal) => {
           const row = cal.db.rows.find((r) => r.id === String(args.eventId));
           if (!row) return { ok: false, msg: `Error: event ${args.eventId} not found in "${cal.db.name}".` };
@@ -900,7 +956,6 @@ export const amadeusProvider: ToolProvider = {
       async (args, ctx) => {
         const be = backendFor(ctx);
         if (!be) return noBackend;
-        if (!be.exists()) return noVault;
         return mutateCalendar(be, String(args.calendar), (cal) => {
           const before = cal.db.rows.length;
           cal.db.rows = cal.db.rows.filter((r) => r.id !== String(args.eventId));
@@ -968,6 +1023,6 @@ export function amadeusOnlinePromptSection(ctx?: VaultContext, notesAllowed = tr
   return '## Amadeus notes (online)\n' +
     `The current Amadeus library is ${name} (online). You cannot run commands or use filesystem tools in this library. ` +
     (vault.notes && notesAllowed
-      ? 'Use only the Amadeus note tools that are available in this session to access the library. Use amadeus_list_notes to find notes and amadeus_read_note to read them. When amadeus_write_note is available, use it only for plain markdown.'
+      ? 'Use only the Amadeus note tools that are available in this session to access the library. Use amadeus_list_notes to find notes and amadeus_read_note to read them. Read a plain note in this run before overwriting it with amadeus_write_note. Notes with metadata or block anchors cannot be overwritten online.'
       : 'The note tools are unavailable for this library in this run.');
 }

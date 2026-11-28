@@ -38,7 +38,7 @@ import { loadSpecialAgentsConfig, legacyMusePrompt, isWithinActiveHours, buildTo
 import { MAX_STARTERS, starterHint } from './museStarters.js';
 import { suggestionHint } from './museAutomationSuggestions.js';
 import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, resolveMemorySlug } from '../agents/agentRegistry.js';
-import { runWithAgentSlug } from '../seams/runContext.js';
+import { runWithAgentSlug, withoutRunContext } from '../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG, agentsDir, checkpointsDir, tanguHome } from '../core/tanguHome.js';
 import { backgroundClientTag } from '../core/version.js';
 import { displayText } from '../core/displayText.js';
@@ -976,7 +976,11 @@ async function refreshSpaceStampWhenIdle(): Promise<void> {
   } catch { /* DB 不可用 → 这一轮不刷,下一轮再看 */ }
 }
 
-async function tick(): Promise<void> {
+function tick(): Promise<void> {
+  return withoutRunContext(tickOutsideRun);
+}
+
+async function tickOutsideRun(): Promise<void> {
   // interval 与 kickMuse 的 setTimeout 会重叠(tick 内多处 await);重入=重复评估/重复起 run。
   if (ticking) { pendingKick = true; return; }
   ticking = true;
@@ -1000,6 +1004,7 @@ async function tick(): Promise<void> {
       return;
     }
     lockPauseLogged = false;
+    const vaultPath = amadeusVaultPath();
     await loadMuseState(); // lastCycleAt 落盘值(只读一次):重启后心跳接着上次算,不再开机就跑
     await flushJournal(); // 上一周期若已收尾 → 记一行(run 终态会 kickMuse,所以通常紧跟着周期结束)
     if (!pendingJournal) await refreshSpaceStampWhenIdle();
@@ -1016,19 +1021,18 @@ async function tick(): Promise<void> {
         const activityLines = await readActivityLines({ hours: 24, limit: 500, includeRemote: true });
         // db_changed 的快照游标单独存文件(不进 triggers.json——那是全表规模的派生数据)。
         const hasDb = triggers.some((t) => t.cond?.type === 'db_changed');
-        const vaultPath = amadeusVaultPath();
         const r = await drainAutomation({
           loadTriggers,
           loadCursors,
           setCursors,
           evaluate: evaluateTriggers,
-          launch: launchAutomationTriggers,
-          advanceSelfCursors,
+          launch: (hits) => launchAutomationTriggers(hits, undefined, vaultPath),
+          advanceSelfCursors: (touched) => advanceSelfCursors(touched, { loadTriggers, loadCursors, setCursors, currentVault: vaultPath }),
           markTriggersFired,
           disableTriggers,
           disableTriggersWithReasons,
           activityLines,
-          currentVault: vaultPath ?? undefined,
+          currentVault: vaultPath,
           // 缺 → null(表没了,静默);坏 → 抛(评估侧按规则留痕、不推游标)。折成 null 会让坏表长得像空表。
           readDbFile: async (rel: string): Promise<DbLike | null> => vaultPath ? (await readDbOrNull(rel, vaultPath)) as DbLike | null : null,
           log,

@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { agentsDir, humanDir, skillsDir, tanguHome } from '../core/tanguHome.js';
 import { canonicalFuturePath, pathWithin, withinForsionDomains } from '../sandbox/hostSandboxProtection.js';
 import { currentRunAmadeusVault, currentStandIn, type StandInDomain } from '../seams/runContext.js';
-import { readAmadeusVault } from '../core/amadeusVault.js';
+import { readAmadeusVault, type RunAmadeusVault } from '../core/amadeusVault.js';
 import { isLibraryMemoryRel, MEMORY_DETAIL_DIR } from '../contracts/memoryLayers.js';
 import type { NormalAgentDef } from '../agents/agentRegistry.js';
 import { accountHome, isMultiAccount, requireAccountId } from '../core/accountScope.js';
@@ -123,9 +123,16 @@ const plainRoot = (root: string): boolean => {
 /** 真身在一个不是软链的根里。 */
 const insidePlain = (abs: string, root: string): boolean => plainRoot(root) && inside(abs, root);
 
-/** Stand-ins still cannot access the local vault beneath an explicitly shared directory. */
-function vaultRoot(): string {
-  return (currentRunAmadeusVault() ?? readAmadeusVault()).protectedRoot;
+const lastProtectedVaultRoots = new WeakMap<RunAmadeusVault, readonly string[]>();
+
+/** Keep the pinned and current deny roots, including the last known current roots during a read failure. */
+function vaultRoots(): readonly string[] {
+  const current = readAmadeusVault();
+  const pinned = currentRunAmadeusVault();
+  if (!pinned) return current.protectedRoots;
+  if (current.kind !== 'none') lastProtectedVaultRoots.set(pinned, current.protectedRoots);
+  const remembered = current.kind === 'none' ? lastProtectedVaultRoots.get(pinned) ?? [] : [];
+  return [...new Set([...pinned.protectedRoots, ...current.protectedRoots, ...remembered])];
 }
 /** 包内置技能(dist/services/../../skills = 包根 skills/,同 skills/localSkills.builtinSkillsDir)。 */
 const packageSkills = (): string => path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills');
@@ -150,7 +157,7 @@ export function standInReadDenied(dom: StandInDomain | undefined, abs: string): 
   if (dom.library.some((f) => real(f) === real(abs)) && dom.bodySlug && insidePlain(abs, libraryOf(dom.bodySlug))) return null;
   if (skillRoot(abs, dom)) return null;
   // 本体 / 别的 Agent、human/、引擎 home、Forsion 家目录、笔记库:哪怕在工作目录里面也不给
-  if (within(abs, agentsDir()) || within(abs, humanDir()) || within(abs, tanguHome()) || withinForsionDomains(abs) || within(abs, vaultRoot())) return denied;
+  if (within(abs, agentsDir()) || within(abs, humanDir()) || within(abs, tanguHome()) || withinForsionDomains(abs) || vaultRoots().some((root) => within(abs, root))) return denied;
   if (dom.roots.some((r) => inside(abs, r))) return null;
   return denied;
 }
@@ -163,7 +170,7 @@ export function standInWriteDenied(dom: StandInDomain | undefined, abs: string):
   const own = path.join(agentsDir(), dom.slug);
   if (insidePlain(abs, own)) return null;
   const denied = `Access denied: a stand-in can only write inside its own folder (${own}) and the working directory; ${abs} is outside them.`;
-  if (within(abs, agentsDir()) || within(abs, humanDir()) || within(abs, tanguHome()) || withinForsionDomains(abs) || within(abs, vaultRoot())) return denied;
+  if (within(abs, agentsDir()) || within(abs, humanDir()) || within(abs, tanguHome()) || withinForsionDomains(abs) || vaultRoots().some((root) => within(abs, root))) return denied;
   if (dom.roots.some((r) => inside(abs, r))) return null;
   return denied;
 }
@@ -178,7 +185,7 @@ export function standInSearchDenied(dom: StandInDomain | undefined, baseDir: str
   if (direct) return direct;
   const own = path.join(agentsDir(), dom.slug);
   if (insidePlain(baseDir, own)) return null; // 自己的文件夹(含底下)随便搜;方向别写反:起点是自己文件夹的祖先时不算(Codex 评审 #5)
-  const guarded = [agentsDir(), humanDir(), tanguHome(), vaultRoot()];
+  const guarded = [agentsDir(), humanDir(), tanguHome(), ...vaultRoots()];
   if (guarded.some((g) => within(g, baseDir))) return `Access denied: searching ${baseDir} would reach folders this stand-in cannot read (other agents, the user's own files or notes). Search a narrower folder inside the working directory.`;
   return null;
 }

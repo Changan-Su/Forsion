@@ -872,7 +872,7 @@ export interface EvaluateEnv {
   /** 出参:event_seen 命中规则的新消费游标(调用方随 markTriggersFired 写回)。 */
   outCursors?: Record<string, EventCursor>;
   /** db_changed:当前 vault 根(与规则里钉的 vault 不一致就整条跳过)。 */
-  currentVault?: string;
+  currentVault?: string | null;
   /** db_changed:读一张表;**不存在 → null,坏了(JSON/结构/权限)→ 抛**(amadeusDb.readDbOrNull 口径)。测试注入假表。
    *  主表 null = 表没了,静默跳过(面板另有提示);lookup 依赖表 null 或抛 = 依赖失败,该规则本轮跳过、不推游标(见 preloadLookupDbs)。 */
   readDbFile?: (vaultRelPath: string) => Promise<DbLike | null>;
@@ -1408,10 +1408,10 @@ function once<T>(fn: () => Promise<T>): () => Promise<T> {
   return () => (p ??= fn());
 }
 
-async function defaultCalendarEvents(): Promise<CalendarEventHit[]> {
+async function defaultCalendarEvents(vaultRoot?: string | null): Promise<CalendarEventHit[]> {
   const { localCalendarRows } = await import('../tools/builtin/amadeus.js');
   const out: CalendarEventHit[] = [];
-  for (const e of await localCalendarRows()) {
+  for (const e of await localCalendarRows(vaultRoot)) {
     const start = e.allDay ? null : parseLocalMinute(e.start);
     if (!start) continue; // 全天事件没有「开始前」
     const row = triggerRowOf({ columns: e.columns, rows: [] }, e.row.id, e.row.cells);
@@ -1432,7 +1432,7 @@ export async function evaluateTriggers(triggers: MuseTrigger[], env: EvaluateEnv
     if (chRead?.version !== version) chRead = { version, signals: (env.readChSignals ?? readChSignals)(now.getTime() - CH_LOOKBACK_MS, now.getTime()) };
     return chRead.signals;
   };
-  const calendarEvents = once(env.calendarEvents ?? defaultCalendarEvents);
+  const calendarEvents = once(env.calendarEvents ?? (() => defaultCalendarEvents(env.currentVault)));
   for (const t of triggers) {
     if (!t.enabled) continue;
     const unmet = triggerUnmet(t, computerOn);
