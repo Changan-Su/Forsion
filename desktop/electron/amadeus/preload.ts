@@ -5,7 +5,14 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC, type AmadeusApi } from '@amadeus-shared/ipc'
 import { ASSET_SCHEME } from '@amadeus-shared/assets'
 import { SYNC_IPC } from './sync/ipcKeys'
+import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
 import { cloudPresent } from '../cloudPresent'
+
+const subscribe = <T>(channel: string, cb: (payload: T) => void): (() => void) => {
+  const listener = (_event: IpcRendererEvent, payload: T): void => cb(payload)
+  ipcRenderer.on(channel, listener)
+  return () => { ipcRenderer.removeListener(channel, listener) }
+}
 
 const api: AmadeusApi = {
   openVault: () => ipcRenderer.invoke(IPC.openVault),
@@ -15,6 +22,13 @@ const api: AmadeusApi = {
   createVault: (name) => ipcRenderer.invoke(IPC.createVault, name),
   forgetVault: (root) => ipcRenderer.invoke(IPC.forgetVault, root),
   revealVault: (root) => ipcRenderer.invoke(IPC.revealVault, root),
+  // 在线库(智库同步第 3 步 H3):读写当前在线库、主窗收「在线打开」并报失败 / 报装好了转发壳
+  activeVaultGet: () => ipcRenderer.invoke(ACTIVE_VAULT_IPC.get),
+  activeVaultSet: (ref, requestId) => ipcRenderer.invoke(ACTIVE_VAULT_IPC.set, ref, requestId),
+  onActiveVaultChanged: (cb) => subscribe(ACTIVE_VAULT_IPC.changed, cb),
+  onOpenOnline: (cb) => subscribe(ACTIVE_VAULT_IPC.openOnline, cb),
+  openOnlineResult: (r) => ipcRenderer.send(ACTIVE_VAULT_IPC.openOnlineResult, r),
+  onlineCapable: () => ipcRenderer.send(ACTIVE_VAULT_IPC.onlineCapable),
   listPages: () => ipcRenderer.invoke(IPC.listPages),
   listFiles: () => ipcRenderer.invoke(IPC.listFiles),
   loadPage: (pagePath) => ipcRenderer.invoke(IPC.loadPage, pagePath),

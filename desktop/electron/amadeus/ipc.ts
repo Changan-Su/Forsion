@@ -20,7 +20,8 @@ export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, readConfig, readSyncOwnershipV2, updateConfig, writeConfig, type AmadeusConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, readConfig, readSyncOwnershipV2, updateConfig, updateLocalVaultConfig, writeConfig, type AmadeusConfig } from './settings'
+import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
 import { externalCreations } from '../productTrust'
@@ -325,7 +326,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   const ensureDefaultVault = async (): Promise<{ root: string; pages: string[]; folders: string[] }> => {
     const root = defaultVaultRoot()
     await fs.mkdir(root, { recursive: true })
-    await writeConfig({ lastVault: root, localVault: root, lastPage: undefined })
+    await writeConfig({ lastVault: root, localVault: root, lastPage: undefined }, undefined, { keepActiveVault: true }) // 回落:不清在线库
     return activateRoot(root, false)
   }
 
@@ -336,9 +337,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   const switchLocalVault = async (root: string): Promise<Awaited<ReturnType<typeof activateRoot>>> => {
     if (isManagedCloudVault(root)) throw new Error('cloud-vault-forbidden')
     if (!(await fs.stat(root).then((s) => s.isDirectory(), () => false))) throw new Error('vault-missing')
-    await updateConfig((cfg) => { Object.assign(cfg, switchPatch(normalizeLocal(cfg, isManagedCloudVault), root)) })
+    // 切本机库 = 不再恢复在线库:和 switchPatch 同一次落盘清掉 activeVault(H3 定稿第 2 节)
+    const leftOnline = await updateLocalVaultConfig((cfg) => { Object.assign(cfg, switchPatch(normalizeLocal(cfg, isManagedCloudVault), root)) })
     while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites])
-    return activateRoot(root, true) // 同步跑到 vault.setRoot
+    // 换完根再广播:别的窗口收到就 restoreVault(true),拿到的得是新根
+    try { return await activateRoot(root, true) } finally { if (leftOnline) notifyWindows(ACTIVE_VAULT_IPC.changed, { ref: null }) } // 同步跑到 vault.setRoot
   }
 
   handle(IPC.openVault, async () => {
@@ -409,7 +412,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       const cfg = await readConfig()
       if (!cfg.localVault || isManagedCloudVault(cfg.localVault)) return ensureDefaultVault()
       lastVault = cfg.localVault
-      await writeConfig({ lastVault, lastPage: undefined })
+      await writeConfig({ lastVault, lastPage: undefined }, undefined, { keepActiveVault: true }) // 回落:不清在线库
     }
     try {
       const stat = await fs.stat(lastVault)

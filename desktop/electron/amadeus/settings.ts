@@ -1,12 +1,15 @@
 // Local vault preferences belong to this device. Cloud bindings belong to one
 // stable Forsion account at one cloud origin, independent of token renewal.
-import { promises as fs } from 'node:fs'
+import { promises as fs, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { app } from 'electron'
 import { isDevMode } from '../forsionHome'
 import { loadTanguCreds } from '../forsionAuth'
 import { forsionAccountId } from '../../shared/forsionAccount'
+import type { OnlineVaultRef } from '@amadeus-shared/ipc'
+
+export type { OnlineVaultRef }
 
 export interface AmadeusCloudSyncConfig {
   enabled?: boolean
@@ -49,6 +52,8 @@ export interface AmadeusConfig extends CloudAccountConfig {
 
 interface StoredConfig extends Omit<AmadeusConfig, 'cloudAccountId'> {
   cloudAccounts?: Record<string, CloudAccountConfig>
+  /** 智库同步第 3 步(H3):当前打开的在线库,设备级(和 lastVault 同级);没有 = 本机库。只经 readActiveVault / writeActiveVault 读写,readConfig 不带它。 */
+  activeVault?: unknown
   /** Pre-account-scoping state has no reliable owner. Keep it for recovery,
    * never silently enroll these notes into whichever account signs in next. */
   legacyCloudState?: CloudAccountConfig
@@ -150,7 +155,10 @@ export function writeSyncOwnershipV2(accountId: string, next: SyncOwnershipV2 | 
 }
 
 export async function readConfig(accountId = currentCloudAccountId()): Promise<AmadeusConfig> {
-  const stored = await storedConfig()
+  return configFrom(await storedConfig(), accountId)
+}
+
+function configFrom(stored: StoredConfig, accountId: string | null): AmadeusConfig {
   const own = accountId ? stored.cloudAccounts?.[cloudAccountNamespace(accountId)] : undefined
   // Callers mutate entries while preparing changes. A snapshot prevents old
   // asynchronous work from modifying the persisted owner map behind our back.
@@ -161,10 +169,23 @@ export async function readConfig(accountId = currentCloudAccountId()): Promise<A
   })
 }
 
-async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string | null): Promise<void> {
-  const stored = await storedConfig()
+/** 同一个 lastVault:都没有算同一个;都有按 path.resolve 比。 */
+const sameLastVault = (a: unknown, b: unknown): boolean => {
+  const has = (v: unknown): v is string => typeof v === 'string' && v !== ''
+  return has(a) ? has(b) && path.resolve(a) === path.resolve(b) : !has(b)
+}
+/** activeVault 怎么跟着这次写走:auto = 这次改了 lastVault 就一并清掉(本机侧换了库 = 不再恢复在线库;
+ *  在线时 lastVault 不动,所以不会误清);drop = 一定清;keep = 宿主自己的启动回落(restoreVault / 首启建默认库),照契约「回落不清」。 */
+type ActiveVaultMode = 'auto' | 'drop' | 'keep'
+
+/** 回这一次是否清掉了一个在线库。 */
+async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string | null, mode: ActiveVaultMode = 'auto', base?: StoredConfig): Promise<boolean> {
+  const stored = base ?? await storedConfig()
   const { cloudSync, entrySync, cloudAccountId: _owner, ...local } = snapshot
-  const next = { ...stored, ...local }
+  const next: StoredConfig = { ...stored, ...local }
+  const had = next.activeVault !== undefined && next.activeVault !== null
+  const drop = had && (mode === 'drop' || (mode === 'auto' && 'lastVault' in local && !sameLastVault(local.lastVault, stored.lastVault)))
+  if (drop) delete next.activeVault
   if (accountId && ('cloudSync' in snapshot || 'entrySync' in snapshot)) {
     const key = cloudAccountNamespace(accountId)
     next.cloudAccounts = { ...stored.cloudAccounts, [key]: {
@@ -179,11 +200,22 @@ async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string
   await fs.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8')
   await fs.rename(tmp, file)
   cache = next
+  return drop
 }
 
-export function writeConfig(patch: Partial<AmadeusConfig>, accountId = currentCloudAccountId()): Promise<void> {
+/** 普通写顺带清掉了 activeVault 时通知(宿主据此广播 amadeus:active-vault:changed { ref:null })。Extend 的胶囊切本机经 writeConfig / updateConfig 写,宿主只能在这里认出来。 */
+const activeVaultCleared = new Set<() => void>()
+export function onActiveVaultCleared(cb: () => void): () => void {
+  activeVaultCleared.add(cb)
+  return () => { activeVaultCleared.delete(cb) }
+}
+const emitActiveVaultCleared = (dropped: boolean): void => {
+  if (dropped) for (const cb of [...activeVaultCleared]) { try { cb() } catch { /* 订阅者自理 */ } }
+}
+
+export function writeConfig(patch: Partial<AmadeusConfig>, accountId = currentCloudAccountId(), opts: { keepActiveVault?: boolean } = {}): Promise<void> {
   const snapshot = structuredClone(patch)
-  const work = writes.then(() => persistConfig(snapshot, accountId))
+  const work = writes.then(() => persistConfig(snapshot, accountId, opts.keepActiveVault ? 'keep' : 'auto')).then(emitActiveVaultCleared)
   writes = work.catch(() => {})
   return work
 }
@@ -237,8 +269,116 @@ export function updateConfig(
 ): Promise<AmadeusConfig> {
   const work = writes.then(async () => {
     const config = await readConfig(accountId)
-    if (await update(config) !== false) await persistConfig(config, accountId)
+    if (await update(config) !== false) emitActiveVaultCleared(await persistConfig(config, accountId))
     return config
+  })
+  writes = work.then(() => {}, () => {})
+  return work
+}
+
+/** 同一个目录:realpath 认软链 / 大小写,目录不在就按字面 resolve。 */
+const sameDir = (a: string, b: string): boolean => {
+  const canon = (p: string): string => { try { return realpathSync.native(p) } catch { return path.resolve(p) } }
+  return canon(a) === canon(b)
+}
+// 长度上限只防垃圾:旧位置库的 libraryId = `${vaultId}:${prefix}`(§3.1),所以它的上限要盖得住 prefix
+const goodId = (v: unknown, max: number): v is string => typeof v === 'string' && v.length > 0 && v.length <= max && !/[\u0000-\u001f]/.test(v)
+const goodSeg = (seg: string): boolean => seg !== '' && seg !== '.' && seg !== '..' && !/[\\\u0000-\u001f]/.test(seg)
+
+/** 在线库引用的形状(H3 定稿第 2 节):六个字段逐个核,只留这六个;不对 = null。prefix 按 §3.1:'Amadeus/' 或 'Amadeus/<…>/'。 */
+export function parseOnlineVaultRef(v: unknown): OnlineVaultRef | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const r = v as Record<string, unknown>
+  if (r.kind !== 'online' || typeof r.account !== 'string' || !/^[0-9a-f]{64}$/.test(r.account)) return null
+  if (!goodId(r.libraryId, 4096) || !goodId(r.vaultId, 1024) || !goodId(r.name, 1024) || !r.name.trim()) return null
+  const p = r.prefix
+  if (typeof p !== 'string' || p.length > 1024 || !p.startsWith('Amadeus/') || !p.endsWith('/') || !p.slice(0, -1).split('/').every(goodSeg)) return null
+  return { kind: 'online', account: r.account, libraryId: r.libraryId, vaultId: r.vaultId, prefix: p, name: r.name }
+}
+
+/** 新写路径(在线库 set / 清除 / 迁移 / 切本机库)只认严格读的底稿:不走宽松读,读失败就抛,共享缓存不会因此变成 {}。
+ *  别人起的宽松读还在途时先等它落定(不自己起一个),免得它晚到、把这一写的缓存盖回去。 */
+async function settleLoading(): Promise<void> {
+  if (loading) await loading
+}
+
+async function writeStored(out: StoredConfig): Promise<void> {
+  const file = configFile()
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const tmp = `${file}.tmp-${process.pid}`
+  await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
+  await fs.rename(tmp, file)
+  cache = out
+}
+
+/** 当前打开的在线库(只认形状,不核账号:账号由调用方比)。没有 = null;配置读不了、或这一项形状不对 → 抛(读失败 ≠ 本机库)。 */
+export async function readActiveVault(): Promise<OnlineVaultRef | null> {
+  await writes // 排在已提交的写后面
+  const raw = (await storedConfigStrict()).activeVault
+  if (raw === undefined || raw === null) return null
+  const ref = parseOnlineVaultRef(raw)
+  if (!ref) throw new Error('active-vault-malformed')
+  return ref
+}
+
+/** 写 / 清当前在线库。和其他写同一条队列、以盘上的为底(严格读,读不了就抛、不写)。
+ *  assert 在队列里、落盘之前调(账号核对:排队期间换了账号也拦得住),抛了就不写。 */
+export function writeActiveVault(next: OnlineVaultRef | null, assert?: () => void): Promise<void> {
+  const ref = next === null ? null : parseOnlineVaultRef(next)
+  if (next !== null && !ref) return Promise.reject(new Error('invalid_ref'))
+  const work = writes.then(async () => {
+    await settleLoading()
+    const out: StoredConfig = { ...(await storedConfigStrict()) }
+    assert?.()
+    if (ref) out.activeVault = ref
+    else delete out.activeVault
+    await writeStored(out)
+  })
+  writes = work.catch(() => {})
+  return work
+}
+
+/** 本机侧换库:update(switchPatch)和清 activeVault 同一次落盘(用户切回本机库 = 下次不再恢复在线库)。回是否清掉了一个在线库。 */
+export function updateLocalVaultConfig(update: (config: AmadeusConfig) => void, accountId = currentCloudAccountId()): Promise<boolean> {
+  const work = writes.then(async () => {
+    await settleLoading()
+    const disk = await storedConfigStrict() // 读不了就抛、不换库:不拿空底稿盖掉清单和账号配置
+    const config = configFrom(disk, accountId)
+    update(config)
+    return persistConfig(config, accountId, 'drop', disk) // 广播由调用方在换完根以后发
+  })
+  writes = work.then(() => {}, () => {})
+  return work
+}
+
+/** 老配置迁移(H3 定稿第 2 节):lastVault 停在**这个账号**的云镜像、这个账号配置里有 cloudSync.vaultId →
+ *  activeVault = 默认库,lastVault 换回本机库(本机库也不是真目录就去掉 lastVault,restoreVault 走首启那条建默认库)。
+ *  主进程启动、开窗之前调一次。没登录 / 配置读不了 / 缺 vaultId / 已经有 activeVault / lastVault 不是这个账号的镜像 → 什么都不改。回是否改了。
+ *  mirrorDir / isManaged 由调用方递(cloudPaths 依赖本文件)。 */
+export function migrateMirrorActiveVault(
+  accountId: string | null,
+  mirrorDir: (accountId: string) => string,
+  isManaged: (root: string) => boolean,
+): Promise<boolean> {
+  const work = writes.then(async () => {
+    if (!accountId) return false
+    await settleLoading()
+    const disk = await storedConfigStrict()
+    if (disk.activeVault !== undefined && disk.activeVault !== null) return false
+    const last = disk.lastVault
+    if (typeof last !== 'string' || !last || !sameDir(last, mirrorDir(accountId))) return false
+    const key = cloudAccountNamespace(accountId)
+    const vaultId = disk.cloudAccounts?.[key]?.cloudSync?.vaultId
+    const ref = parseOnlineVaultRef({ kind: 'online', account: key, libraryId: vaultId, vaultId, prefix: 'Amadeus/', name: 'My Vault' })
+    if (!ref) return false // 缺 vaultId(或不是合法 id)
+    const out: StoredConfig = { ...disk, activeVault: ref }
+    const local = disk.localVault
+    // 本机库那一格得是还在的真目录:删掉了、或同路径上是个普通文件,都去掉 lastVault,让启动回落建默认库
+    const isDir = typeof local === 'string' && !!local && !isManaged(local) && await fs.stat(local).then((st) => st.isDirectory(), () => false)
+    if (isDir) out.lastVault = local
+    else delete out.lastVault
+    await writeStored(out)
+    return true
   })
   writes = work.then(() => {}, () => {})
   return work

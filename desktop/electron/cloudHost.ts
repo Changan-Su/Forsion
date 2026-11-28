@@ -59,6 +59,12 @@ export interface CloudHost {
   }
   /** 智库同步第 2 步起(可选):「同步到哪」(契约 §3.4、§3.8 D、实现期修订 H-1 第 1–4 条;syncTargets.ts)。凭据留在宿主,Extend 只拿句柄。 */
   syncTargets?: import('./syncTargets').SyncTargetsSeam
+  /** 智库同步第 3 步起(可选,H3 定稿第 2 节):在主窗里打开一个在线库。ref 由 Extend 用自己的库清单解析好,宿主不查服务器。
+   *  宿主核账号、聚焦主窗、发 amadeus:open-online,等主窗那份文档用同一个 ref + 同一个 requestId 调 amadeus:active-vault:set(≤ 30 秒)才 resolve。
+   *  失败抛固定码:invalid_ref / account_changed / no_main_window / renderer_unsupported / switch_failed / switch_timeout。老宿主没有 → 不画「在线打开」。 */
+  openLibrary?(ref: import('@amadeus-shared/ipc').OnlineVaultRef): Promise<void>
+  /** 同步读:主窗渲染层报过 amadeus:online-capable(装好了转发壳)。U3a 之前恒为 false。 */
+  canOpenOnline?(): boolean
   /** 当前账号的云端基址(无尾斜杠)与 token(空串=未登录)。token 只在主进程流转,绝不下发渲染层。 */
   getCloud(): Promise<{ base: string; token: string }>
   /** 等价 ipcMain.handle;宿主记下通道名,preload 据此只保留有人接的桥键(cloud:present)。 */
