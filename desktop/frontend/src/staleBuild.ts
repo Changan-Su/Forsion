@@ -89,10 +89,10 @@ function showPrompt(): void {
   bar.id = BAR_ID
   bar.setAttribute('role', 'alert')
   const dark = document.documentElement.dataset.mode === 'dark'
-  bar.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483647;display:flex;gap:12px;align-items:center;'
+  bar.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:var(--z-palette,2147483647);display:flex;gap:12px;align-items:center;'
     + 'box-sizing:border-box;max-width:calc(100vw - 32px);padding:10px 10px 10px 16px;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;'
-    + `border-radius:var(--radius-md,10px);border:1px solid var(--border,${dark ? '#3a3a3a' : '#e4e1da'});`
-    + `background:var(--surface-float,${dark ? '#2a2a2a' : '#ffffff'});color:var(--text,${dark ? '#f2efe8' : '#1c1c1c'});box-shadow:0 6px 24px rgba(0,0,0,.18)`
+    + `border-radius:var(--radius-md,12px);border:1px solid var(--border,${dark ? '#3a3a3a' : '#e4e1da'});`
+    + `background:var(--surface-float,${dark ? '#2a2a2a' : '#ffffff'});color:var(--text,${dark ? '#f2efe8' : '#1c1c1c'});box-shadow:var(--card-shadow,0 6px 24px rgba(0,0,0,.18))`
   const text = document.createElement('span')
   text.textContent = translate('app.staleBuild.text')
   const btn = document.createElement('button')

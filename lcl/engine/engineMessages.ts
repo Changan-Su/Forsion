@@ -71,6 +71,8 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
 
   // 命令面板 / Mini Panel / 移动单列壳
   'lcl.palette.pickCommand': { zh: '选择要添加的命令…', en: 'Pick a command to add…' },
+  'lcl.palette.addToRibbon': { zh: '将「{command}」添加到侧边命令区', en: 'Add “{command}” to the sidebar command area' },
+  'lcl.palette.addedToRibbon': { zh: '「{command}」已添加到侧边命令区', en: '“{command}” is already in the sidebar command area' },
   'lcl.palette.pairHint': { zh: '同时按左右两个 {key}', en: 'Press both {key} keys together' },
   'lcl.mini.switchSpace': { zh: '切换 Space', en: 'Switch Space' },
   'lcl.mini.showMain': { zh: '在主面板显示', en: 'Show in main panel' },

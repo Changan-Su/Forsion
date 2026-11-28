@@ -240,6 +240,15 @@ function tapRes(list, id) {
   assert.ok(n, `no ${id} on screen`)
   h.tapNode(n)
 }
+/** tapRes, and once more if the same button is still up a moment later: a tap while a dialog slides in can be lost
+ *  (seen on a loaded x86_64 emulator). Only for a dialog that is not expected to come straight back. */
+async function tapResSure(list, id) {
+  tapRes(list, id)
+  await h.pause(1500)
+  let again = null
+  try { again = h.nodes(OUT).find((x) => x['resource-id'] === id) } catch { /* between windows */ }
+  if (again) { note(`the tap on ${id.split('/').pop()} was lost — tapping again`); h.tapNode(again) }
+}
 /** Wait until the dialog of this kind is gone (the next one may already be up). */
 async function waitNoDialog(kind = null, timeout = 6000) {
   const r = await h.waitNodes((l) => { const d = readDialog(l); return !d || (kind && d.kind !== kind) }, { timeout })
@@ -401,7 +410,7 @@ const tapPrimary = () => tapEl("document.querySelector('.ob-shell.ob-flow [data-
       const d = await waitDialog(15000)
       assert.ok(d && d.kind === 'notify', `notification dialog expected, got ${d && d.kind}`)
       note(`D1 dialog kind=${d.kind} pkg=${d.pkg} top=${d.top} msg="${d.msg}" buttons=[${d.buttons.join(', ')}]`)
-      tapRes(d.list, 'com.android.permissioncontroller:id/permission_deny_button')
+      await tapResSure(d.list, 'com.android.permissioncontroller:id/permission_deny_button')
       await waitNoDialog()
       await h.pause(1500)
       const w = await wizard()
@@ -561,9 +570,10 @@ const tapPrimary = () => tapEl("document.querySelector('.ob-shell.ob-flow [data-
     })
     await check('E2 only the done key (what other benches seed): no wizard at all', async () => {
       await freshSignedIn({ forsion_tangu_onboarding_done: '1' })
-      await h.pause(5000)
-      const shell = await cdp.eval("!!document.querySelector('.hp-root, .mb-shell')")
+      // a cold start after pm clear can take well over 5 s on a loaded emulator
+      const shell = await h.waitPage(cdp, "!!document.querySelector('.hp-root, .mb-shell')", 20000)
       assert.ok(shell, 'app shell not mounted')
+      await h.pause(1500) // a wizard that would show comes up with the shell
       assert.equal(await cdp.eval("!!document.querySelector('.ob-shell.ob-flow')"), false, 'a wizard showed')
     })
   }
@@ -578,15 +588,13 @@ const tapPrimary = () => tapEl("document.querySelector('.ob-shell.ob-flow [data-
       h.adb('shell', 'pm', 'grant', PKG, 'android.permission.RECORD_AUDIO')
       await h.pause(1000)
       note(`F1 native ${JSON.stringify(await nativeStatus())}`)
-      // open settings through the account menu (top bar)
-      let list = h.nodes(OUT)
-      if (!h.byId(list, 'nativeChrome.account') && h.byId(list, 'nativeChrome.left')) { h.tapNode(h.byId(list, 'nativeChrome.left')); await h.pause(1200); list = h.nodes(OUT) }
-      const acct = h.byId(list, 'nativeChrome.account')
-      assert.ok(acct, 'no account button to reach settings')
-      h.tapNode(acct)
-      const sheet = await h.waitNodes((l) => h.byId(l, 'nativeSheet.item.rb-settings'), { timeout: 8000 })
-      assert.ok(sheet.hit, 'account sheet has no settings item')
-      h.tapNode(sheet.hit)
+      // open settings through the dock's Me page (since #768 the account entry is there, not in the top bar)
+      const meCell = await h.waitNodes((l) => h.byId(l, 'nativeChrome.space.@me'), { timeout: 20000 }) // a cold start after pm clear
+      assert.ok(meCell.hit, 'no "Me" cell in the dock to reach settings')
+      h.tapNode(meCell.hit)
+      const settingsRow = `document.querySelector('.mb-phonepage[data-phone-page="me"] [data-row="rb-settings"]')`
+      assert.ok(await h.waitPage(cdp, `!!${settingsRow}`, 8000), 'the Me page has no settings row')
+      await tapEl(settingsRow)
       assert.ok(await h.waitPage(cdp, "!!document.querySelector('.settings-page--mobile')", 8000), 'settings did not open')
       await h.pause(1200)
       const rows = await cdp.eval("[...document.querySelectorAll('.settings-mobile-row')].map((e) => e.querySelector('strong')?.textContent.trim())")
@@ -608,7 +616,13 @@ const tapPrimary = () => tapEl("document.querySelector('.ob-shell.ob-flow [data-
         if (d) {
           note(`F1 ask #${i} buttons=[${d.buttons.join(', ')}]`)
           const deny = d.list.find((n) => /permission_deny_and_dont_ask_again_button$/.test(n['resource-id'] || '')) || d.list.find((n) => /permission_deny_button$/.test(n['resource-id'] || ''))
-          assert.ok(deny, 'no deny button'); h.tapNode(deny); await waitNoDialog(d.kind)
+          assert.ok(deny, 'no deny button'); h.tapNode(deny)
+          // a tap while the dialog is still sliding in can be lost (seen on an x86_64 emulator): once more if it is still up
+          await h.pause(1500)
+          const nowList = h.nodes(OUT), again = readDialog(nowList)
+          const denyAgain = again && again.kind === d.kind && nowList.find((n) => /permission_deny(_and_dont_ask_again)?_button$/.test(n['resource-id'] || ''))
+          if (denyAgain) { note(`F1 ask #${i}: the tap on deny was lost — tapping again`); h.tapNode(denyAgain) }
+          await waitNoDialog(d.kind)
         }
         await h.pause(1500)
         note(`F1 after ask #${i}: rows ${JSON.stringify(await states())} native ${JSON.stringify(await nativeStatus())}`)
