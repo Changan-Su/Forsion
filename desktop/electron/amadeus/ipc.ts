@@ -20,7 +20,8 @@ export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, readConfig, readSyncOwnershipV2, updateConfig, writeConfig, type AmadeusConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, readConfig, readSyncOwnershipV2, updateConfig, updateLocalVaultConfig, writeConfig, type AmadeusConfig } from './settings'
+import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
 import { externalCreations } from '../productTrust'
@@ -336,7 +337,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   const switchLocalVault = async (root: string): Promise<Awaited<ReturnType<typeof activateRoot>>> => {
     if (isManagedCloudVault(root)) throw new Error('cloud-vault-forbidden')
     if (!(await fs.stat(root).then((s) => s.isDirectory(), () => false))) throw new Error('vault-missing')
-    await updateConfig((cfg) => { Object.assign(cfg, switchPatch(normalizeLocal(cfg, isManagedCloudVault), root)) })
+    // 切本机库 = 不再恢复在线库:和 switchPatch 同一次落盘清掉 activeVault(H3 定稿第 2 节)
+    const leftOnline = await updateLocalVaultConfig((cfg) => { Object.assign(cfg, switchPatch(normalizeLocal(cfg, isManagedCloudVault), root)) })
+    if (leftOnline) notifyWindows(ACTIVE_VAULT_IPC.changed, { ref: null })
     while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites])
     return activateRoot(root, true) // 同步跑到 vault.setRoot
   }

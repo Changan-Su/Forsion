@@ -150,7 +150,8 @@ import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { gatePluginManifest } from '@amadeus-shared/ipc'
-import { readConfig as readAmadeusConfig, readSyncOwnershipV2, writeSyncOwnershipV2 } from './amadeus/settings'
+import { currentCloudAccountId as currentAmadeusAccountId, readConfig as readAmadeusConfig, readSyncOwnershipV2, writeSyncOwnershipV2 } from './amadeus/settings'
+import { createActiveVaultHost, migrateLegacyMirrorVault } from './amadeus/activeVault'
 import { syncVaultRoot } from './amadeus/vaultList'
 import { legacyRemoteSync, registerRemoteSync } from './remotesyncIpc'
 import { createSyncTargets, registerSyncTargetsIpc } from './syncTargets'
@@ -1263,6 +1264,14 @@ let restartAmadeusSync: (() => Promise<void>) | null = null
 let stopAmadeusSync: (() => Promise<void>) | null = null
 // Amadeus 云同步引擎住在 Forsion Extend(0.4 起):Extend 装载时登记工厂,registerAmadeusIpc 里 vault 建好后再调(amadeus/cloudSeam.ts)
 let amadeusSyncFactory: AmadeusSyncFactory | null = null
+// 在线库(智库同步第 3 步 H3):active-vault IPC + CloudHost.openLibrary / canOpenOnline 共用这一份状态(amadeus/activeVault.ts)
+const activeVaultHost = createActiveVaultHost({
+  isTrusted: isTrustedSender,
+  mainContents: () => (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed() ? mainWindow.webContents : null),
+  focusMain: () => showMainWindow(),
+  accountId: () => currentAmadeusAccountId(),
+  broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send(channel, payload) },
+})
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
 /** 本机名册 id 的记忆(units:hostStatus.selfUnitId;互联关着时 unitHub.status().unitId 是 null)。 */
@@ -3949,6 +3958,9 @@ app.whenReady().then(async () => {
     await seedBuiltinBundles(join(forsionHomeDir(), 'plugins'), bundleSources, { appVersion: app.getVersion() })
       .catch((e) => console.warn('[builtin-plugins] 播种失败(忽略):', (e as Error)?.message))
     if (firstBootPrefetch !== 'skipped') corePluginUpdater.reset()
+    // 在线库:老配置迁移(lastVault 停在这个账号的云镜像 → activeVault)必须早于 Extend 装载和第一个窗口;失败只记日志、不改配置
+    await migrateLegacyMirrorVault(currentAmadeusAccountId()).catch((e) => console.warn('[amadeus] active vault migration skipped:', (e as Error)?.message))
+    activeVaultHost.register(ipcMain)
     const host: CloudHost = {
       getCloud: async () => {
         const stored = await loadConfig()
@@ -4033,6 +4045,9 @@ app.whenReady().then(async () => {
       },
       // ── 智库同步第 2 步:「同步到哪」(凭据留在宿主,Extend 只拿句柄;接手旧 remotesync 的封口 / 归档也在这里)──
       syncTargets: createSyncTargets(),
+      // ── 智库同步第 3 步:在主窗里打开在线库(amadeus/activeVault.ts)──
+      openLibrary: (ref) => activeVaultHost.openLibrary(ref),
+      canOpenOnline: () => activeVaultHost.canOpenOnline(),
     }
     // 插件页停用了的:不装主进程半身 —— 与没装 Extend 同一个形态(cloud:present 空,云端界面整套隐藏)。
     const off = (await loadConfig()).disabledBundles

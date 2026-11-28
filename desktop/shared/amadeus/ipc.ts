@@ -790,6 +790,20 @@ export interface TagCount {
   total?: number
 }
 
+/** An online library opened in place of a local vault (desktop only; vault sync step 3).
+ *  `account` = sha256 of the Forsion account id (the host's cloudAccountNamespace). */
+export interface OnlineVaultRef {
+  kind: 'online'
+  account: string
+  libraryId: string
+  vaultId: string
+  /** Content prefix: 'Amadeus/' or 'Amadeus/<name>/'. */
+  prefix: string
+  name: string
+}
+/** `ref` null = open the local vault. `fallback` = an online library was saved for another (or no) account. */
+export interface ActiveVaultRead { ref: OnlineVaultRef | null; fallback: null | { reason: 'account'; name: string } }
+
 /** One row of the bottom vault menu. `current` = open on the local side. */
 export interface LocalVaultRow {
   root: string
@@ -861,6 +875,17 @@ export interface AmadeusApi {
   /** Drop a row from the list (files stay). False for the open vault or the sync vault. */
   forgetVault?(root: string): Promise<boolean>
   revealVault?(root: string): Promise<void>
+  /** Online library (desktop host only). Read throws when the config can't be read; open `lastVault` then. */
+  activeVaultGet?(): Promise<ActiveVaultRead>
+  /** Call after the bridge switched; throws `account_changed` for another account's ref. null = back to local. */
+  activeVaultSet?(ref: OnlineVaultRef | null): Promise<void>
+  onActiveVaultChanged?(cb: (e: { ref: OnlineVaultRef | null }) => void): () => void
+  /** Main window only: the host asks to open this library (CloudHost.openLibrary). */
+  onOpenOnline?(cb: (req: { ref: OnlineVaultRef; requestId: string }) => void): () => void
+  /** Report a failed open-online request; success is the matching activeVaultSet. */
+  openOnlineResult?(r: { requestId: string; ok: boolean; code?: string }): void
+  /** Main window: the forwarding bridge is installed, so the host may ask for online opens. */
+  onlineCapable?(): void
   listPages(): Promise<string[]>
   /** All non-page files (attachments/.db/…), vault-relative — for the vault tree. */
   listFiles(): Promise<string[]>
