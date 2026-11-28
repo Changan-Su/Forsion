@@ -14,6 +14,8 @@ export function syncErrorText(err: string, t: T, name = ''): string {
   if (code === 'entry_sync_active') return t('ssync.err.entryActive')
   if (code === 'scope_unreadable') return t('ssync.err.unreadable')
   if (code === 'stale') return t('ssync.stale')
+  if (code === 'name_exists') return t('ssync.err.nameExists', { name })
+  if (code === 'legacy_rename_unavailable') return t('ssync.act.renameCloudLegacy')
   if (code === 'target-location-changed') return t('ssync.targetChanged')
   if (OVERLAP.has(code)) return t('ssync.err.overlap')
   return t('ssync.err.generic', { error: ipcErrorText(err) })

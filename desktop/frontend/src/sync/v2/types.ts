@@ -71,6 +71,8 @@ export interface BindingView {
   role: BindingRole
   status: BindingStatusView
   takeoverCard?: { adopted: number; filled: number; held: number; revived: number }
+  /** state = needs-rename-answer 时:改名前的文件夹名(「你把 X 改成了 Y」)。 */
+  renamedFrom?: string
 }
 
 export interface TakeoverView { root: string; source: 'entry' | 'content-active' | 'content-off' | 'remotesync'; phase: string; lastError?: string; reason?: BindingReason }
@@ -102,9 +104,11 @@ export interface VaultSyncGet {
 export type ResolveCandidate = { kind: 'own'; vaultId: string; name: string } | { kind: 'legacy'; vaultId: string; prefix: string; name?: string }
 export interface ResolveNameResult { candidates: ResolveCandidate[]; error?: 'reserved' | 'server_unsupported' | 'invalid_name' }
 
-/** candidate 缺 = 沿用已有绑定的去处(改范围);`{kind:'new'}` 是契约 U-1 第 1 条(E 还没做)。 */
+/** 按文件夹名新建一个蓬洲云库(名字 = 库文件夹名;apply 时才建,撞名回 stale,重新 preview 回 name_exists)。契约 U-1 第 1 条,E 已做。 */
+export type CreateCandidate = { kind: 'create' }
+/** candidate 缺 = 沿用已有绑定的去处(改范围)。 */
 export type PreviewTarget =
-  | { kind: 'penzor'; candidate?: ResolveCandidate | { kind: 'new'; name: string } }
+  | { kind: 'penzor'; candidate?: ResolveCandidate | CreateCandidate }
   | { kind: 'remote'; targetId: string; dir?: string; direction?: SyncDirection }
 export interface VaultSyncPreviewArgs { root: string; target: PreviewTarget; scope: BindingScope; bindingId?: string }
 export interface VaultSyncPreview {

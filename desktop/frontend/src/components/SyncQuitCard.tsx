@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import { useI18n } from '../i18n'
+import { windowKind } from '../windowKind'
 import { DialogOverlay } from '../amadeus/components/DialogOverlay'
 import './syncSettingsMessages'
 import './syncSettings.css'
@@ -23,12 +24,13 @@ export function SyncQuitCard() {
   const { t } = useI18n()
   const [s, setS] = useState<{ open: boolean; result?: QuitGateResult }>({ open: false })
   const [busy, setBusy] = useState(false)
+  const main = windowKind() === 'main'
   useEffect(() => {
     const g = gate()
-    if (!g) return
+    if (!g || !main) return
     return g.subscribe((next) => { setS(next); if (!next.open) setBusy(false) })
-  }, [])
-  if (!s.open) return null
+  }, [main])
+  if (!main || !s.open) return null
   const r = s.result
   const failed = r?.state === 'failed'
   const answer = (a: 'quit' | 'cancel'): void => {

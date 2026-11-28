@@ -32,7 +32,8 @@ registerMessages({
   'ssync.target.noCas': { zh: '这个网盘不支持条件写入：重读和写入之间还有很短的空档', en: 'This drive has no conditional writes, so there is a short gap between re-reading and writing' },
   'ssync.target.legacyPlace': { zh: '云端位置：「云端笔记」里的「{name}」文件夹', en: 'In the cloud: the “{name}” folder in Cloud notes' },
   // 打开同步时的几种结果
-  'ssync.err.noCloudVault': { zh: '云端还没有叫「{name}」的库，新建库要等下一版', en: 'There’s no “{name}” vault in the cloud yet. Creating new vaults comes in the next version' },
+  'ssync.err.nameExists': { zh: '云端已经有叫「{name}」的库了，换个文件夹名再试', en: 'The cloud already has a vault called “{name}”. Rename the folder and try again' },
+  'ssync.note.renamedFrom': { zh: '你把「{from}」改成了「{to}」，同步先停下了。云端那个库要怎么办？', en: 'You renamed “{from}” to “{to}”, so syncing paused. What should happen to the cloud vault?' },
   'ssync.err.reserved': { zh: '「{name}」这个名字留给云端笔记，换个文件夹名再同步', en: '“{name}” is reserved for Cloud notes. Rename the folder to sync it' },
   'ssync.err.invalidName': { zh: '这个文件夹名云端不收，换个名字再同步', en: 'The cloud can’t take this folder name. Rename it to sync' },
   'ssync.err.serverOld': { zh: '云端暂不支持多个库', en: 'The cloud doesn’t support more than one vault yet' },

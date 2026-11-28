@@ -160,8 +160,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     if (r.ok && r.value) { setPending({ ...p, preview: r.value, candidates: undefined }); return }
     setPending(null)
     const err = r.ok ? 'empty' : r.error
-    // 新建库(契约 U-1 第 1 条)E 还没做:按「云端还没有这个名字的库」说
-    say(p.root, p.kind === 'new' ? t('ssync.err.noCloudVault', { name: p.name }) : syncErrorText(err, t, p.name))
+    say(p.root, syncErrorText(err, t, p.name))
   }, [t])
 
   /** 打开同步(没有绑定的库):按名字找云端 → 一个候选直接比 / 几个候选让人挑 / 没有就新建(U-1 第 1 条)。 */
@@ -178,7 +177,8 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     const base = { root, name, scope, added, preview: null }
     if (res.candidates.length > 1) { setPending({ ...base, kind: 'cloud', target: { kind: 'penzor' }, candidates: res.candidates }); return }
     const c = res.candidates[0]
-    await runPreview(c ? { ...base, kind: 'cloud', target: { kind: 'penzor', candidate: c } } : { ...base, kind: 'new', target: { kind: 'penzor', candidate: { kind: 'new', name } } })
+    // 云端没有同名的:按文件夹名新建(apply 时才建,契约 U-1 第 1 条)
+    await runPreview(c ? { ...base, kind: 'cloud', target: { kind: 'penzor', candidate: c } } : { ...base, kind: 'new', target: { kind: 'penzor', candidate: { kind: 'create' } } })
   }, [names, runPreview, t])
 
   /** 已有绑定扩大范围:预演新范围 → 汇总卡(kind scope)。 */
@@ -206,7 +206,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     if (!r.ok && /stale/.test(r.error)) { await runPreview({ ...pending, note: t('ssync.stale') }); return }
     const p = pending
     setPending(null)
-    say(p.root, r.ok ? t('ssync.started', { name: p.name }) : (p.kind === 'new' ? t('ssync.err.noCloudVault', { name: p.name }) : syncErrorText(r.error, t, p.name)))
+    say(p.root, r.ok ? t('ssync.started', { name: p.name }) : syncErrorText(r.error, t, p.name))
     refreshVaultSync()
     await reload()
   }
@@ -267,6 +267,12 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
             }}
             onScope={(b, next, added) => void changeScope(b, next, added)}
             onPair={(b) => void runPreview({ root: b.root, name: b.name, kind: 'cloud', bindingId: b.id, target: { kind: 'penzor' }, scope: b.scope, added: [], preview: null })}
+            onNewVault={(b) => void (async () => {
+              // 改名后「当成新库上云」:引擎回 next: preview → 按新文件夹名预演一个新库,汇总卡确认了才建、换过去(旧库原样留着)
+              const res = await vaultSync.renameAnswer(b.id, 'newVault')
+              if (!res.ok) { say(r.root, syncErrorText(res.error, t, r.name)); return }
+              await runPreview({ root: b.root, name: r.name, kind: 'new', bindingId: b.id, target: { kind: 'penzor', candidate: { kind: 'create' } }, scope: b.scope, added: [], preview: null })
+            })()}
             reload={reload} say={(text) => say(r.root, text)} onRecovery={() => setRecKey((k) => k + 1)} />
         ),
       })),
@@ -369,7 +375,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
 }
 
 /** 一个库一行:名字 / 位置 · 状态 · 同步到 · 范围 · 开关;下面挂提示、要你选的、等你定、接手卡。 */
-function VaultRow({ row, binding: b, data, names, message, busy, expanded, entries, v2, onExpand, onToggle, onScope, onPair, reload, say, onRecovery }: {
+function VaultRow({ row, binding: b, data, names, message, busy, expanded, entries, v2, onExpand, onToggle, onScope, onPair, onNewVault, reload, say, onRecovery }: {
   row: { root: string; name: string; display: string; current: boolean; exists: boolean }
   binding: BindingView | undefined
   data: VaultSyncGet
@@ -383,6 +389,7 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
   onToggle: (on: boolean) => Promise<void>
   onScope: (b: BindingView, next: BindingScope, added: ScopeItem[]) => void
   onPair: (b: BindingView) => void
+  onNewVault: (b: BindingView) => void
   reload: () => Promise<void>
   say: (text: string | null) => void
   onRecovery: () => void
@@ -392,10 +399,8 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
   const words = vaultSyncWords(view, view.now, t)
   const [toggling, setToggling] = useState(false)
   const on = !!b?.enabled
-  // 没绑定、云端没有同名(E 还不会新建库,契约 U-1 第 1 条):开关灰掉,写明原因
-  const blocked = !b && names && 'candidates' in names && !names.error && names.candidates.length === 0
-    ? t('ssync.err.noCloudVault', { name: row.name })
-    : !b && names && 'candidates' in names && names.error ? syncErrorText(names.error, t, row.name) : null
+  // 没绑定、名字云端不收(保留名 / 非法 / 老服务端):开关灰掉,写明原因;云端没有同名的照样能开(新建库)
+  const blocked = !b && names && 'candidates' in names && names.error ? syncErrorText(names.error, t, row.name) : null
   const take = data.takeover.find((x) => x.root === row.root)
   const act = async (fn: () => Promise<{ ok: boolean; error?: string }>): Promise<void> => {
     const r = await fn()
@@ -455,12 +460,12 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
       )}
       {b?.state === 'needs-rename-answer' && (
         <div className="ssync-note ssync-ask">
-          <span>{t('ssync.note.renamed')}</span>
+          <span>{b.renamedFrom ? t('ssync.note.renamedFrom', { from: b.renamedFrom, to: row.name }) : t('ssync.note.renamed')}</span>
           <div className="ssync-ask-acts">
             {b.target.kind === 'penzor' && b.target.placement === 'own'
               ? <button type="button" className="btn primary sm" onClick={() => void act(() => vaultSync.renameAnswer(b.id, 'renameCloud'))}>{t('ssync.act.renameCloud')}</button>
               : <button type="button" className="btn sm" disabled title={t('ssync.act.renameCloudLegacy')}>{t('ssync.act.renameCloud')}</button>}
-            <button type="button" className="btn sm" onClick={() => void act(() => vaultSync.renameAnswer(b.id, 'newVault'))}>{t('ssync.act.newVault')}</button>
+            <button type="button" className="btn sm" onClick={() => onNewVault(b)}>{t('ssync.act.newVault')}</button>
             <button type="button" className="btn sm" onClick={() => void act(() => vaultSync.renameAnswer(b.id, 'pause'))}>{t('ssync.act.pause')}</button>
           </div>
         </div>
@@ -512,6 +517,13 @@ function ScopeEditor({ binding: b, current, entries, onScope }: {
       {!current && <div className="ssync-faint ssync-note">{t('ssync.scope.otherVault')}</div>}
       {current && entries && (
         <div className="ssync-scope-list">
+          {/* 右键加进来的那一项和它的关联项多半不在顶层:照样列出来、勾着(可以单独去掉) */}
+          {b.scope.mode === 'some' && b.scope.items.filter((it) => !entries.some((e) => e.path === it.path)).map((it) => (
+            <label key={`x:${it.path}`} className="ssync-scope-item" title={it.path} data-scope-extra="">
+              <input type="checkbox" checked onChange={() => toggle(it, false)} />
+              <span>{it.kind === 'folder' ? it.path : it.path.replace(/\.md$/i, '')}</span>
+            </label>
+          ))}
           {entries.map((it) => {
             const covered = !!scopeCovers(b.scope, it.path)
             return (

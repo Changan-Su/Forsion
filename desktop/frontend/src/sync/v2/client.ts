@@ -70,7 +70,8 @@ export const vaultSync = {
   resolve: (ref: HeldRef, action: HeldAction) => call<{ ok: true; recoveryEventId?: string }>(CH.resolve, { ref, action }),
   deletesConfirm: (bindingId: string, token: string) => call<void>(CH.deletesConfirm, { bindingId, token }),
   deletesAbandon: (bindingId: string, token: string) => call<void>(CH.deletesAbandon, { bindingId, token }),
-  renameAnswer: (bindingId: string, choice: 'renameCloud' | 'newVault' | 'pause') => call<void>(CH.renameAnswer, { bindingId, choice }),
+  /** newVault 回 { next: 'preview' }:界面接着用 { kind: 'create' } 预演、出汇总卡(apply 时才建新库)。 */
+  renameAnswer: (bindingId: string, choice: 'renameCloud' | 'newVault' | 'pause') => call<{ next?: 'preview' } | void>(CH.renameAnswer, { bindingId, choice }),
   choose: (bindingId: string, choice: 'primary' | 'backup' | 'off') => call<void>(CH.choose, { bindingId, choice }),
   setCadence: (c: Cadence) => call<void>(CH.setCadence, c),
   recoveryList: (since?: number) => call<RecoveryEventView[]>(CH.recoveryList, since ? { since } : {}),
