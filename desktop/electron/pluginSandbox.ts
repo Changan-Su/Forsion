@@ -233,6 +233,8 @@ export interface SandboxDeps {
   log(msg: string): void
   /** 闲置多久自动停(缺省 15 分钟;测试注入)。 */
   idleMs?: number
+  /** 闲置检查的间隔(缺省 1 分钟,单测调小)。自停前提前一个间隔在沙箱窗口里提示。 */
+  idleTickMs?: number
   /** 槽位的父目录(缺省 sandbox = 开发沙箱;演示舞台另起一个实例,用 stages)。 */
   base?: SandboxBase
 }
@@ -278,10 +280,11 @@ const CHILD_OPS = new Set(['read', 'click', 'type', 'press', 'scroll', 'space', 
 export type SandboxChildEvent =
   | { event: 'report'; note: string; sessionId?: string; pluginId: string; name: string }
   | { event: 'install'; pluginId: string; force?: boolean }
-  | { event: 'reset'; pluginId: string }
+  /** gen = 发出这个按钮的那一个沙箱:排队的工夫被换成了新的一个,就不动新的(11-28 评审)。 */
+  | { event: 'reset'; pluginId: string; gen?: number }
   /** 沙箱窗口回执卡上的「在我的 Forsion 打开」/「关闭沙箱」(11-28)。 */
   | { event: 'openHost'; pluginId: string; settings?: boolean }
-  | { event: 'close'; pluginId: string }
+  | { event: 'close'; pluginId: string; gen?: number }
   | { event: 'forward'; kind: 'url' | 'file'; value: string }
 
 interface Child {
@@ -309,6 +312,8 @@ interface Child {
   installed?: SandboxInstalled | null
   refreshing?: Promise<void> | null
   again?: boolean
+  /** 闲置自停的提示已经推给沙箱窗口的时刻(0 = 没在提示)。 */
+  idleWarnAt?: number
   /** 第几个沙箱(进程级递增):确认框 / 安装 / 回执都绑在点按钮那一刻的这一个上,重置换了一个就不算数。 */
   gen: number
 }
@@ -322,6 +327,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
   let child: Child | null = null
   let disposed = false
   const idleMs = deps.idleMs ?? 15 * 60_000
+  const idleTick = deps.idleTickMs ?? 60_000
   const folder: SandboxBase = deps.base ?? 'sandbox'
 
   // 起 / 停 / 重置 / 安装 / 闲置停 / 退出排成一队,一件做完再做下一件:agent、卡片、沙箱窗口三处都能点,
@@ -370,6 +376,11 @@ export function createPluginSandbox(deps: SandboxDeps) {
 
   /** 父 → 子的通知(id 0:子进程不回)。 */
   const installedOfInflight = new Map<string, Promise<SandboxInstalled | null>>()
+  /** 有人用了(agent 的动作、用户切进窗口、点「继续用」):闲置从头算,正在提示的「快自动停了」收回去。 */
+  const touch = (c: Child): void => {
+    c.lastUsed = Date.now()
+    if (c.idleWarnAt) { c.idleWarnAt = 0; push(c, 'idleWarn', { on: false }) }
+  }
   const push = (c: Child, op: string, args: Record<string, unknown>): void => {
     try { if (c.sock && !c.exited) c.sock.write(JSON.stringify({ id: 0, op, args }) + '\n') } catch { /* 通道断了 */ }
   }
@@ -432,7 +443,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
         const reloaded = !!c.status && st.loads !== c.status.loads
         st.installed = c.installed ?? null
         c.status = st
-        if (st.windowVisible || was) c.lastUsed = Date.now()
+        if (st.windowVisible || was) touch(c)
         changed()
         if (reloaded) void refreshInstalled(c)
       }
@@ -444,7 +455,9 @@ export function createPluginSandbox(deps: SandboxDeps) {
     }
     if (ev === 'install') deps.onChildEvent({ event: 'install', pluginId: c.manifest.pluginId, ...(msg.force === true ? { force: true } : {}) })
     if (ev === 'openHost') deps.onChildEvent({ event: 'openHost', pluginId: c.manifest.pluginId, ...(msg.settings === true ? { settings: true } : {}) })
-    if (ev === 'reset' || ev === 'close') deps.onChildEvent({ event: ev, pluginId: c.manifest.pluginId })
+    if (ev === 'reset' || ev === 'close') deps.onChildEvent({ event: ev, pluginId: c.manifest.pluginId, gen: c.gen })
+    // 闲置提示上的「继续用」(子进程只在沙箱窗口有焦点时才转过来,插件代码在后台续不了命)
+    if (ev === 'keepAlive') touch(c)
     if (ev === 'forward' && (msg.kind === 'url' || msg.kind === 'file') && typeof msg.value === 'string') deps.onChildEvent({ event: 'forward', kind: msg.kind, value: msg.value.slice(0, 4096) })
   }
 
@@ -599,12 +612,17 @@ export function createPluginSandbox(deps: SandboxDeps) {
     const queued = (fn: () => Promise<SandboxResult>): Promise<SandboxResult> =>
       serial(() => (expired() ? Promise.resolve({ ok: false, code: 'error', error: 'timed out waiting for another sandbox action' }) : fn().catch(fail)))
     try {
-      if (op === 'start') return await revealed(queued(() => start(typeof args.dir === 'string' ? args.dir : '', origin.sessionId)), origin.reveal)
+      if (op === 'start') {
+        const r = await revealed(queued(() => start(typeof args.dir === 'string' ? args.dir : '', origin.sessionId)), origin.reveal)
+        // 同一个插件再 start = 就地重载,还是原来那个沙箱:算用过,正挂着的「快自动停了」收回(11-28 评审)
+        if (r.ok && child && !child.exited) touch(child)
+        return r
+      }
       if (op === 'stop') return await queued(async () => { await stop(); return { ok: true, text: JSON.stringify({ stopped: true }) } })
       if (op === 'reset') return await revealed(queued(reset), origin.reveal)
       const c = child && !child.exited ? child : null
       if (!c || !c.sock) return { ok: false, code: 'no_sandbox', error: 'no sandbox is running' }
-      c.lastUsed = Date.now()
+      touch(c)
       if (op === 'status' || op === 'logs') return ok(await readStatus(c))
       if (op === 'screenshot') {
         const view = typeof args.view === 'string' ? args.view : undefined
@@ -670,7 +688,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
     return serial(async () => {
       const c = child && !child.exited ? child : null
       if (!c || !c.sock) throw new SandboxError('no_sandbox', 'no sandbox is running')
-      c.lastUsed = Date.now()
+      touch(c)
       return request(c, op, args, timeoutMs)
     })
   }
@@ -681,7 +699,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
   function rawNow(op: string, args: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
     const c = child && !child.exited ? child : null
     if (!c || !c.sock) return Promise.reject(new SandboxError('no_sandbox', 'no sandbox is running'))
-    c.lastUsed = Date.now()
+    touch(c)
     return request(c, op, args, timeoutMs)
   }
 
@@ -696,7 +714,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
   async function show(): Promise<boolean> {
     const c = child && !child.exited ? child : null
     if (!c) return false
-    c.lastUsed = Date.now()
+    touch(c)
     const reply = await request(c, 'show').catch(() => null)
     if (deps.focusWindow) {
       const hwnd = reply?.hwnd
@@ -754,27 +772,38 @@ export function createPluginSandbox(deps: SandboxDeps) {
   }
 
   // 闲置自动停:沙箱窗口不在前台、15 分钟没人用(agent 没调、用户没切进去过)。只有一份新鲜的「在前台」才留它;
-  // 状态要不回来(插件把渲染层卡死了)也停
+  // 状态要不回来(插件把渲染层卡死了)也停。停前一个检查间隔(1 分钟)先在沙箱窗口里提示「快自动停了」(11-28 细节页第 4 条):
+  // 胶囊换字 + 一张「继续用 / 停掉」;提示推出去满一个间隔才真停,用户切回来正好看得到
   const idle = setInterval(() => {
     const c = child
-    if (!c || c.exited || Date.now() - c.lastUsed < idleMs) return
+    if (!c || c.exited || Date.now() - c.lastUsed < idleMs - idleTick) return
     void serial(async () => {
-      if (child !== c || Date.now() - c.lastUsed < idleMs) return
+      const quiet = (): boolean => child === c && !c.exited && Date.now() - c.lastUsed >= idleMs - idleTick
+      if (!quiet()) return
       const st = await readStatus(c).catch(() => null)
       // 等状态的工夫有人用过(录像的暂停 / 继续走 rawNow 不排队,会插在这中间):不算闲置
-      if (st?.windowVisible || child !== c || Date.now() - c.lastUsed < idleMs) return
+      if (st?.windowVisible || !quiet()) return
+      if (!c.idleWarnAt) {
+        c.idleWarnAt = Date.now()
+        push(c, 'idleWarn', { on: true, stopAt: c.idleWarnAt + idleTick, idleMinutes: Math.max(1, Math.round(idleMs / 60_000)) })
+        return
+      }
+      // 提示要挂过一个间隔才停(下一次检查就停;按半个间隔判,两次读状态快慢不一也不会多拖一整轮)
+      if (Date.now() - c.lastUsed < idleMs || Date.now() - c.idleWarnAt < idleTick / 2) return
       deps.log(`[plugin-sandbox] ${c.manifest.pluginId} idle, stopping`)
       await stop('idle')
     })
-  }, 60_000)
+  }, idleTick)
   idle.unref?.()
 
   return {
     exec,
     show,
-    stop: () => serial(() => stop()),
+    /** gen:只停这一个沙箱(沙箱窗口自己的「关闭沙箱 / 停掉」);排到时已经换成别的就不动。 */
+    stop: (gen?: number) => serial(() => (gen === undefined || (child && !child.exited && child.gen === gen) ? stop() : Promise.resolve())),
     // 直接调的重置都是用户点的(卡片 / Coding Studio / 沙箱窗口自己的按钮);agent 的走 exec
-    reset: () => revealed(serial(() => reset().catch(fail)), true),
+    reset: (gen?: number) => revealed(serial(() => (gen === undefined || (child && !child.exited && child.gen === gen)
+      ? reset().catch(fail) : Promise.resolve<SandboxResult>({ ok: false, code: 'no_sandbox', error: 'the sandbox changed; nothing was reset' }))), true),
     install: (expect: { pluginId?: string; dir?: string; gen?: number }, opts?: { force?: boolean }) => serial(() => install(expect, opts)),
     /** 现在这个沙箱是第几个(没在跑 = null):main.ts 在用户点按钮那一刻记下,确认 / 安装 / 回执都对它。 */
     gen: (): number | null => (child && !child.exited ? child.gen : null),
@@ -794,7 +823,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
     confirmInChild: async (gen: number, box: { title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number }): Promise<number | null> => {
       const c = child && !child.exited ? child : null
       if (!c || c.gen !== gen) return null
-      c.lastUsed = Date.now()
+      touch(c)
       const r = await request(c, 'confirmInstall', box, 15 * 60_000).catch(() => null)
       return typeof r?.response === 'number' && child === c ? r.response : null
     },

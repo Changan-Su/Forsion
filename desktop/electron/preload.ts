@@ -1016,6 +1016,9 @@ if (sandboxSelf) {
     installed: () => ipcRenderer.invoke('pluginSandbox:installedNow'),
     onInstalled: on('pluginSandbox:installed'),
     onInstallResult: on('pluginSandbox:installResult'),
+    // 闲置自停前的提示(父进程推;null = 收回)
+    idleWarn: () => ipcRenderer.invoke('pluginSandbox:idleWarnNow'),
+    onIdleWarn: on('pluginSandbox:idleWarn'),
     // 演示舞台:渲染层录完的视频交给主进程落盘(只有舞台那份接这条;普通沙箱调了回 null)
     saveRecording: (bytes: ArrayBuffer, ext: string) => ipcRenderer.invoke('pluginSandbox:saveRecording', bytes, ext),
   }

@@ -147,17 +147,33 @@ describe('控制通道', () => {
     expect(sbx.state().running).toBe(false)
   }, 60_000)
 
-  it('闲置:窗口不在前台、超过闲置时长 → 自动停;用户正在用(前台)→ 不停', async () => {
+  it('闲置:窗口不在前台、超过闲置时长 → 先提示一个间隔再停;提示期间有人用 → 收回提示、从头算', async () => {
     const { vi } = await import('vitest')
     vi.useFakeTimers({ toFake: ['setInterval', 'Date'] })
     try {
       const f = fakeSpawn({ states: ['running'] })
       const sbx = createPluginSandbox({
-        forsionHome: () => tmp(), spawn: f.spawn, appArgs: [], platform: process.platform, pid: process.pid, idleMs: 60_000,
+        forsionHome: () => tmp(), spawn: f.spawn, appArgs: [], platform: process.platform, pid: process.pid, idleMs: 180_000,
         ui: () => ({ locale: 'zh', storage: {} }), onChange: () => {}, onChildEvent: () => {}, log: () => {},
       })
       await sbx.exec('start', { dir: pluginDir() })
-      vi.advanceTimersByTime(61_000) // 61s 没人用、窗口不在前台(假子进程的状态 windowVisible:false)
+      const warns = () => f.reqs.filter((r) => r.op === 'idleWarn').map((r) => r.args.on)
+      // 闲置 3 分钟、检查间隔 1 分钟:2 分钟时先推「快自动停了」,不停
+      vi.advanceTimersByTime(121_000) // 窗口不在前台(假子进程的状态 windowVisible:false)
+      await vi.waitFor(() => expect(warns()).toEqual([true]), { timeout: 3_000 })
+      expect(f.reqs.find((r) => r.op === 'idleWarn')?.args).toMatchObject({ idleMinutes: 3 })
+      expect(f.ops).not.toContain('quit')
+      // 有人用了(agent 看了一眼状态)→ 提示收回,从头算
+      await sbx.exec('status', {})
+      expect(warns()).toEqual([true, false])
+      vi.advanceTimersByTime(60_000)
+      await new Promise((r) => setImmediate(r))
+      expect(warns()).toEqual([true, false])
+      // 又闲置下去(从 121s 那次用起再过 2 分钟):再提示一次,提示挂满一个间隔才停
+      vi.advanceTimersByTime(120_000)
+      await vi.waitFor(() => expect(warns()).toEqual([true, false, true]), { timeout: 3_000 })
+      expect(f.ops).not.toContain('quit')
+      vi.advanceTimersByTime(60_000)
       await vi.waitFor(() => expect(f.ops).toContain('quit'), { timeout: 5_000 })
       await vi.waitFor(() => expect(sbx.state()).toMatchObject({ running: false, last: { reason: 'idle' } }), { timeout: 5_000 })
     } finally { vi.useRealTimers() }
@@ -301,6 +317,17 @@ describe('控制通道', () => {
       mkdirSync(join(dir, 'locked')); writeFileSync(join(dir, 'locked', 'a.js'), '1'); chmodSync(join(dir, 'locked'), 0o000)
       try { expect(await pluginDigest(dir)).toBeNull() } finally { chmodSync(join(dir, 'locked'), 0o755) }
     }
+  })
+
+  it('沙箱窗口自己的「关闭 / 重置」带着发出它的那一个:排到时换成了别的就不动', async () => {
+    const sbx = sandbox(tmp(), fakeSpawn({ states: ['running'] }))
+    await sbx.exec('start', { dir: pluginDir() })
+    const gen = sbx.gen()!
+    expect(await sbx.reset(gen + 1)).toMatchObject({ ok: false, code: 'no_sandbox' })
+    await sbx.stop(gen + 1)
+    expect(sbx.state().running).toBe(true)
+    await sbx.stop(gen)
+    expect(sbx.state().running).toBe(false)
   })
 
   it('叫到前面:用户在界面上点的启动 / 重置起好后 show;agent 起的不叫', async () => {

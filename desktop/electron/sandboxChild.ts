@@ -520,6 +520,8 @@ export function startSandboxChild(self: SandboxSelf, opts: {
   // ── 安装到用户那份 Forsion(11-28 方案 A):确认框挂在沙箱窗口上;装没装 / 装的结果给顶条 ──
   /** 父进程最近一次说的「用户那份装没装这一份」(SandboxInstalled);渲染层起来时先要一次,之后跟着推。 */
   let hostInstalled: unknown = null
+  /** 父进程说的「快自动停了」(on + stopAt + idleMinutes);收回 = null。 */
+  let idleWarn: Record<string, unknown> | null = null
   let yielded: (() => void) | null = null
   const toRenderer = (channel: string, payload: unknown): void => {
     for (const w of [win(), settingsWin()]) if (w && !w.webContents.isDestroyed()) w.webContents.send(channel, payload)
@@ -560,6 +562,12 @@ export function startSandboxChild(self: SandboxSelf, opts: {
       }
       case 'installed': hostInstalled = args.installed ?? null; toRenderer('pluginSandbox:installed', hostInstalled); return {}
       case 'installResult': toRenderer('pluginSandbox:installResult', args); return {}
+      case 'idleWarn': {
+        idleWarn = args.on === true && typeof args.stopAt === 'number'
+          ? { stopAt: args.stopAt, idleMinutes: typeof args.idleMinutes === 'number' ? args.idleMinutes : 15 } : null
+        toRenderer('pluginSandbox:idleWarn', idleWarn)
+        return {}
+      }
       case 'status': return { status: await status() }
       case 'screenshot': {
         const p = pick(args)
@@ -660,10 +668,13 @@ export function startSandboxChild(self: SandboxSelf, opts: {
     // openHost 带 note 'settings' = 直接开它的设置页(另装着一份、要先卸载的那种)
     else if (action === 'openHost') send({ event: 'openHost', ...(note === 'settings' ? { settings: true } : {}) })
     else if (action === 'reset' || action === 'close') send({ event: action })
+    // 闲置提示上的「继续用」:只认沙箱主窗有焦点的时候(人刚在这扇窗里点过);插件代码在后台自己调续不了命
+    else if (action === 'keepAlive') { if (!win()?.isFocused()) return false; send({ event: 'keepAlive' }) }
     else return false
     return true
   })
   ipcMain.handle('pluginSandbox:installedNow', () => hostInstalled)
+  ipcMain.handle('pluginSandbox:idleWarnNow', () => idleWarn)
   // 渲染层装载落定 / 重载完会报一次,父进程那边的卡片跟着变;用户切进 / 切出沙箱窗口也报(父进程据此算闲置)
   ipcMain.on('pluginSandbox:changed', () => { void pushState() })
   app.on('browser-window-focus', () => { unsink(); void pushState() })

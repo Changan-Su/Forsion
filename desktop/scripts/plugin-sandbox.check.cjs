@@ -86,10 +86,12 @@ ctx.registerCommand({ id: 'fixture-toast', title: 'Fixture toast', run() {
 } })
 // 一个按钮正好在右下角、压在首次说明条底下(11-23):插件自己报它此刻是不是真被说明条盖着,断言不会空过
 ctx.registerCommand({ id: 'fixture-corner', title: 'Fixture corner', run() {
-  const b = document.createElement('button'); b.textContent = 'Corner action'; b.style.cssText = 'position:fixed;right:24px;bottom:46px;width:110px;height:24px;z-index:50'
+  // 说明卡 11-28 起挂在「沙箱」胶囊下面:按钮摆在它正底下(插件顶部工具条那一带,原来是右下角)
+  const n = document.querySelector('[data-testid="sandbox-note"]'); const nr = n ? n.getBoundingClientRect() : { left: innerWidth - 300, top: innerHeight - 80, width: 280, height: 60 }
+  const b = document.createElement('button'); b.textContent = 'Corner action'; b.style.cssText = 'position:fixed;left:' + Math.round(nr.left + nr.width / 2 - 55) + 'px;top:' + Math.round(nr.top + nr.height / 2 - 12) + 'px;width:110px;height:24px;z-index:50'
   b.onclick = () => console.log('CORNER_CLICKED'); document.body.append(b)
   const r = b.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-  console.log('CORNER_COVERED ' + !!(top && top.closest('[data-testid="sandbox-note"]')))
+  console.log('CORNER_COVERED ' + !!(top && top.closest('[data-testid="sandbox-note"]')) + ' note=' + !!n + ' top=' + (top ? top.tagName + '.' + top.className : '-') + ' z=' + (n ? getComputedStyle(n).zIndex : '-'))
 } })
 ctx.registerCommand({ id: 'fixture-ping', title: 'Fixture ping', run(a) { console.log('FIXTURE_PING ' + JSON.stringify(a || {})) } })
 ctx.registerCommand({ id: 'fixture-report', title: 'Fixture report', run() { window.tangu.sandbox.action('report', 'FIXTURE_NOTE_FROM_SANDBOX') } })
@@ -500,8 +502,8 @@ async function main() {
     await exec('command', { command: 'fixture-corner' })
     const covered = await until(async () => (await status())?.logs?.find((l) => l.text.startsWith('CORNER_COVERED'))?.text, 5000)
     const cornerClick = await act('click', { target: 'Corner action' })
-    check('14e2 被测插件右下角的按钮压在「这是沙箱」说明条底下 → 说明条先收起,点到的是插件的按钮(11-23)',
-      covered === 'CORNER_COVERED true' && cornerClick.a?.newLogs?.some((l) => l.text === 'CORNER_CLICKED') && !/on top of it/.test(cornerClick.a?.target || ''),
+    check('14e2 被测插件的按钮压在「这是沙箱」说明卡(胶囊下面)底下 → 说明卡先收起,点到的是插件的按钮(11-23;11-28 挪到胶囊下)',
+      /^CORNER_COVERED true/.test(covered || '') && cornerClick.a?.newLogs?.some((l) => l.text === 'CORNER_CLICKED') && !/on top of it/.test(cornerClick.a?.target || ''),
       JSON.stringify({ covered, click: cornerClick.r.error || cornerClick.a }))
     const noSettings = await act('read', { window: 'settings' })
     const opened = await act('settings', {})

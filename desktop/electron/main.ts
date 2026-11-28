@@ -6493,9 +6493,9 @@ const pluginSandbox = SANDBOX ? null : createPluginSandbox({
   onChildEvent: (ev) => {
     if (ev.event === 'report') { showMainWindow(); mainWindow?.webContents.send('pluginSandbox:report', ev) }
     else if (ev.event === 'install') void installFromSandbox('sandbox', { force: ev.force }).catch((e) => console.error('[plugin-sandbox] install failed:', e))
-    else if (ev.event === 'reset') void pluginSandbox?.reset().catch((e) => console.error('[plugin-sandbox] reset failed:', e))
+    else if (ev.event === 'reset') void pluginSandbox?.reset(ev.gen).catch((e) => console.error('[plugin-sandbox] reset failed:', e))
     else if (ev.event === 'openHost') openInstalledPlugin(ev.pluginId, ev.settings)
-    else if (ev.event === 'close') void pluginSandbox?.stop().catch((e) => console.error('[plugin-sandbox] stop failed:', e))
+    else if (ev.event === 'close') void pluginSandbox?.stop(ev.gen).catch((e) => console.error('[plugin-sandbox] stop failed:', e))
     else if (ev.kind === 'url') { if (isForsionUrl(ev.value) && !routeSpaceWindowLink(ev.value)) deliverDeepLink(ev.value) }
     else deliverOpenFile(ev.value)
   },

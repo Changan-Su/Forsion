@@ -3,12 +3,14 @@
  * 「沙箱 · 插件名」胶囊 + 重置 / 报告问题(只留图标)+ 安装。放进浮钮组的流内,标签头按整宽让位,不再浮在标签上叠字(11-20)。
  * 安装(11-28 方案 A):确认框由父进程交给本进程挂在这扇窗上弹;装没装由父进程比对后推过来 —— 按钮在「安装 / 更新 / 已安装」间换,
  * 从这里点的那次装完在按钮下垂回执卡(在我的 Forsion 打开 / 关闭沙箱),装不上垂说明。
- * 首次打开时右下角垂一张说明卡;agent 点的目标被它压着时自动收起(sandboxWindow 的 clearNote,同通知),人点「知道了」也收。按钮只把意图转给父进程(window.tangu.sandbox.action),决定与确认框都在父进程那边。
+ * 首次打开时从「沙箱」胶囊下面垂一张说明卡(11-28 细节页第 3 条:不再压在插件主区右下角);agent 点的目标被它压着时自动收起
+ * (sandboxWindow 的 clearNote,同通知),人点「知道了」也收。闲置自停前一分钟(父进程推 idleWarn),胶囊换成「1 分钟后自动停」,
+ * 同一个位置垂「继续用 / 停掉」(细节页第 4 条)。按钮只把意图转给父进程(window.tangu.sandbox.action),决定与确认框都在父进程那边。
  */
 import { useEffect, useRef, useState } from 'react'
-import { Check, CircleAlert, CircleCheck, Download, Flag, FlaskConical, RefreshCw, RotateCcw, Settings, SquareArrowOutUpRight, X } from 'lucide-react'
+import { Check, CircleAlert, CircleCheck, Download, Flag, FlaskConical, Play, RefreshCw, RotateCcw, Settings, SquareArrowOutUpRight, Timer } from 'lucide-react'
 import type { SandboxInstalled } from '../../../../tangu-agent/src/contracts/pluginSandbox'
-import type { PluginSandboxInstallResult } from '../types'
+import type { PluginSandboxIdleWarn, PluginSandboxInstallResult } from '../types'
 import { installButton, installErrorText } from '../views/chat2/sandboxInstall'
 import { OverlayAt, UI_MODE, setEdgeAccessory } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
@@ -30,6 +32,13 @@ registerMessages({
     en: 'This is a sandbox. It has its own data and is signed out, so nothing you do here touches your own Forsion. Closing the window stops it.',
   },
   'sandbox.noteOk': { zh: '知道了', en: 'Got it' },
+  'sandbox.idle.pill': { zh: '1 分钟后自动停', en: 'stops in a minute' },
+  'sandbox.idle.body': {
+    zh: '{idle} 分钟没人用了，1 分钟后自动停，省内存。停了随时能从对话里再开。',
+    en: 'Nobody has used it for {idle} minutes, so it stops in a minute to save memory. You can start it again from the chat any time.',
+  },
+  'sandbox.idle.stop': { zh: '停掉', en: 'Stop now' },
+  'sandbox.idle.keep': { zh: '继续用', en: 'Keep using' },
 })
 
 const NOTE_KEY = 'forsion_sandbox_note_seen'
@@ -41,7 +50,11 @@ export function SandboxChrome() {
   const [reporting, setReporting] = useState(false)
   const [at, setAt] = useState({ x: 0, y: 0 })
   const [text, setText] = useState('')
-  const act = (a: 'report' | 'install' | 'reset' | 'openHost' | 'close', n?: string) => void window.tangu?.sandbox?.action(a, n)
+  const act = (a: 'report' | 'install' | 'reset' | 'openHost' | 'close' | 'keepAlive', n?: string) => void window.tangu?.sandbox?.action(a, n)
+  // 闲置自停前的提示(父进程推;null = 收回)。说明卡和它都从「沙箱」胶囊下面垂下来,左边对齐胶囊
+  const [idle, setIdle] = useState<PluginSandboxIdleWarn | null>(null)
+  const pillRef = useRef<HTMLSpanElement | null>(null)
+  const [pillAt, setPillAt] = useState<{ x: number; y: number } | null>(null)
   // 用户那份 Forsion 里装没装这一份(父进程推);回执卡:done = 刚装好 / 点了「已安装」,fail = 没装上
   const [inst, setInst] = useState<SandboxInstalled | null>(null)
   const [pop, setPop] = useState<null | { kind: 'done'; again: boolean; same: boolean } | { kind: 'fail'; text: string; store: boolean }>(null)
@@ -64,7 +77,9 @@ export function SandboxChrome() {
       if (r.ok || r.code === 'same') setPop({ kind: 'done', again: r.code === 'same', same: r.installed?.state === 'same' })
       else setPop({ kind: 'fail', text: installErrorText(r, t), store: r.code === 'store' })
     })
-    return () => { alive = false; off1?.(); off2?.() }
+    void sbx.idleWarn?.().then((v) => { if (alive) setIdle(v ?? null) }, () => {})
+    const off3 = sbx.onIdleWarn?.((v) => setIdle(v ?? null))
+    return () => { alive = false; off1?.(); off2?.(); off3?.() }
   }, [t])
   // 回执卡:点外面 / Esc 收起
   useEffect(() => {
@@ -93,7 +108,9 @@ export function SandboxChrome() {
   const docked = UI_MODE !== 'mobile'
   const row = !self ? null : (
     <div className="sbx-chrome-row" data-sbx-host="" data-testid="sandbox-chrome">
-      <span className="sbx-pill" title={`${self.name} ${self.version}\n${t('sandbox.note')}`}><FlaskConical size={13} />{t('sandbox.pill')}<span>· {self.name}</span></span>
+      <span ref={pillRef} className={`sbx-pill${idle ? ' is-idle' : ''}`} title={`${self.name} ${self.version}\n${t('sandbox.note')}`}>
+        {idle ? <Timer size={13} /> : <FlaskConical size={13} />}{t('sandbox.pill')}<span>· {idle ? t('sandbox.idle.pill') : self.name}</span>
+      </span>
       <button type="button" className="sbx-ibtn" title={t('sandbox.resetTip')} aria-label={t('sandbox.reset')} onClick={() => act('reset')}><RotateCcw size={14} /></button>
       <button type="button" className={`sbx-ibtn${reporting ? ' is-on' : ''}`} title={t('sandbox.reportTip')} aria-label={t('sandbox.report')} aria-expanded={reporting}
         onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setAt({ x: r.right, y: r.bottom + 6 }); setReporting((v) => !v) }}><Flag size={14} /></button>
@@ -104,7 +121,7 @@ export function SandboxChrome() {
         </button>}
     </div>
   )
-  useEffect(() => { if (docked) setEdgeAccessory(row) }, [self, t, reporting, btn, !!pop]) // eslint-disable-line react-hooks/exhaustive-deps -- row 由这几样决定
+  useEffect(() => { if (docked) setEdgeAccessory(row) }, [self, t, reporting, btn, !!pop, !!idle]) // eslint-disable-line react-hooks/exhaustive-deps -- row 由这几样决定
   useEffect(() => () => setEdgeAccessory(null), [])
   const closeNote = () => { setNote(false); try { localStorage.setItem(NOTE_KEY, '1') } catch { /* 下次再提示 */ } }
   // agent 在沙箱里点的东西正好压在说明条底下 → sandboxWindow 先让它收起再点(同通知;11-23)
@@ -113,6 +130,20 @@ export function SandboxChrome() {
     window.addEventListener(SANDBOX_NOTE_COLLAPSE, closeNote)
     return () => window.removeEventListener(SANDBOX_NOTE_COLLAPSE, closeNote)
   }, [note])
+  // 胶囊下面那张卡(说明 / 闲置提示)要量胶囊的位置:胶囊在引擎的浮钮组里,挂上去晚一帧;窗口缩放也跟着挪
+  const underPill = !!self && !reporting && !pop && (!!idle || note)
+  useEffect(() => {
+    if (!underPill) return
+    let raf = 0
+    const measure = (): void => {
+      const r = pillRef.current?.getBoundingClientRect()
+      if (r && r.width) setPillAt({ x: Math.round(r.left), y: Math.round(r.bottom + 6) })
+      else raf = requestAnimationFrame(measure)
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', measure) }
+  }, [underPill, !!idle])
   if (!self) return null
   const send = () => { act('report', text.trim()); setText(''); setReporting(false) }
   return (
@@ -145,12 +176,20 @@ export function SandboxChrome() {
           </>}
         </OverlayAt>
       )}
-      {note && !reporting && (
-        <div className="sbx-note" role="status" data-sbx-host="" data-testid="sandbox-note">
-          <FlaskConical size={14} /><span>{t('sandbox.note')}</span>
-          <button type="button" className="sbx-note-x" aria-label={t('sandbox.noteOk')} title={t('sandbox.noteOk')} onClick={closeNote}><X size={13} /></button>
-        </div>
-      )}
+      {underPill && pillAt && (idle ? (
+        <OverlayAt x={pillAt.x} y={pillAt.y} className="sbx-pop sbx-rcpt sbx-under ui-popover" role="status" data-sbx-host="" data-testid="sandbox-idle-warn">
+          <div className="sbx-rcpt-body">{t('sandbox.idle.body', { idle: idle.idleMinutes })}</div>
+          <div className="sbx-pop-actions">
+            <button type="button" className="sbx-cbtn" onClick={() => { setIdle(null); act('close') }}>{t('sandbox.idle.stop')}</button>
+            <button type="button" className="sbx-cbtn primary" onClick={() => { setIdle(null); act('keepAlive') }}><Play size={12} />{t('sandbox.idle.keep')}</button>
+          </div>
+        </OverlayAt>
+      ) : (
+        <OverlayAt x={pillAt.x} y={pillAt.y} className="sbx-pop sbx-rcpt sbx-under ui-popover" role="status" data-sbx-host="" data-testid="sandbox-note">
+          <div className="sbx-note-row"><FlaskConical size={14} /><span className="sbx-rcpt-body">{t('sandbox.note')}</span></div>
+          <div className="sbx-pop-actions"><button type="button" className="sbx-cbtn" onClick={closeNote}>{t('sandbox.noteOk')}</button></div>
+        </OverlayAt>
+      ))}
     </>
   )
 }

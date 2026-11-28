@@ -521,6 +521,8 @@ export interface PluginSandboxState {
 export interface PluginSandboxReport { note: string; sessionId?: string; pluginId: string; name: string }
 type SandboxInstalled = import('../../../tangu-agent/src/contracts/pluginSandbox').SandboxInstalled
 /** 安装的结果(electron/pluginSandbox.ts SandboxInstallResult)。code:no_sandbox / changed 确认期间沙箱换了插件 / store 同一个插件另装着 / same 装的就是这一份 / error。 */
+/** 闲置自停前的提示:stopAt = 父进程打算停的时刻(毫秒),idleMinutes = 多久没人用算闲置。 */
+export interface PluginSandboxIdleWarn { stopAt: number; idleMinutes: number }
 export interface PluginSandboxInstallResult { ok: boolean; pluginId?: string; code?: 'no_sandbox' | 'changed' | 'store' | 'same' | 'error'; error?: string; installed?: SandboxInstalled | null; cancelled?: boolean }
 export interface PluginSandboxApi {
   /** ui.storage = 本窗的主题键(沙箱首屏照着画);语言由主进程按自己的界面语言给。deadline = 引擎给这次动作的期限(Date.now() 毫秒),排队排过了主进程就不做了。reveal = 用户在界面上点的,起好后把沙箱窗口叫到前面。 */
@@ -574,13 +576,15 @@ declare global {
       /** 本进程就是插件沙箱:自身信息 + 沙箱条上的按钮(报告问题 / 安装 / 重置)转给父进程。普通实例没有这个键。 */
       sandbox?: {
         self: PluginSandboxSelf
-        /** install 带 note 'force' = 回执卡上的「重新安装」;openHost = 在我的 Forsion 打开;close = 关闭沙箱。 */
-        action(a: 'report' | 'install' | 'reset' | 'openHost' | 'close', note?: string): Promise<boolean>
+        /** install 带 note 'force' = 回执卡上的「重新安装」;openHost = 在我的 Forsion 打开;close = 关闭沙箱;keepAlive = 闲置提示上的「继续用」。 */
+        action(a: 'report' | 'install' | 'reset' | 'openHost' | 'close' | 'keepAlive', note?: string): Promise<boolean>
         changed(): void
         saveRecording?(bytes: ArrayBuffer, ext: string): Promise<string | null>
         installed?(): Promise<SandboxInstalled | null>
         onInstalled?(cb: (v: SandboxInstalled | null) => void): () => void
         onInstallResult?(cb: (r: PluginSandboxInstallResult & { origin: 'sandbox' | 'host' }) => void): () => void
+        idleWarn?(): Promise<PluginSandboxIdleWarn | null>
+        onIdleWarn?(cb: (v: PluginSandboxIdleWarn | null) => void): () => void
       }
       /** 演示舞台的通道(宿主的 ctx.stage 按插件 id 调;插件别直接调)。 */
       pluginStage?: { exec(pluginId: string, op: string, args: Record<string, unknown>): Promise<{ ok: boolean; code?: string; error?: string } & Record<string, unknown>> }
