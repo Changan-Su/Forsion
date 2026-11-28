@@ -75,7 +75,7 @@ jobs:
           npx vitest run shared/releaseVersion.test.ts shared/updateSource.test.ts shared/websiteReleases.test.ts electron/revisionUpdateCheck.test.ts electron/updater.test.ts electron/updaterUtil.test.ts frontend/src/changelog.test.ts
       - name: Build independent Unit distribution
         run: node unit/build.mjs --package --local-plugins
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: forsion-unit-linux-x64
           path: unit/dist/
@@ -120,7 +120,7 @@ jobs:
             echo "::error::Local plugins leaked into the npm package."
             exit 1
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.gate.outputs.publish == 'true'
         with:
           name: forsion-unit-npm
