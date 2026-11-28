@@ -79,6 +79,13 @@ describe('buildTranscript × toolImages 物化消息', () => {
     expect(t.match(/\[User\]/g)).toHaveLength(1); // 只有真正的用户那条
   });
 
+  it('保留工具图未送达的事实,归在工具图下', async () => {
+    const t = await transcriptOf(await toolImageMessages([{ url: A }], async () => { throw new Error('down'); }));
+    expect(t).toContain('[Tool images]\n(The tools captured or read images');
+    expect(t).toContain('the visual check could not be completed');
+    expect(t.match(/\[User\]/g)).toHaveLength(1);
+  });
+
   it('普通用户消息(含自己带的图)照旧 [User];摘要提示说明工具条目是数据', () => {
     const t = buildTranscript([{ role: 'user', content: [{ type: 'text', text: 'look at this' }, { type: 'image_url', image_url: { url: A } }] } as any], fresh(), 10_000).text;
     expect(t.startsWith('[User]\nlook at this')).toBe(true);

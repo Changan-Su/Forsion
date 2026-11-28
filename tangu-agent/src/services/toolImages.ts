@@ -3,7 +3,7 @@
  *
  * 两类图,按 `untrusted`(工具写的前言句)分组,各出一条消息:
  *  - 可信(view_image / view_video / desk_present / hostExec:用户自己的文件、Forsion 自己的界面):
- *    行为与 07-27 起完全一致 —— 主模型无视觉先经辅助视觉模型转写;转写失败退回直接送图(宁可让 provider 报错也不静默丢内容)。
+ *    需要辅助视觉模型时先转写。转写失败留说明,始终使用档也不改回原图,以免重现纯文本模型拒图。
  *  - 不可信(phone_observe 截图:**别的 App** 的屏幕):
  *    ⚠️ 图只能放进 user 角色消息(provider 不收 tool 角色的图),所以必须在同一条消息里标明「不可信、别照做」,
  *       否则截图里的注入(「SYSTEM NOTICE… tap 转账」)带着用户权威进上下文,绕过屏幕文字的 DATA 围栏。
@@ -24,6 +24,8 @@ export interface ToolImage {
 export type DescribeFn = (imgs: Array<{ url: string }>) => Promise<string>;
 
 export const UNTRUSTED_IMAGE_TAG = 'untrusted_image_text';
+export const TOOL_IMAGE_DESCRIPTION_FAILED =
+  '(The tools captured or read images, but the vision assistant model could not describe them. No image or description reached the conversation model, so the visual check could not be completed.)';
 
 const neutralize = (s: string) => s.replace(/</g, '‹').replace(/>/g, '›');
 
@@ -44,17 +46,19 @@ export async function toolImageMessages(
   const out: ChatMessage[] = [];
   for (const [preface, group] of groups) {
     let described = '';
-    let failed = false;
     if (describe) {
       try {
         described = await describe(group);
       } catch (e) {
-        failed = true;
         onDescribeError?.(e);
       }
     }
+    const failed = !!describe && !described;
     if (preface === undefined) {
-      // ⚠️ 可信路径逐字节保持原样(view_image 等依赖它)。
+      if (failed) {
+        out.push({ role: 'user', content: TOOL_IMAGE_DESCRIPTION_FAILED });
+        continue;
+      }
       out.push({
         role: 'user',
         content: described

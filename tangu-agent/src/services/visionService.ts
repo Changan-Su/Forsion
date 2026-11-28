@@ -7,8 +7,7 @@
  *   2. `POST /agent/vision/describe`:非聊天场景(插件、自动化、外部调用)要认张图,不必为此
  *      起一个 agent run。
  *
- * 用的模型 = 「辅助模型 · 图像识别」槽(visionModelId),与主模型解耦。槽为空 → 抛错,调用方
- * 自行降级(agentLoop 会退回原来的「直接塞图」行为,不因为没配槽就丢内容)。
+ * 用的模型 = 「辅助模型 · 图像识别」槽(visionModelId),与主模型解耦。槽为空 → 抛错,由调用方降级。
  */
 import { deps } from '../seams/runtime.js';
 import { currentAccountId, isMultiAccount } from '../core/accountScope.js';
@@ -24,7 +23,8 @@ const DESCRIBE_SYSTEM_PROMPT =
   'Describe layout, UI structure, charts and any state that carries meaning. ' +
   'Be factual and complete; never guess at content you cannot see, and add no commentary or pleasantries.';
 
-const DESCRIBE_MAX_TOKENS = 1500;
+// 上限也会被上游的推理消耗。11-26 的 Agent Desk 转写在 1500 内耗完且无任何描述。
+const DESCRIBE_MAX_TOKENS = 4096;
 const MAX_IMAGES_PER_CALL = 8;
 
 /**
@@ -187,7 +187,7 @@ const EST_TOKENS_PER_IMAGE = 1500;
  * 一次调用识别一组图(最多 MAX_IMAGES_PER_CALL 张),返回一段文字。任何失败都抛(调用方决定降级策略)。
  *
  * ⚠️**超量抛错而不是截断**:截断 + 调用方拿描述替换整批图 = 多出来的图既没文字也没原图,
- * 静默数据空洞。抛出去 agentLoop 会退回直接送图,一张不丢(2026-07-27 Codex 评审)。
+ * 静默数据空洞。抛出去让调用方处理整批失败(2026-07-27 Codex 评审)。
  *
  * 计费与 agentLoop 同款三步(预检 → 扣费 → 记用量):这条路不经 agent loop,漏了就是**免费 LLM**。
  */

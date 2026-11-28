@@ -5023,19 +5023,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 仅 in-memory(不落库):本 run 内多轮可见即可,避免历史每轮重发多 MB base64(对齐附件物化纪律)。
       if (pendingToolImages.length) {
         const imgs = pendingToolImages.splice(0);
-        // 主模型没有原生视觉 → 图直接塞过去只会被 provider 拒(或静默忽略)。先交给「辅助模型 ·
-        // 图像识别」转成文字再入上下文;没配槽/识别失败 → 可信图退回原来的塞图行为(宁可让 provider
-        // 报错也不静默丢内容),不可信图(手机截图)丢图留说明(见 toolImages.ts)。判定与转写都做过
-        // 60s 缓存/单次调用,不在热路径上放大开销。
-        // 已中止就整段跳过:这里有两三次不吃 run signal 的云请求(目录/解析),中止后还去排队等
-        // 60s 会把「停止」拖成肉眼可见的卡顿(2026-07-27 Codex 评审)。
+        // 需要转写时,失败也只能回传文字说明。「始终使用」会覆盖目录未标注的纯文本模型,
+        // 因此转写失败不能再根据目录猜测并发原图。
+        // 中止后不再为转写等模型目录或解析请求,它们没有 run signal。
         const needDescribe = !ac.signal.aborted && (await shouldDescribeImages(callModelId, appId, agentConfig.visionMode as string | undefined));
         const firstToolImageTurn = workingMessages.length;
-        // ⚠️ 这一行被 toolImages.test.ts 按源码文本钉住(物化的装配没有可跑的测试路径)。
         let transcribed = false;
         workingMessages.push(...await toolImageMessages(imgs, needDescribe
           ? async (batch) => { const text = await describeWithStatus(batch, resolveVisionModelId(toolCtx.visionModelId, appId), iteration); transcribed = true; return text; }
-          : null, (e: any) => console.warn(`[agent-core] run=${runId} 图像识别降级失败(可信图退回直接送图,不可信图丢弃):`, e?.message || e)));
+          : null, (e) => console.warn(`[agent-core] run=${runId} 工具图片识别失败:`, e instanceof Error ? e.message : e)));
         // 旧截图不再每轮重发:只留最近几条带图,更早的就地换成占位(否则请求体随步数线性涨,慢上行必撞上传超时)。
         // 被改的那几条用量只减不增 → 上次的实测基准仍是上界,别让它退回粗估(见 ContextUsageTracker.keepBaseline)。
         for (const m of dropStaleToolImages(liveToolImageTurns, workingMessages.slice(firstToolImageTurn))) contextUsage.keepBaseline(m);
