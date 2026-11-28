@@ -42,6 +42,7 @@ import { moveToDesktopTrash, restoreDesktopTrash } from '../trashWriter'
 import { createManifestPatternLookup, pluginNetRequest } from '../pluginNet'
 import { createPluginSecrets, type PluginSecrets } from '../pluginSecrets'
 import { createPluginStorageHost } from './pluginStorage'
+import { currentOnlineRoot } from './activeVault'
 import type { PluginStorageRequest } from '@amadeus-shared/pluginStorage'
 import { writePrivateJson } from '../configWrite'
 import { networkOf } from '@amadeus-shared/pluginSource'
@@ -1026,6 +1027,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     base: () => path.join(tanguDataDir(), 'plugin-data'),
     vaultRoot: () => vault.getRoot(),
     openFolder: (abs) => shell.openPath(abs),
+    // 在线库:只认主窗转发壳实际换好以后报的那个(amadeus:online-opened),不看盘上的 activeVault(回落时它还在)
+    onlineRoot: currentOnlineRoot,
   })
   handle(IPC.pluginStorage, (_e, req: PluginStorageRequest) => pluginStorage.handle(req))
 

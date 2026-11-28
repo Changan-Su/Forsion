@@ -6,8 +6,9 @@
 //   盘上的 activeVault 还在、lastVault 是真目录;window.amadeus 是转发壳(本机桥在 amadeusLocal);插件数据的库那一层
 //   经主窗能写、hostPath 给本机路径 —— 宿主判「在线」只认渲染层的报告,不看盘(负对照:宿主改成看盘 → 这几步红);
 //   之后切走再切回:activeVault 被清掉(切本机库同一次落盘清)。
-//   段 B(坏配置)先不加:main 上宽松读把坏配置当 {},走首启建默认库并改写文件;H3 12b(#954)改了 restoreVault
-//   (内容坏 → 原样挪成 .corrupt-*、从空配置起;I/O 读不了 → 拒绝),等它进 main 再按那套语义补。
+// 段 B(坏配置,按 H3 12b #954 的语义):① 内容坏(截断的 JSON)→ 原样挪成 <原文件名>.corrupt-<时间戳>、字节一字不差,
+//   从空配置起建默认库(不是 lastVault,那份读不出来);② I/O 读不了(chmod 000)→ 宿主拒绝,配置字节没变、
+//   不挪不新写。这一包渲染层不改,② 只断言宿主不写(渲染层「当不知道开 lastVault」在第 3 批)。
 // 截图(菜单亮 / 暗、两行)落 SHOT_DIR,缺省临时目录。跑:node .claude/hooks/devlock.cjs run --vehicle=e2e -- node scripts/check-vault-menu.cjs
 const fs = require('fs'); const os = require('os'); const path = require('path')
 const electron = require('./lib/launch-electron.cjs')
@@ -20,7 +21,7 @@ let failed = 0
 const check = (ok, what, extra = '') => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}${extra ? ` — ${extra}` : ''}`); if (!ok) failed++ }
 
 /** 起一个隔离实例(老配置 cfg 种进四份配置文件),进到笔记 Space、树出来为止;run(ctx) 跑完关掉并删临时目录。 */
-async function withApp(cfgOf, run) {
+async function withApp(cfgOf, run, opts = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-vaultmenu-'))
   const A = path.join(home, 'Forsion', 'Amadeus')
   put(path.join(A, '日记.md'), '上午把周报发出去。\n')
@@ -32,6 +33,7 @@ async function withApp(cfgOf, run) {
   }
   const readCfg = () => cfgFiles.map((f) => { try { return { f, mtime: fs.statSync(f).mtimeMs, v: JSON.parse(fs.readFileSync(f, 'utf8')) } } catch { return null } })
     .filter(Boolean).sort((a, b) => b.mtime - a.mtime)[0].v
+  if (opts.prep) opts.prep(cfgFiles)
   const workspace = `${home}-workspace`
   const env = { ...process.env, TANGU_HOME: home, FORSION_WORKSPACE_DIR: workspace, TANGU_BACKEND_URL: 'http://127.0.0.1:1', TANGU_HARNESS_QUIET: '1' }
   const app = await electron.launch({ args: [`--user-data-dir=${ud}`, '--lang=zh-CN', DESK], cwd: DESK, env })
@@ -39,13 +41,15 @@ async function withApp(cfgOf, run) {
     const win = await app.firstWindow()
     await app.evaluate(({ BrowserWindow }, s) => { BrowserWindow.getAllWindows()[0].setContentSize(s.W, s.H) }, { W, H })
     await win.waitForSelector('#root', { timeout: 30_000 }); await win.waitForTimeout(2500)
+    if (opts.noTree) { await win.waitForTimeout(6000); await run({ win, app, A, home, cfgFiles }); return }
     for (const label of ['跳过引导', 'Skip']) { const b = win.locator(`text=${label}`).first(); if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break } }
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
     await win.evaluate(`localStorage.setItem('forsion_default_space', 'amadeus')`)
     await win.reload({ waitUntil: 'domcontentloaded' }); await win.waitForSelector('.amx-tree .t2s-scroll', { timeout: 30_000 }); await win.waitForTimeout(2000)
-    await run({ win, app, A, home, workspace, readCfg })
+    await run({ win, app, A, home, workspace, readCfg, cfgFiles })
   } finally {
     await app.close().catch(() => {})
+    if (opts.cleanup) opts.cleanup(cfgFiles)
     for (const d of [home, workspace]) fs.rmSync(d, { recursive: true, force: true })
   }
 }
@@ -124,8 +128,47 @@ async function segmentA() {
   })
 }
 
+// 截断的 JSON:内容确定坏了(解析不了)
+const BROKEN = '{"lastVault": "/tmp/somewhere", "localVault'
+
+async function segmentB() {
+  console.log('— 段 B①:配置内容坏了 → 原样挪成 .corrupt-*、从空配置起')
+  await withApp(() => BROKEN, async ({ win, A, workspace, cfgFiles }) => {
+    const moved = []
+    for (const f of cfgFiles) for (const n of fs.readdirSync(path.dirname(f))) {
+      if (n.startsWith(`${path.basename(f)}.corrupt-`)) moved.push({ f, n, body: fs.readFileSync(path.join(path.dirname(f), n), 'utf8') })
+    }
+    check(moved.length >= 1, 'B①: 用到的那份配置挪成了 <原文件名>.corrupt-*', JSON.stringify(moved.map((m) => m.n)))
+    check(moved.length >= 1 && moved.every((m) => m.body === BROKEN), 'B①: 挪走的文件逐字节就是原来的坏内容')
+    const live = moved.map((m) => { try { return JSON.parse(fs.readFileSync(m.f, 'utf8')) } catch { return null } })
+    check(moved.length >= 1 && live.every((v) => v && typeof v === 'object'), 'B①: 原位置现在是一份能解析的新配置', JSON.stringify(live))
+    const root = await win.evaluate(() => window.amadeus.restoreVault(true).then((r) => r?.root ?? null, (e) => ({ error: String(e?.message ?? e) })))
+    const real = (p) => { try { return fs.realpathSync(p) } catch { return p } }
+    check(typeof root === 'string' && fs.statSync(root).isDirectory() && real(root).startsWith(real(workspace)), 'B①: 开的是新建的默认库(真目录),不是读不出来的那份', JSON.stringify(root))
+    check(typeof root === 'string' && real(root) !== real(A), 'B①: 没把种子里的库当成 lastVault', JSON.stringify(root))
+  })
+
+  console.log('— 段 B②:配置 I/O 读不了 → 宿主拒绝,不挪不写')
+  const seeded = JSON.stringify({ lastVault: '/tmp/forsion-vaultmenu-unreadable', localVault: '/tmp/forsion-vaultmenu-unreadable' })
+  let before = []
+  await withApp(() => seeded, async ({ win, cfgFiles }) => {
+    const r = await win.evaluate(() => (window.amadeus?.restoreVault ? window.amadeus.restoreVault(true).then(() => 'ok', (e) => String(e?.message ?? e)) : 'no-bridge'))
+    check(/amadeus-config-unreadable|EACCES|permission/i.test(String(r)), 'B②: restoreVault 拒绝(读不了配置)', String(r))
+    for (const f of cfgFiles) fs.chmodSync(f, 0o600)
+    const after = cfgFiles.map((f) => fs.readFileSync(f, 'utf8'))
+    check(after.every((body, i) => body === before[i]), 'B②: 四份配置逐字节没变(没被盖)')
+    const stray = cfgFiles.flatMap((f) => fs.readdirSync(path.dirname(f)).filter((n) => n.startsWith(`${path.basename(f)}.corrupt-`)))
+    check(stray.length === 0, 'B②: 读不了的不当内容坏了挪走', JSON.stringify(stray))
+  }, {
+    noTree: true,
+    prep: (files) => { before = files.map((f) => fs.readFileSync(f, 'utf8')); for (const f of files) fs.chmodSync(f, 0o000) },
+    cleanup: (files) => { for (const f of files) { try { fs.chmodSync(f, 0o600) } catch {} } },
+  })
+}
+
 async function main() {
   await segmentA()
+  await segmentB()
   console.log('— 菜单走查:老配置起步')
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-vaultmenu-'))
   const A = path.join(home, 'Forsion', 'Amadeus')
