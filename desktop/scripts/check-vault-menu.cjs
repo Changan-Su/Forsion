@@ -42,7 +42,7 @@ async function withApp(cfgOf, run) {
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
     await win.evaluate(`localStorage.setItem('forsion_default_space', 'amadeus')`)
     await win.reload({ waitUntil: 'domcontentloaded' }); await win.waitForSelector('.amx-tree .t2s-scroll', { timeout: 30_000 }); await win.waitForTimeout(2000)
-    await run({ win, A, home, workspace, readCfg })
+    await run({ win, app, A, home, workspace, readCfg })
   } finally {
     await app.close().catch(() => {})
     for (const d of [home, workspace]) fs.rmSync(d, { recursive: true, force: true })
@@ -54,7 +54,7 @@ const SAVED_ONLINE = { kind: 'online', account: 'ab'.repeat(32), libraryId: 'vau
 
 async function segmentA() {
   console.log('— 段 A:盘上有 activeVault、不登录 → 回落本机库,插件数据按本机库')
-  await withApp((A) => ({ lastVault: A, localVault: A, lastPage: '日记.md', activeVault: SAVED_ONLINE }), async ({ win, A, home, readCfg }) => {
+  await withApp((A) => ({ lastVault: A, localVault: A, lastPage: '日记.md', activeVault: SAVED_ONLINE }), async ({ win, app, A, home, readCfg }) => {
     const shell = await win.evaluate(() => ({ local: !!window.amadeusLocal, shell: !!window.amadeus && window.amadeus !== window.amadeusLocal, fwd: !!window.amadeusLocal && window.amadeus.listPages === window.amadeusLocal.listPages }))
     check(shell.local && shell.shell && shell.fwd, 'A: window.amadeus 是转发壳,本机桥在 amadeusLocal、方法原样转发', JSON.stringify(shell))
     // window.amadeus 这个键的属性跟 contextBridge 暴露的键一样(只读 / 删不掉 / 可枚举),换成壳以后插件改不了、删不掉它
@@ -97,6 +97,22 @@ async function segmentA() {
       return r
     })
     check(wired.opened === 'ok' && wired.migrate === null && JSON.stringify(readCfg()) === before, 'A: online-opened / migrate 通道在,不登录时什么都不改', JSON.stringify(wired))
+    // 在线库代发通道的推送口(window.tangu.onCloudVaultEvent):Extend 注册了代发通道才有这个键;有的话主进程 send 的那一包原样到订阅者
+    const relay = await win.evaluate(() => {
+      if (typeof window.tangu?.onCloudVaultEvent !== 'function') return { present: false }
+      window.__cvPushes = []
+      window.__cvOff = window.tangu.onCloudVaultEvent((p) => window.__cvPushes.push(p))
+      return { present: true, off: typeof window.__cvOff === 'function' }
+    })
+    if (!relay.present) console.log('     (这个实例没有 Extend 的代发通道:onCloudVaultEvent 不在,跳过推送那一步)')
+    else {
+      const push = { subscriptionId: 's-1', event: { type: 'change', data: { path: 'a.md', extra: [1, { x: null }] } } }
+      check(relay.off, 'A: onCloudVaultEvent 回取消函数')
+      await app.evaluate(({ BrowserWindow }, p) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send('cloudvault:event', p) }, push)
+      await win.waitForTimeout(300)
+      const got = await win.evaluate(() => { window.__cvOff(); return window.__cvPushes })
+      check(JSON.stringify(got) === JSON.stringify([push]), 'A: cloudvault:event 原样转发给订阅者', JSON.stringify(got))
+    }
     // 切走再切回:切本机库同一次落盘清掉 activeVault,lastVault 始终是真目录
     const sw = await win.evaluate(async (a) => {
       try { await window.amadeus.createVault('工作'); return { ok: true, back: (await window.amadeus.switchVault(a))?.root ?? null } } catch (e) { return { error: String(e?.message ?? e) } }

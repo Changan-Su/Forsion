@@ -709,6 +709,8 @@ declare global {
       termsAgree?(version: string): Promise<{ status: number; json?: any }>
       /** Forsion Extend 渲染半身调它自己主进程半身注册的通道;宿主通道一律拒。没装载 Extend 就没有这个键。 */
       cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>
+      /** 在线库代发通道的推送('cloudvault:event',订阅经 cloudInvoke('cloudvault:events:open') 开);原样转发。Extend 没注册代发通道就没有这个键。 */
+      onCloudVaultEvent?(cb: (push: import('../../shared/cloudVaultEvents').CloudVaultPush) => void): () => void
       /** 帮助改进 Forsion(2.13.8 起):渲染层的崩溃 / 功能使用 / 长任务计数报给主进程(整形后转给 Extend;只进不出)。
        *  只有 Extend 注册了 telemetry:get 才有这个键 —— 引导第 7 步「帮助改进」页签据此同步判断本机有没有这一页。 */
       telemetryReport?(kind: import('../../shared/telemetryKeys').RendererReportKind, props: Record<string, unknown>): void
