@@ -8,7 +8,7 @@ import { AppWindow, CircleAlert, CircleCheck, Download, FlaskConical, Loader2, P
 import type { ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { registerMessages, useI18n } from '../../i18n'
 import { extractSandboxStatus, type SandboxInstalled, type SandboxStatus } from '../../../../../tangu-agent/src/contracts/pluginSandbox'
-import { installButton, installErrorText, installedFact } from './sandboxInstall'
+import { installButton, installErrorText, installedFact } from '../../sandbox/sandboxInstall'
 import './pluginSandboxCard.css'
 
 registerMessages({

@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react'
 import { AppWindow, Camera, CircleAlert, CircleCheck, Download, FlaskConical, Loader2, PackageCheck, Play, RefreshCw, RotateCcw, Settings, TriangleAlert } from 'lucide-react'
-import { installButton, installErrorText } from './sandboxInstall'
+import { installButton, installErrorText } from '../../sandbox/sandboxInstall'
 import { registerMessages, useI18n } from '../../i18n'
 import { SummaryCard } from './TaskSummary'
 import type { PluginSandboxState } from '../../types'

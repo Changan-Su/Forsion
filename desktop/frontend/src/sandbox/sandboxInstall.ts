@@ -2,8 +2,8 @@
  * 插件沙箱「装没装进用户那份 Forsion」的共用文案与判断(11-28 方案 A):对话卡、右栏卡、Coding Studio 面板、沙箱窗口顶条读同一份。
  * 状态真源在主进程(electron/pluginSandbox.ts sandboxInstalledState:逐文件比对 plugins/<id> 与沙箱目录),这里只管怎么说。
  */
-import type { SandboxInstalled } from '../../../../../tangu-agent/src/contracts/pluginSandbox'
-import { registerMessages } from '../../i18n'
+import type { SandboxInstalled } from '../../../../tangu-agent/src/contracts/pluginSandbox'
+import { registerMessages } from '../i18n'
 
 registerMessages({
   'sandbox.inst.tag': { zh: '已安装', en: 'Installed' },

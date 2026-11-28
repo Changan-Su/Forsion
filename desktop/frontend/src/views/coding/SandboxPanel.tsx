@@ -5,7 +5,7 @@
  *  证据(setup 抛错 / 视图 mount 抛错 / 这个插件自己的 console)收在这里,一键带回对话。 */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { AlertCircle, AppWindow, Download, FlaskConical, Loader2, Play, RefreshCw, RotateCcw, RotateCw, Settings, ShieldAlert, Square, SquareArrowOutUpRight, Trash2 } from 'lucide-react'
-import { installButton, installErrorText, installedFact } from '../chat2/sandboxInstall'
+import { installButton, installErrorText, installedFact } from '../../sandbox/sandboxInstall'
 import { sandboxUiStorage } from '../../services/pluginSandboxSurface'
 import { clearDevPluginLogs, reloadDevPlugin, useDevPluginState } from '@amadeus/plugins/devSandbox'
 import { useI18n } from '../../i18n'
