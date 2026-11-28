@@ -15,6 +15,12 @@
  *  - 写入一律 resumable 会话(先 POST/PATCH 元数据拿上传地址,再一次 PUT 全部内容):multipart 只适合 5MB 以内;
  *    会话在内容传完前不产生文件,所以建会话那一步撞限流可以安全重试;
  *  - 删除 = 移进回收站(trashed:true),30 天内可在 Drive 里找回。
+ *  - stat(单 key,TargetFs 用):父目录 ID 优先用上次清单里的,清单不认识的段现查(每段一次查询 × 同名父目录数;
+ *    清单都没有时从 baseDir 逐段查),再按名字查一次 —— 常见情况 1 次查询;key 上同时有同名文件夹、或 key 本身是
+ *    冲突派生名时,规则依赖整棵树(文件夹非空才让位 / 派生名按年龄排),走一次私有的全量列表(不替换共享清单)。
+ *    结果回写清单里这一个 key,后续写删的复查跟它对得上。上次清单之后另一台新建的同名文件夹要到下次 walk 才看得见
+ *    (与建前复查同一前提)。
+ *  - opts.cas = TargetFs 语义(targetFs.ts):rm(null) 现查(不只看清单)。缺省 = 旧行为。
  * 隔离约定:不 import electron/desktop;凭据由宿主(remotesyncIpc)注入。
  */
 import { createHash } from 'node:crypto'
@@ -233,7 +239,15 @@ async function isRateLimited(rsp: Response): Promise<boolean> {
   return /rateLimitExceeded|userRateLimitExceeded/.test(t)
 }
 
-export function createGdriveRemote(cfg: GdriveConfig): RemoteFs {
+export interface GdriveRemoteOptions {
+  /** TargetFs 语义(见 targetFs.ts);缺省 false = 旧行为。 */
+  cas?: boolean
+}
+
+/** dupKey 派生出来的名字形状(`名 (conflict gdrive <ID>).扩展名`)。 */
+const DUP_NAME = / \(conflict gdrive [A-Za-z0-9_-]+\)(\.[^.]*)?$/
+
+export function createGdriveRemote(cfg: GdriveConfig, opts: GdriveRemoteOptions = {}): RemoteFs & Required<Pick<RemoteFs, 'stat'>> {
   const f: typeof fetch = (input, init) => (cfg.fetch ?? fetch)(input, init)
   const baseSegs = gdriveBaseSegs(cfg.baseDir)
   let cached: { token: string; exp: number } | null = null
@@ -398,6 +412,46 @@ export function createGdriveRemote(cfg: GdriveConfig): RemoteFs {
 
   const ensureTree = async (signal?: AbortSignal): Promise<DriveTree> => tree ?? (await loadTree(signal))
 
+  /** 相对目录 → 物理文件夹 ID(合并的同名都算,按年龄排);不存在 → null。只读,不建任何东西。 */
+  const resolveFolderIds = async (rel: string, signal?: AbortSignal): Promise<string[] | null> => {
+    const known = tree?.folders.get(rel)
+    if (known?.length) return known
+    if (rel === '') return resolveBase(false, signal)
+    const parents = await resolveFolderIds(dirOf(rel), signal)
+    if (!parents) return null
+    const found = await childrenNamed(parents, baseOf(rel), signal, true)
+    return found.length ? found.map((x) => x.id) : null
+  }
+
+  /** 回写共享清单里这一个 key(清单还没建就不建:写删路径自己会 walk)。 */
+  const remember = (key: string, w: WireFile | null): void => {
+    if (!tree) return
+    if (w) tree.files.set(key, w)
+    else tree.files.delete(key)
+  }
+
+  const statKey = async (key: string, signal?: AbortSignal): Promise<RemoteEntity | null> => {
+    const parents = await resolveFolderIds(dirOf(key), signal)
+    if (!parents) {
+      remember(key, null)
+      return null
+    }
+    const name = baseOf(key)
+    if (!DUP_NAME.test(name)) {
+      const named = await childrenNamed(parents, name, signal) // 已按年龄排:[0] = buildTree 里占原路径的那份
+      if (!named.some((x) => x.mimeType === FOLDER_MIME)) {
+        const w = named.find((x) => !x.mimeType?.startsWith('application/vnd.google-apps.')) ?? null
+        remember(key, w)
+        return w ? entityOf(key, w) : null
+      }
+    }
+    // 有同名文件夹 / 派生名:私有全量列表,别动共享的 tree 与 folderPending(在途写还挂在上面)
+    const baseIds = await resolveBase(false, signal)
+    const w = baseIds ? buildTree(await query('list', 'trashed = false', signal), baseIds).files.get(key) ?? null : null
+    remember(key, w)
+    return w ? entityOf(key, w) : null
+  }
+
   /** resumable 上传:建会话(POST 新建 / PATCH 更新;会话在内容到齐前不产生文件,可安全重试)
    *  → 发内容前最后核对一次前置条件 → 一次 PUT 全部内容(不重试:超时 / 5xx 时可能已落盘)。 */
   const upload = async (
@@ -475,6 +529,10 @@ export function createGdriveRemote(cfg: GdriveConfig): RemoteFs {
       return entityOf(key, w)
     },
     async rm(key, signal, expectedId) {
+      if (opts.cas && expectedId === null) {
+        if (await statKey(key, signal)) throw conflict('rm', key, 'exists remotely')
+        return
+      }
       const t = await ensureTree(signal)
       const known = t.files.get(key)
       let id: string
@@ -504,6 +562,9 @@ export function createGdriveRemote(cfg: GdriveConfig): RemoteFs {
       }, signal, false), signal)
       if (!rsp.ok && rsp.status !== 404) await fail(`rm ${key}`, rsp)
       t.files.delete(key)
+    },
+    async stat(key, signal) {
+      return statKey(key, signal)
     },
     async check() {
       try {

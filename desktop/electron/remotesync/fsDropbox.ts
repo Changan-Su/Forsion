@@ -6,6 +6,8 @@
  *  - 条件写(CAS):writeFile 三态 mode(null→add / rev→update / undefined→overwrite),
  *    rm 带 parent_rev —— walk→push 窗口的并发写在 Dropbox 侧变 409,绝不静默覆盖;
  *  - Dropbox-API-Arg 头必须纯 ASCII:中文路径一律 \uXXXX 转义(asciiJson)。
+ *  - opts.cas = TargetFs 语义(targetFs.ts):上传加 strict_conflict(期望的那份被删了 / 内容恰好相同也算冲突,
+ *    不再静默重建);rm(null) 只查不删;条件删回 not_found 时再查一次,区分「真没了」和「换了一版」。缺省 = 旧行为。
  * 隔离约定:不 import electron/desktop;凭据由宿主(remotesyncIpc)注入。
  */
 import { createHash, randomBytes } from 'node:crypto'
@@ -172,7 +174,12 @@ export async function dropboxExchangeCode(
 
 // ── RemoteFs ─────────────────────────────────────────────────────────────────
 
-export function createDropboxRemote(cfg: DropboxConfig): RemoteFs {
+export interface DropboxRemoteOptions {
+  /** TargetFs 语义(见 targetFs.ts);缺省 false = 旧行为。 */
+  cas?: boolean
+}
+
+export function createDropboxRemote(cfg: DropboxConfig, opts: DropboxRemoteOptions = {}): RemoteFs & Required<Pick<RemoteFs, 'stat'>> {
   const fetch: typeof globalThis.fetch = (input, init) => (cfg.fetch ?? globalThis.fetch)(input, init)
   const base = normBaseDir(cfg.baseDir)
   const absOf = (key: string): string => `${base}/${key}`
@@ -207,6 +214,19 @@ export function createDropboxRemote(cfg: DropboxConfig): RemoteFs {
     if (!rel) return null
     const mt = Date.parse(f.client_modified ?? f.server_modified ?? '') || 0
     return { key: rel, size: f.size, mtimeMs: mt, id: f.rev }
+  }
+
+  /** get_metadata:id = rev(与 walk 同口径);409 not_found → null;文件夹 → not-a-file;其余失败抛。 */
+  const statKey = async (key: string, signal?: AbortSignal): Promise<RemoteEntity | null> => {
+    const rsp = await rpc('/2/files/get_metadata', { path: absOf(key) }, signal)
+    if (!rsp.ok) {
+      const text = await rsp.text().catch(() => '')
+      if (rsp.status === 409 && text.includes('not_found')) return null
+      throw new Error(`dropbox stat ${rsp.status} ${key}: ${text.slice(0, 200)}`)
+    }
+    const j = (await rsp.json()) as WireFile
+    if (j['.tag'] !== 'file') throw new Error(`not-a-file dropbox ${key}`)
+    return { key, size: j.size, mtimeMs: Date.parse(j.client_modified ?? j.server_modified ?? '') || 0, id: j.rev }
   }
 
   return {
@@ -258,11 +278,14 @@ export function createDropboxRemote(cfg: DropboxConfig): RemoteFs {
     async writeFile(key, data, mtimeMs, signal, expectedId) {
       const token = await accessToken(signal)
       const mode = expectedId === null ? 'add' : typeof expectedId === 'string' ? { '.tag': 'update', update: expectedId } : 'overwrite'
+      const arg: Record<string, unknown> = { path: absOf(key), mode, autorename: false, mute: true, client_modified: isoSec(mtimeMs) }
+      // strict_conflict:不带时 update 遇到「期望的那份已被删」会直接新建、内容相同也不报冲突 —— TargetFs 要求严格比身份
+      if (opts.cas && expectedId !== undefined) arg.strict_conflict = true
       const rsp = await fetch(`${CONTENT}/2/files/upload`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
-          'Dropbox-API-Arg': asciiJson({ path: absOf(key), mode, autorename: false, mute: true, client_modified: isoSec(mtimeMs) }),
+          'Dropbox-API-Arg': asciiJson(arg),
           'Content-Type': 'application/octet-stream',
         },
         body: new Uint8Array(data),
@@ -277,15 +300,30 @@ export function createDropboxRemote(cfg: DropboxConfig): RemoteFs {
       return { key, size: j.size, mtimeMs: Date.parse(j.client_modified ?? j.server_modified ?? '') || mtimeMs, id: j.rev }
     },
     async rm(key, signal, expectedId) {
+      if (opts.cas && expectedId === null) {
+        // 期望不存在:只查不删(在 = 冲突,不在 = 无事可做)
+        if (await statKey(key, signal)) throw new Error(`cas-conflict dropbox rm ${key}: exists`)
+        return
+      }
       const arg: { path: string; parent_rev?: string } = { path: absOf(key) }
       if (typeof expectedId === 'string' && expectedId) arg.parent_rev = expectedId
       const rsp = await rpc('/2/files/delete_v2', arg, signal)
       if (!rsp.ok) {
         const text = await rsp.text().catch(() => '')
-        if (rsp.status === 409 && text.includes('not_found')) return // 已不在 = 幂等
+        if (rsp.status === 409 && text.includes('not_found')) {
+          // 已不在 = 幂等。cas:parent_rev 对不上时 Dropbox 回什么没有单独的错误标签,不排除也报 not_found ——
+          // 再查一次:key 上现在有文件 = 被换了一版,不是「已删」(只在这条少见路径上多一个往返)
+          if (opts.cas && typeof expectedId === 'string' && (await statKey(key, signal))) {
+            throw new Error(`cas-conflict dropbox rm ${key}: remote changed`)
+          }
+          return
+        }
         if (rsp.status === 409) throw new Error(`cas-conflict dropbox rm ${key}: ${text.slice(0, 160)}`)
         throw new Error(`dropbox rm ${rsp.status} ${key}: ${text.slice(0, 200)}`)
       }
+    },
+    async stat(key, signal) {
+      return statKey(key, signal)
     },
     async check() {
       try {

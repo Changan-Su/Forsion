@@ -2,13 +2,15 @@
  * 本地磁盘侧(Forsion 自研):
  *  - walkLocalFiles / sha256 / atomicWrite:引擎用的本地库扫描与写入工具
  *  - createDirRemote:把一个目录当远端(folder 后端:U 盘 / NAS 挂载点;也是测试假远端)
+ *    opts.cas = TargetFs 语义(targetFs.ts):null = 独占新建(同目录临时文件 + link,原子)、
+ *    string = 进程内写锁里复查身份再写 / 删(非原子:只防进程内交错,外部进程的窗口缩到一次 stat)。缺省 = 旧行为。
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import type { RemoteFs } from './types'
+import type { RemoteEntity, RemoteFs } from './types'
 import { withTextWriteLock } from '../amadeus/fs/textWriteLock'
-import { writeFileDurable } from '../amadeus/fs/renameAtomic'
+import { renameAtomic, writeFileDurable } from '../amadeus/fs/renameAtomic'
 
 export interface LocalFile {
   key: string
@@ -54,8 +56,42 @@ export async function atomicWrite(absPath: string, data: Buffer, mtimeMs?: numbe
   }
 }
 
+export interface DirRemoteOptions {
+  /** TargetFs 语义(见 targetFs.ts):expectedId 生效。缺省 false = 旧行为(expectedId 忽略、无条件写删),
+   *  旧引擎和 engine.test 的假远端走这里,不许改。 */
+  cas?: boolean
+}
+
+const errCode = (e: unknown): string | undefined => (e as NodeJS.ErrnoException | null)?.code
+const entityOfStat = (key: string, st: { size: number; mtimeMs: number }): RemoteEntity => {
+  const mt = Math.floor(st.mtimeMs)
+  return { key, size: st.size, mtimeMs: mt, id: `${mt}:${st.size}` }
+}
+
+/** 同目录写一个刷过盘、对齐过 mtime 的临时文件,返回它的路径与 fstat(link / rename 之后 inode 不变,
+ *  所以这份 stat 就是落位后的身份 —— 不在落位后再 stat 最终路径,免得把外部进程紧接着的写认成自己的)。 */
+async function writeTempDurable(dir: string, data: Buffer, mtimeMs: number): Promise<{ tmp: string; st: { size: number; mtimeMs: number } }> {
+  await fs.mkdir(dir, { recursive: true })
+  const tmp = path.join(dir, `.rsync-tmp-${process.pid}-${randomUUID()}`)
+  let h: Awaited<ReturnType<typeof fs.open>> | undefined = await fs.open(tmp, 'wx')
+  try {
+    await h.writeFile(data)
+    await h.sync()
+    if (mtimeMs > 0) await h.utimes(new Date(mtimeMs), new Date(mtimeMs)).catch(() => {})
+    const st = await h.stat()
+    const closing = h
+    h = undefined
+    await closing.close()
+    return { tmp, st }
+  } catch (e) {
+    if (h) await h.close().catch(() => {})
+    await fs.rm(tmp, { force: true }).catch(() => {})
+    throw e
+  }
+}
+
 /** 目录当远端。身份 = mtime+size(ponytail: 同毫秒同大小的改动检测不到,够用;要更强换内容 hash)。 */
-export function createDirRemote(root: string): RemoteFs {
+export function createDirRemote(root: string, opts: DirRemoteOptions = {}): RemoteFs & Required<Pick<RemoteFs, 'stat'>> {
   const abs = (key: string): string => {
     const p = path.join(root, ...key.split('/'))
     const resolved = path.resolve(p)
@@ -63,6 +99,57 @@ export function createDirRemote(root: string): RemoteFs {
       throw new Error(`key escapes root: ${key}`)
     }
     return resolved
+  }
+  const conflict = (op: string, key: string, why: string): Error => new Error(`cas-conflict folder ${op} ${key}: ${why}`)
+  /** lstat:符号链接 walk 不列,这里也不当文件(拒绝,而不是穿过链接去写别处)。 */
+  const statKey = async (key: string): Promise<RemoteEntity | null> => {
+    const file = abs(key)
+    let st: Awaited<ReturnType<typeof fs.lstat>>
+    try {
+      st = await fs.lstat(file)
+    } catch (e) {
+      if (errCode(e) === 'ENOENT' || errCode(e) === 'ENOTDIR') return null
+      throw e
+    }
+    if (!st.isFile()) throw new Error(`not-a-file folder ${key}`)
+    return entityOfStat(key, st)
+  }
+  /** 独占新建:临时文件 link 到目标(EEXIST = 有人先建了,目标原样不动);link 因其他任何原因失败都退回 open(final,'wx')
+   *  —— FAT/exFAT U 盘、部分网络盘不支持硬链接,报的码因平台而异(POSIX 上 EPERM / ENOTSUP / EXDEV,Windows 上 libuv 可能译成
+   *  EISDIR),而 'wx' 本身就是独占创建,任何错误都退过去不会削弱「不覆盖」。退路非原子落内容:中途崩溃可能留下半截文件。 */
+  const createExclusive = async (key: string, file: string, data: Buffer, mtimeMs: number): Promise<RemoteEntity> => {
+    const { tmp, st } = await writeTempDurable(path.dirname(file), data, mtimeMs)
+    try {
+      try {
+        await fs.link(tmp, file)
+        return entityOfStat(key, st)
+      } catch (e) {
+        if (errCode(e) === 'EEXIST') throw conflict('PUT', key, 'exists')
+      }
+      let h: Awaited<ReturnType<typeof fs.open>> | undefined
+      try {
+        h = await fs.open(file, 'wx')
+      } catch (e) {
+        if (errCode(e) === 'EEXIST') throw conflict('PUT', key, 'exists')
+        throw e
+      }
+      try {
+        await h.writeFile(data)
+        await h.sync()
+        if (mtimeMs > 0) await h.utimes(new Date(mtimeMs), new Date(mtimeMs)).catch(() => {})
+        const st2 = await h.stat()
+        const closing = h
+        h = undefined
+        await closing.close()
+        return entityOfStat(key, st2)
+      } catch (e) {
+        if (h) await h.close().catch(() => {})
+        await fs.rm(file, { force: true }).catch(() => {}) // 我们独占建的半截文件
+        throw e
+      }
+    } finally {
+      await fs.rm(tmp, { force: true }).catch(() => {})
+    }
   }
   return {
     kind: 'folder',
@@ -73,18 +160,50 @@ export function createDirRemote(root: string): RemoteFs {
     async readFile(key) {
       return fs.readFile(abs(key))
     },
-    async writeFile(key, data, mtimeMs) {
+    async writeFile(key, data, mtimeMs, _signal, expectedId) {
       const file = abs(key)
+      if (!opts.cas || expectedId === undefined) {
+        return withTextWriteLock(file, async () => {
+          await atomicWrite(file, data, mtimeMs)
+          const st = await fs.stat(file)
+          const mt = Math.floor(st.mtimeMs)
+          return { key, size: st.size, mtimeMs: mt, id: `${mt}:${st.size}` }
+        })
+      }
       return withTextWriteLock(file, async () => {
-        await atomicWrite(file, data, mtimeMs)
-        const st = await fs.stat(file)
-        const mt = Math.floor(st.mtimeMs)
-        return { key, size: st.size, mtimeMs: mt, id: `${mt}:${st.size}` }
+        if (expectedId === null) return createExclusive(key, file, data, mtimeMs)
+        const cur = await statKey(key)
+        if (!cur) throw conflict('PUT', key, 'absent')
+        if (cur.id !== expectedId) throw conflict('PUT', key, 'remote changed')
+        const { tmp, st } = await writeTempDurable(path.dirname(file), data, mtimeMs)
+        try {
+          await renameAtomic(tmp, file)
+        } catch (e) {
+          await fs.rm(tmp, { force: true }).catch(() => {})
+          throw e
+        }
+        return entityOfStat(key, st)
       })
     },
-    async rm(key) {
+    async rm(key, _signal, expectedId) {
       const file = abs(key)
-      await withTextWriteLock(file, () => fs.rm(file, { force: true }))
+      if (!opts.cas || expectedId === undefined) {
+        await withTextWriteLock(file, () => fs.rm(file, { force: true }))
+        return
+      }
+      await withTextWriteLock(file, async () => {
+        const cur = await statKey(key)
+        if (expectedId === null) {
+          if (cur) throw conflict('rm', key, 'exists')
+          return
+        }
+        if (!cur) return // 已不在 = 幂等
+        if (cur.id !== expectedId) throw conflict('rm', key, 'remote changed')
+        await fs.rm(file, { force: true })
+      })
+    },
+    async stat(key) {
+      return statKey(key)
     },
     async check() {
       try {

@@ -29,6 +29,9 @@ export interface RemoteFs {
    *  CAS 不符 → throw,引擎记 errors 保基线,下轮走 conflict/join 收敛。 */
   writeFile(key: string, data: Buffer, mtimeMs: number, signal?: AbortSignal, expectedId?: string | null): Promise<RemoteEntity>
   rm(key: string, signal?: AbortSignal, expectedId?: string | null): Promise<void>
+  /** 单 key 查询(TargetFs 用,见 targetFs.ts):不存在 → null;其余任何失败一律 throw(绝不把「查不了」当「不存在」)。
+   *  id 与 walk 同一口径,可直接比较。旧引擎不调它。 */
+  stat?(key: string, signal?: AbortSignal): Promise<RemoteEntity | null>
   /** 连通性自检(设置页「测试连接」)。 */
   check(): Promise<{ ok: boolean; error?: string }>
 }
