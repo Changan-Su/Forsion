@@ -29,14 +29,14 @@ export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, o
   preview: VaultSyncPreview | null
   busy: boolean
   /** cloud = 云端已有(按名字对上 / 原位置);new = 新建库;scope = 已有绑定里新加的部分 */
-  kind: 'cloud' | 'new' | 'scope'
+  kind: 'cloud' | 'new' | 'scope' | 'target'
   onApply: (onDiffer: 'newer' | 'hold') => void
   onCancel: () => void
 }) {
   const { t } = useI18n()
   const [all, setAll] = useState(false)
   const [notSame, setNotSame] = useState(false)
-  const title = kind === 'scope' ? t('ssync.sum.titleScope') : kind === 'new' ? t('ssync.sum.titleNew') : t('ssync.sum.titleCloud')
+  const title = kind === 'scope' ? t('ssync.sum.titleScope') : kind === 'target' ? t('ssync.sum.titleTarget') : kind === 'new' ? t('ssync.sum.titleNew') : t('ssync.sum.titleCloud')
   if (!preview) {
     return (
       <section className="ssync-sum" aria-live="polite" data-ssync-summary="comparing">

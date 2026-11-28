@@ -27,6 +27,8 @@ import { addedItems, closureItems, isExcluded, mergeScope, rebaseScope, removeIt
 import type { SyncFocus } from '../sync/v2/openSyncSettings'
 import type { StatusBindingExtras } from '../sync/v2/feed'
 import { CREATE_CANDIDATE } from '../sync/v2/types'
+import { addFolderTarget, canAuth, cancelAuth, currentTargetKey, finishAuth, hasTargets, listTargets, onAuth, previewTargetOf, startAuth, targetErrorKey, type AuthKind } from '../sync/v2/targets'
+import type { SyncTargetSummary } from '../types'
 import type {
   BindingScope, BindingView, Cadence, PreviewTarget, ResolveCandidate, ResolveNameResult, ScopeItem, VaultSyncCompatReason,
   VaultSyncGet, VaultSyncPreview,
@@ -52,6 +54,10 @@ function reasonText(b: BindingView, t: TFn): string {
 
 /** 汇总卡上写明「本机这个库 → 云端哪一处」:标题是通用的,库名和去处要看得见(Codex P1-4)。 */
 function destOf(p: Pending, data: VaultSyncGet, t: TFn): string {
+  if (p.target.kind === 'remote') {
+    const cur = p.bindingId ? data.bindings.find((x) => x.id === p.bindingId)?.target : undefined
+    return p.targetLabel || (cur?.kind === 'remote' && cur.targetId === p.target.targetId ? cur.label : '') || t('vsync.target.other')
+  }
   const c = p.target.kind === 'penzor' ? p.target.candidate : undefined
   if (c?.kind === 'new') return t('ssync.dest.new', { name: p.name })
   if (c?.kind === 'own') return t('ssync.dest.own', { name: c.name })
@@ -117,9 +123,11 @@ export function SyncSettings({ focus, legacy, drive }: { focus?: SyncFocus; lega
 interface Pending {
   root: string
   name: string
-  kind: 'cloud' | 'new' | 'scope'
+  kind: 'cloud' | 'new' | 'scope' | 'target'
   bindingId?: string
   target: PreviewTarget
+  /** 换到网盘 / 本地文件夹去处时,那个去处的名字(汇总卡写「→ X」) */
+  targetLabel?: string
   scope: BindingScope
   added: ScopeItem[]
   preview: VaultSyncPreview | null
@@ -147,6 +155,12 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   const [driveOpen, setDriveOpen] = useState(false)
   const [recKey, setRecKey] = useState(0)
   const v2 = useVaultSyncRaw((s) => s.v2)
+  // 网盘 / 本地文件夹去处(宿主 sync-targets);null = 列不出(旧主进程)
+  const [targets, setTargets] = useState<SyncTargetSummary[] | null>(null)
+  // 在途的网盘授权(H-9):只认这个 attempt 的结果事件
+  const [auth, setAuth] = useState<AuthState | null>(null)
+  const authRef = useRef<AuthState | null>(null)
+  authRef.current = auth
   const sumRef = useRef<HTMLDivElement>(null)
   const reqRef = useRef(0) // 预演请求号:晚回来的旧回包不再替换当前的卡(Codex P1-4)
 
@@ -200,6 +214,8 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const say = (root: string, text: string | null): void => setMsg((m) => { const n = { ...m }; if (text) n[root] = text; else delete n[root]; return n })
+  const loadTargets = useCallback(async (): Promise<void> => { setTargets(await listTargets()) }, [])
+  useEffect(() => { void loadTargets() }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const runPreview = useCallback(async (p: Pending): Promise<void> => {
     const my = ++reqRef.current
@@ -244,7 +260,8 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   /** 已有绑定扩大范围:预演新范围 → 汇总卡(kind scope)。 */
   const widen = useCallback(async (b: BindingView, next: BindingScope, added: ScopeItem[]): Promise<void> => {
     say(b.root, null)
-    await runPreview({ root: b.root, name: b.name, kind: 'scope', bindingId: b.id, target: { kind: 'penzor' }, scope: next, added, preview: null, base: b.scope, baseTarget: JSON.stringify(b.target) })
+    // 去处沿用这一行此刻的:网盘那一行按蓬洲云去预演 = 换了去处
+    await runPreview({ root: b.root, name: b.name, kind: 'scope', bindingId: b.id, target: previewTargetOf(b), scope: next, added, preview: null, base: b.scope, baseTarget: JSON.stringify(b.target) })
   }, [runPreview])
 
   /** 改范围:纯收缩直接 setScope;引擎说要预演(有新加的)就出汇总卡。 */
@@ -257,6 +274,52 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     say(b.root, r.ok ? null : syncErrorText(r.error, t, b.name))
     await reload()
   }, [reload, t, widen])
+
+  /** 换「同步到哪」:蓬洲云先按名字找同名库(一个直接比 / 几个让人挑 / 没有就新建);网盘 / 本地文件夹按那条去处预演。都先出汇总卡,点了才换。 */
+  const switchTarget = useCallback(async (b: BindingView, key: string, label?: string): Promise<void> => {
+    say(b.root, null)
+    if (key === currentTargetKey(b)) return
+    const base = { root: b.root, name: b.name, kind: 'target' as const, bindingId: b.id, scope: b.scope, added: [] as ScopeItem[], preview: null, base: b.scope, baseTarget: JSON.stringify(b.target) }
+    if (key !== 'penzor') { await runPreview({ ...base, target: { kind: 'remote', targetId: key }, targetLabel: label }); return }
+    const r = await vaultSync.resolveName(b.root)
+    const res = r.ok && r.value ? r.value : null
+    if (!res || res.error) { say(b.root, syncErrorText(res?.error ?? (r.ok ? 'empty' : r.error), t, b.name)); return }
+    if (res.candidates.length > 1) { setPending({ ...base, target: { kind: 'penzor' }, candidates: res.candidates }); return }
+    await runPreview({ ...base, target: { kind: 'penzor', candidate: res.candidates[0] ?? CREATE_CANDIDATE } })
+  }, [runPreview, t])
+  const switchRef = useRef(switchTarget)
+  switchRef.current = switchTarget
+  const bindingsRef = useRef(data.bindings)
+  bindingsRef.current = data.bindings
+
+  /** 加一个本地文件夹去处:宿主选文件夹、存进 sync-targets,再按它出汇总卡。 */
+  const addFolder = useCallback(async (b: BindingView): Promise<void> => {
+    const dir = await window.tangu?.pickDirectory?.().catch(() => null)
+    if (!dir) return
+    const r = await addFolderTarget(dir)
+    if (!r.ok) { say(b.root, t(targetErrorKey(r.error))); return }
+    await loadTargets()
+    await switchTarget(b, r.target.id, r.target.label)
+  }, [loadTargets, switchTarget, t])
+
+  /** 连接 / 重新授权 Dropbox、Google Drive:宿主做完 OAuth,凭据直接进 sync-targets(H-9);这里只等结果事件。 */
+  const connect = useCallback(async (b: BindingView, kind: AuthKind, reauthId?: string): Promise<void> => {
+    say(b.root, null)
+    if (authRef.current) cancelAuth(authRef.current.attempt)
+    const r = await startAuth(kind, reauthId ? { id: reauthId } : undefined)
+    if (!r.ok) { setAuth(null); say(b.root, t(targetErrorKey(r.error))); return }
+    setAuth({ root: b.root, bindingId: b.id, attempt: r.attempt, mode: r.mode, kind, reauth: !!reauthId })
+  }, [t])
+  useEffect(() => onAuth((ev) => {
+    const a = authRef.current
+    if (!a || ev.attempt !== a.attempt) return
+    setAuth(null)
+    if (!ev.ok) { if (ev.error !== 'auth-cancelled') say(a.root, t(targetErrorKey(ev.error))); return }
+    void loadTargets()
+    if (a.reauth) { say(a.root, t('ssync.auth.reauthed', { account: ev.account })); void reload(); return }
+    const b = bindingsRef.current.find((x) => x.id === a.bindingId)
+    if (b) void switchRef.current(b, ev.target.id, ev.target.label)
+  }), []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const apply = async (onDiffer: 'newer' | 'hold'): Promise<void> => {
     if (!pending?.preview) return
@@ -344,6 +407,13 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
               await startOpen(r.root, r.name, { mode: 'all' }, [])
             }}
             onScope={(b, next, added) => void changeScope(b, next, added)}
+            targets={targets}
+            auth={auth?.root === r.root ? auth : null}
+            onTarget={(b, key, label) => void switchTarget(b, key, label)}
+            onAddFolder={(b) => void addFolder(b)}
+            onConnect={(b, kind, id) => void connect(b, kind, id)}
+            onAuthCancel={() => { const a = authRef.current; if (a) { cancelAuth(a.attempt); setAuth(null) } }}
+            onAuthCode={async (code) => { const a = authRef.current; if (!a) return; const res = await finishAuth(a.attempt, code); if (!res.ok) say(a.root, t(targetErrorKey(res.error ?? 'auth-failed'))) }}
             onPair={(b) => void runPreview({ root: b.root, name: b.name, kind: 'cloud', bindingId: b.id, target: { kind: 'penzor' }, scope: b.scope, added: [], preview: null })}
             onNewVault={(b) => void (async () => {
               // 改名后「当成新库上云」:引擎回 next: preview → 按新文件夹名预演一个新库,汇总卡确认了才建、换过去(旧库原样留着)
@@ -453,7 +523,9 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
 }
 
 /** 一个库一行:名字 / 位置 · 状态 · 同步到 · 范围 · 开关;下面挂提示、要你选的、等你定、接手卡。 */
-function VaultRow({ row, binding: b, data, names, message, busy, expanded, entries, v2, onExpand, onToggle, onScope, onPair, onNewVault, reload, say, onRecovery }: {
+interface AuthState { root: string; bindingId: string; attempt: string; mode: 'auto' | 'manual'; kind: AuthKind; reauth: boolean }
+
+function VaultRow({ row, binding: b, data, names, message, busy, expanded, entries, v2, onExpand, onToggle, onScope, onPair, onNewVault, reload, say, onRecovery, targets, auth, onTarget, onAddFolder, onConnect, onAuthCancel, onAuthCode }: {
   row: { root: string; name: string; display: string; current: boolean; exists: boolean }
   binding: BindingView | undefined
   data: VaultSyncGet
@@ -471,6 +543,13 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
   reload: () => Promise<void>
   say: (text: string | null) => void
   onRecovery: () => void
+  targets: SyncTargetSummary[] | null
+  auth: AuthState | null
+  onTarget: (b: BindingView, key: string, label?: string) => void
+  onAddFolder: (b: BindingView) => void
+  onConnect: (b: BindingView, kind: AuthKind, reauthId?: string) => void
+  onAuthCancel: () => void
+  onAuthCode: (code: string) => Promise<void>
 }) {
   const { t } = useI18n()
   const view = useVaultSync({ root: row.root, side: 'local' })
@@ -503,7 +582,8 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
           <div className="ssync-vault-line ssync-vault-meta">
             {b ? (
               <>
-                <TargetPicker binding={b} />
+                <TargetPicker binding={b} targets={targets} disabled={busy || !!auth}
+                  onPick={(key, label) => onTarget(b, key, label)} onAddFolder={() => onAddFolder(b)} onConnect={(kind, id) => onConnect(b, kind, id)} />
                 <span className="ssync-dot" aria-hidden="true">·</span>
                 <button type="button" className="ssync-scope-btn" aria-expanded={expanded} onClick={onExpand}>
                   {scopeLabel}<ChevronDown size={12} aria-hidden="true" />
@@ -527,6 +607,7 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
       {b?.target.kind === 'remote' && !b.target.conditionalWrites && <div className="ssync-note ssync-faint">{t('ssync.target.noCas')}</div>}
       {blocked && !on && <div className="ssync-note ssync-faint">{blocked}</div>}
       {message && <div className="ssync-note" role="status">{message}</div>}
+      {auth && <AuthPanel auth={auth} onCancel={onAuthCancel} onCode={onAuthCode} />}
       {b?.status.reason && <div className="ssync-note ssync-warn" data-ssync-reason={b.status.reason}>{reasonText(b, t)}</div>}
       {b?.state === 'takeover' && (
         <div className="ssync-note">
@@ -652,8 +733,44 @@ function ScopeEditor({ binding: b, current, entries, onScope }: {
   )
 }
 
-/** 同步到:蓬洲云(这一版唯一跑在新同步里的去处)· 网盘灰掉写明「还用原来的方式」(契约 U-1 第 5 条)。 */
-function TargetPicker({ binding: b }: { binding: BindingView | undefined }) {
+const AUTH_LABEL: Record<AuthKind, string> = { dropbox: 'Dropbox', gdrive: 'Google Drive' }
+/** 去处种类的叫法:网盘是品牌名(不翻译),只有本地文件夹要按语言写。 */
+const KIND_BRAND: Partial<Record<SyncTargetSummary['kind'], string>> = { s3: 'S3', webdav: 'WebDAV', ...AUTH_LABEL }
+const kindLabel = (kind: SyncTargetSummary['kind'], t: TFn): string => KIND_BRAND[kind] ?? t('ssync.target.kind.folder')
+
+/** 网盘授权在途:浏览器里登录、授权;Dropbox 回调口被占时(manual)把网页上的授权码贴回来(契约 H-9)。 */
+function AuthPanel({ auth, onCancel, onCode }: { auth: AuthState; onCancel: () => void; onCode: (code: string) => Promise<void> }) {
+  const { t } = useI18n()
+  const [code, setCode] = useState('')
+  const [sending, setSending] = useState(false)
+  const service = AUTH_LABEL[auth.kind]
+  return (
+    <div className="ssync-note ssync-auth" role="status" data-ssync-auth={auth.mode}>
+      <span>{t(auth.mode === 'manual' ? 'ssync.auth.manual' : 'ssync.auth.waiting', { service })}</span>
+      {auth.mode === 'manual' && (
+        <input className="ssync-auth-code" value={code} placeholder={t('ssync.auth.codePlaceholder')} aria-label={t('ssync.auth.codePlaceholder')}
+          onChange={(e) => setCode(e.target.value)} disabled={sending} />
+      )}
+      <span className="ssync-grow" />
+      {auth.mode === 'manual' && (
+        <button type="button" className="btn primary sm" disabled={sending || !code.trim()}
+          onClick={() => { setSending(true); void onCode(code.trim()).finally(() => setSending(false)) }}>{t('ssync.auth.submit')}</button>
+      )}
+      <button type="button" className="btn sm" onClick={onCancel}>{t('ssync.auth.cancel')}</button>
+    </div>
+  )
+}
+
+/** 同步到:蓬洲云 · 已有的网盘 / 本地文件夹去处 · 加一个本地文件夹 · 连接 Dropbox / Google Drive(宿主做授权,H-9)。
+ *  换去处先出汇总卡(引擎状态按新去处从零开始,不删任何一边,契约 E-4 第 54 行)。旧主进程没有去处接缝:网盘项灰掉、写还用原来的方式。 */
+function TargetPicker({ binding: b, targets, disabled, onPick, onAddFolder, onConnect }: {
+  binding: BindingView
+  targets: SyncTargetSummary[] | null
+  disabled: boolean
+  onPick: (key: string, label?: string) => void
+  onAddFolder: () => void
+  onConnect: (kind: AuthKind, reauthId?: string) => void
+}) {
   const { t } = useI18n()
   const [at, setAt] = useState<{ x: number; y: number; top: number } | null>(null)
   const btn = useRef<HTMLButtonElement>(null)
@@ -666,24 +783,54 @@ function TargetPicker({ binding: b }: { binding: BindingView | undefined }) {
     document.addEventListener('keydown', esc)
     return () => { document.removeEventListener('pointerdown', off, true); document.removeEventListener('keydown', esc) }
   }, [at])
-  const label = b?.target.kind === 'remote' ? b.target.label : t('ssync.target.penzor')
+  const cur = currentTargetKey(b)
+  const label = b.target.kind === 'remote' ? b.target.label : t('ssync.target.penzor')
+  const pick = (fn: () => void) => () => { setAt(null); fn() }
+  const host = hasTargets()
+  const auth = canAuth()
+  const reauth = b.target.kind === 'remote' && (b.target.backend === 'dropbox' || b.target.backend === 'gdrive') && auth ? b.target : null
+  const Radio = ({ on }: { on: boolean }) => <Check size={14} aria-hidden="true" style={{ visibility: on ? 'visible' : 'hidden' }} />
   return (
     <>
-      <button ref={btn} type="button" className="ssync-target-btn" aria-haspopup="menu" aria-expanded={!!at} title={t('ssync.syncTo')}
+      <button ref={btn} type="button" className="ssync-target-btn" aria-haspopup="menu" aria-expanded={!!at} title={t('ssync.syncTo')} disabled={disabled}
         onClick={() => { const r = btn.current!.getBoundingClientRect(); setAt((v) => (v ? null : { x: r.left, y: r.bottom + 4, top: r.top })) }}>
         <span className="ssync-faint">{t('ssync.syncTo')}</span> <b>{label}</b> <ChevronDown size={12} aria-hidden="true" />
       </button>
       {at && (
         <OverlayAt className="ctx-menu ssync-target-menu" role="menu" x={at.x} y={at.y} anchorTop={at.top} innerRef={(el: HTMLDivElement | null) => { menu.current = el }}>
-          <button type="button" role="menuitemradio" aria-checked={b?.target.kind !== 'remote'} onClick={() => setAt(null)}>
-            <Check size={14} aria-hidden="true" style={{ visibility: b?.target.kind !== 'remote' ? 'visible' : 'hidden' }} />
+          <button type="button" role="menuitemradio" aria-checked={cur === 'penzor'} data-ssync-target="penzor" onClick={pick(() => onPick('penzor'))}>
+            <Radio on={cur === 'penzor'} />
             <span className="ssync-target-opt"><span>{t('ssync.target.penzor')}</span><span className="ssync-faint">{t('ssync.target.penzorHint')}</span></span>
           </button>
+          {(targets ?? []).map((x) => (
+            <button key={x.id} type="button" role="menuitemradio" aria-checked={cur === x.id} data-ssync-target={x.id} onClick={pick(() => onPick(x.id, x.label))}>
+              <Radio on={cur === x.id} />
+              <span className="ssync-target-opt"><span>{x.label}</span><span className="ssync-faint" title={x.dirDefault}>{kindLabel(x.kind, t)}</span></span>
+            </button>
+          ))}
           <div className="ctx-separator" role="separator" />
-          <button type="button" role="menuitem" disabled aria-disabled="true" title={t('ssync.target.driveLater')}>
-            <Check size={14} aria-hidden="true" style={{ visibility: 'hidden' }} />
-            <span className="ssync-target-opt"><span>{t('ssync.target.addDrive')}</span><span className="ssync-faint">{t('ssync.target.driveLater')}</span></span>
-          </button>
+          {host ? (
+            <>
+              <button type="button" role="menuitem" data-ssync-target-add="folder" onClick={pick(onAddFolder)}>
+                <Radio on={false} /><span className="ssync-target-opt"><span>{t('ssync.target.addFolder')}</span></span>
+              </button>
+              {auth && (['dropbox', 'gdrive'] as const).map((k) => (
+                <button key={k} type="button" role="menuitem" data-ssync-target-add={k} onClick={pick(() => onConnect(k))}>
+                  <Radio on={false} /><span className="ssync-target-opt"><span>{t('ssync.target.connect', { service: AUTH_LABEL[k] })}</span></span>
+                </button>
+              ))}
+              {reauth && (
+                <button type="button" role="menuitem" data-ssync-target-reauth="" onClick={pick(() => onConnect(reauth.backend as AuthKind, reauth.targetId))}>
+                  <Radio on={false} /><span className="ssync-target-opt"><span>{t('ssync.target.reauth', { name: reauth.label })}</span></span>
+                </button>
+              )}
+            </>
+          ) : (
+            <button type="button" role="menuitem" disabled aria-disabled="true" title={t('ssync.target.driveLater')}>
+              <Radio on={false} />
+              <span className="ssync-target-opt"><span>{t('ssync.target.addDrive')}</span><span className="ssync-faint">{t('ssync.target.driveLater')}</span></span>
+            </button>
+          )}
         </OverlayAt>
       )}
     </>
