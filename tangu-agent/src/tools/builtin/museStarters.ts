@@ -4,6 +4,7 @@
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import { loadSpecialAgentsConfig } from '../../services/specialAgentsConfig.js';
+import { amadeusVaultPath } from './amadeus.js';
 import { MAX_STARTERS, STARTER_KINDS, resolveNoteRefs, setStarters, validateStarters } from '../../services/museStarters.js';
 
 const startersOn = (): boolean => {
@@ -62,7 +63,7 @@ export const museStartersProvider: ToolProvider = {
       execute: async (args, ctx) => {
         const v = validateStarters(args.starters);
         if ('error' in v) return `Error: ${v.error}. Nothing was changed.`;
-        const r = resolveNoteRefs(v.starters);
+        const r = resolveNoteRefs(v.starters, amadeusVaultPath(ctx));
         if ('error' in r) return `Error: ${r.error}. Nothing was changed.`;
         try {
           const { shown, refused } = await setStarters(ctx.userId, r.starters);

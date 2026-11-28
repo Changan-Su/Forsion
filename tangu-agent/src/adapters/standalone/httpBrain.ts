@@ -10,6 +10,7 @@ import type {
   StreamResult,
   FimCompletionOpts,
   DecisionResult,
+  AmadeusNotes,
 } from '../../seams/cloudBrain.js';
 import { fimUnsupportedError, FIM_UNSUPPORTED } from '../../seams/cloudBrain.js';
 import {
@@ -36,6 +37,7 @@ import { assertToolDefinitions } from '../../tools/toolDefinitionValidation.js';
 import { stringifyWellFormed } from '../../llm/wellFormedJson.js';
 import { hostOriginHeaders } from '../../core/hostOrigin.js';
 import { hostedImages } from './hostedImages.js';
+import { forsionAccountNamespace } from '../../core/forsionAccountNamespace.js';
 
 export interface HttpBrainConfig {
   cloudUrl: string; // 形如 https://host(无尾斜杠)
@@ -82,8 +84,9 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   const base = cfg.cloudUrl.trim().replace(/\/+$/, '');
   // 宿主客户端与系统:进程级常量,装配时算一次(见 core/hostOrigin.ts)
   const origin = hostOriginHeaders();
-  const authHeaders = (): Record<string, string> => ({
-    Authorization: `Bearer ${typeof cfg.token === 'function' ? cfg.token() : cfg.token}`,
+  const tokenNow = () => typeof cfg.token === 'function' ? cfg.token() : cfg.token;
+  const authHeaders = (token = tokenNow()): Record<string, string> => ({
+    Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
     ...origin,
   });
@@ -139,6 +142,105 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     // 原错留在 cause 上:重试链据它的 code(ENOTFOUND / ENETUNREACH …)认出「本机断网」进入等网络(llm/netWait.ts)
     return Object.assign(new LlmError(0, `云端 ${path} 连接失败(${e?.message || e}${body}):检查本机网络与 ${base} 的连通性`), { cause: e });
   };
+  const amadeusHeaders = (token?: string) => ({ ...authHeaders(token), 'X-Amadeus-Client': 'agent' });
+  function amadeusNotes(vaultId: string, scopedHeaders?: () => Record<string, string>, signal?: AbortSignal): AmadeusNotes {
+    const scoped = !!scopedHeaders;
+    const headers = scopedHeaders ?? amadeusHeaders;
+    const vaultUrl = `${base}/api/amadeus/vaults/${encodeURIComponent(vaultId)}`;
+    return {
+      list: async () => {
+        const r = await fetch(`${vaultUrl}/tree`, {
+          headers: headers(),
+          signal: reqSignal(signal),
+        });
+        if (r.status === 404 && !scoped) return []; // 旧云端无 Amadeus API → 空 vault 降级(工具报「无笔记」)
+        if (!r.ok) throw new Error(`amadeus tree ${r.status}: ${await r.text().catch(() => '')}`);
+        const j: any = await r.json();
+        if (scoped && (!Array.isArray(j?.pages) || !Array.isArray(j?.files))) {
+          throw new Error('Invalid online Amadeus tree response');
+        }
+        // pages=笔记(markdown 页面)路径;个别实现若省略扩展名则补 .md(页面即 .md 文件,file 端点按路径取)。
+        const pages: Array<{ path: string; size: number }> = Array.isArray(j?.pages)
+          ? j.pages.map((p: any) => ({ path: /\.md$/i.test(String(p)) ? String(p) : `${String(p)}.md`, size: 0 }))
+          : [];
+        const files: Array<{ path: string; size: number }> = Array.isArray(j?.files)
+          ? j.files.map((f: any) => ({ path: String(f?.path ?? ''), size: Number(f?.size) || 0 })).filter((f: any) => f.path)
+          : [];
+        const seen = new Set(pages.map((p) => p.path));
+        return [...pages, ...files.filter((f) => !seen.has(f.path))];
+      },
+      read: async (relPath: string) => {
+        const r = await fetch(
+          `${vaultUrl}/file?path=${encodeURIComponent(relPath)}`,
+          { headers: headers(), signal: reqSignal(signal) },
+        );
+        if (r.status === 404 && (!scoped || ((await r.clone().json().catch(() => null)) as { detail?: string } | null)?.detail === 'file not found')) {
+          throw new AmadeusNotFoundError(relPath);
+        }
+        if (!r.ok) throw new Error(`amadeus read ${r.status}: ${await r.text().catch(() => '')}`);
+        const j: any = await r.json();
+        if (scoped && (typeof j?.content !== 'string' || !Number.isSafeInteger(j.seq) || j.seq < 1 ||
+            typeof j.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(j.id))) {
+          throw new Error('Invalid online Amadeus file response');
+        }
+        return { content: String(j?.content ?? ''), seq: Number(j?.seq) || 0, ...(scoped ? { fileId: j.id } : {}) };
+      },
+      write: async (relPath: string, content: string, opts?: { baseSeq?: number; force?: boolean; expectedFileId?: string }) => {
+        if (Buffer.byteLength(content, 'utf-8') > AMADEUS_MAX_FILE_BYTES) throw new AmadeusTooLargeError(relPath);
+        const r = await fetch(`${vaultUrl}/file`, {
+          method: 'PUT',
+          headers: headers(),
+          // force=无条件覆盖时不带 baseSeq(避免陈旧票据反而触发 409);否则带乐观锁票据。
+          body: JSON.stringify({ path: relPath, content,
+            ...(opts?.force ? { force: true } : { baseSeq: opts?.baseSeq }),
+            ...(scoped && opts?.expectedFileId ? { expectedFileId: opts.expectedFileId } : {}),
+          }),
+          signal: reqSignal(signal),
+        });
+        if (r.status === 409) {
+          const j: any = await r.json().catch(() => ({}));
+          throw new AmadeusConflictError(Number(j?.seq) || 0, String(j?.content ?? ''));
+        }
+        if (r.status === 413) throw new AmadeusTooLargeError(relPath);
+        if (r.status === 404) throw new AmadeusNotFoundError(relPath);
+        if (!r.ok) throw new Error(`amadeus write ${r.status}: ${await r.text().catch(() => '')}`);
+        const j: any = await r.json().catch(() => null);
+        if (scoped && (!Number.isSafeInteger(j?.seq) || j.seq <= (opts?.baseSeq ?? 0))) {
+          throw new Error('Save result unconfirmed. Read the note to check its current contents before retrying.');
+        }
+        return { seq: Number(j?.seq) || 0 };
+      },
+    };
+  }
+
+  async function independentAmadeusLibrary(
+    ref: { vaultId: string; prefix: string }, account: string, signal?: AbortSignal,
+  ): Promise<AmadeusNotes | null> {
+    // HTTP tree/file are relative to Amadeus/. A deeper prefix belongs to a legacy library.
+    if (ref.prefix !== 'Amadeus/' || ref.vaultId === 'default' || !/^[A-Za-z0-9_-]+$/.test(ref.vaultId)) return null;
+    const headers = () => {
+      const token = tokenNow();
+      if (forsionAccountNamespace(base, token) !== account) throw new Error('The Forsion account changed');
+      return { ...amadeusHeaders(token), 'X-Content-Caps': 'vaults' };
+    };
+    try {
+      const timeout = AbortSignal.timeout(5_000);
+      const verificationSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+      const r = await fetch(`${base}/api/amadeus/libraries`, { headers: headers(), signal: verificationSignal });
+      if (!r.ok) return null;
+      const response = await r.json() as { libraries?: Array<{ id: string; kind: string; vaultId: string; prefix: string; deleted?: unknown }> } | null;
+      const libraries = response?.libraries;
+      if (!Array.isArray(libraries)) return null;
+      const matches = libraries.filter((entry) => entry?.vaultId === ref.vaultId);
+      if (matches.length !== 1) return null;
+      const [entry] = matches;
+      if (entry.kind !== 'own' || entry.id !== ref.vaultId || entry.prefix !== ref.prefix || entry.deleted) return null;
+      return amadeusNotes(ref.vaultId, headers, signal);
+    } catch {
+      return null;
+    }
+  }
+
   const toB64 = (c: Buffer | string): string =>
     (Buffer.isBuffer(c) ? c : Buffer.from(String(c), 'utf-8')).toString('base64');
   // 运行中 agent 的记忆作用域 slug(非默认才带;无 run 上下文 → ''=全局)。
@@ -657,58 +759,11 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         if (!r.ok) throw new Error(`brain agents/file/delete ${r.status}: ${await r.text().catch(() => '')}`);
       },
     },
-    // ── Amadeus 云笔记库(v1):对端 /api/amadeus/vaults/default/*(契约冻结)。userId 由 token
-    //    隐含(thin worker 的 per-dispatch token 经 cfg.token() 每请求现取)。错误映射:
-    //    404→AmadeusNotFoundError;409→AmadeusConflictError(带最新 seq+content 供调用方重放);
-    //    413/客户端预检→AmadeusTooLargeError;其余透传状态码。──
+    // Keep the Worker's registered default routes and headers.
     amadeus: {
-      list: async () => {
-        const r = await fetch(`${base}/api/amadeus/vaults/default/tree`, {
-          headers: { ...authHeaders(), 'X-Amadeus-Client': 'agent' },
-          signal: reqSignal(),
-        });
-        if (r.status === 404) return []; // 旧云端无 Amadeus API → 空 vault 降级(工具报「无笔记」)
-        if (!r.ok) throw new Error(`amadeus tree ${r.status}: ${await r.text().catch(() => '')}`);
-        const j: any = await r.json();
-        // pages=笔记(markdown 页面)路径;个别实现若省略扩展名则补 .md(页面即 .md 文件,file 端点按路径取)。
-        const pages: Array<{ path: string; size: number }> = Array.isArray(j?.pages)
-          ? j.pages.map((p: any) => ({ path: /\.md$/i.test(String(p)) ? String(p) : `${String(p)}.md`, size: 0 }))
-          : [];
-        const files: Array<{ path: string; size: number }> = Array.isArray(j?.files)
-          ? j.files.map((f: any) => ({ path: String(f?.path ?? ''), size: Number(f?.size) || 0 })).filter((f: any) => f.path)
-          : [];
-        const seen = new Set(pages.map((p) => p.path));
-        return [...pages, ...files.filter((f) => !seen.has(f.path))];
-      },
-      read: async (relPath: string) => {
-        const r = await fetch(
-          `${base}/api/amadeus/vaults/default/file?path=${encodeURIComponent(relPath)}`,
-          { headers: { ...authHeaders(), 'X-Amadeus-Client': 'agent' }, signal: reqSignal() },
-        );
-        if (r.status === 404) throw new AmadeusNotFoundError(relPath);
-        if (!r.ok) throw new Error(`amadeus read ${r.status}: ${await r.text().catch(() => '')}`);
-        const j: any = await r.json();
-        return { content: String(j?.content ?? ''), seq: Number(j?.seq) || 0 };
-      },
-      write: async (relPath: string, content: string, opts?: { baseSeq?: number; force?: boolean }) => {
-        if (Buffer.byteLength(content, 'utf-8') > AMADEUS_MAX_FILE_BYTES) throw new AmadeusTooLargeError(relPath);
-        const r = await fetch(`${base}/api/amadeus/vaults/default/file`, {
-          method: 'PUT',
-          headers: { ...authHeaders(), 'X-Amadeus-Client': 'agent' },
-          // force=无条件覆盖时不带 baseSeq(避免陈旧票据反而触发 409);否则带乐观锁票据。
-          body: JSON.stringify({ path: relPath, content, ...(opts?.force ? { force: true } : { baseSeq: opts?.baseSeq }) }),
-          signal: reqSignal(),
-        });
-        if (r.status === 409) {
-          const j: any = await r.json().catch(() => ({}));
-          throw new AmadeusConflictError(Number(j?.seq) || 0, String(j?.content ?? ''));
-        }
-        if (r.status === 413) throw new AmadeusTooLargeError(relPath);
-        if (r.status === 404) throw new AmadeusNotFoundError(relPath);
-        if (!r.ok) throw new Error(`amadeus write ${r.status}: ${await r.text().catch(() => '')}`);
-        const j: any = await r.json().catch(() => ({}));
-        return { seq: Number(j?.seq) || 0 };
-      },
+      ...amadeusNotes('default'),
+      accountNamespace: () => forsionAccountNamespace(base, tokenNow()),
+      library: independentAmadeusLibrary,
       readHumanCalendar: async () => {
         const r = await fetch(`${base}/api/agent/human/CALENDAR.db`, { headers: authHeaders(), signal: reqSignal() });
         // 401/403/404 = 旧云端(没这条路由、派发票没登记):worker 先于 server 上线那段窗口,退回库里的日历。422 = 文件坏了,同本机跳过
@@ -820,10 +875,10 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // 账号面的通用出口(forsion_account 两个工具用)。与上面的 postJson / getJson 分开写:那几个按 brain 口径抛 LlmError,
   // 这里要的是「永不抛、状态码原样交回」—— 调用方要分得清没登录、令牌失效、接口没开(404)和网络断。
   const CLOUD_REQUEST_TIMEOUT_MS = 15_000;
-  const tokenNow = (): string => String((typeof cfg.token === 'function' ? cfg.token() : cfg.token) || '').trim();
+  const bindingToken = () => String(tokenNow() || '').trim();
   const bindingOf = (token: string) => createHash('sha256').update(token).digest('hex');
   brain.cloud = {
-    accountBinding: () => bindingOf(tokenNow()),
+    accountBinding: () => bindingOf(bindingToken()),
     async request(req) {
       if (!base) return { status: 0, error: 'no_cloud_url' };
       const method = req.method ?? 'GET';
@@ -843,7 +898,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         || lower === '/api/git/credential' || lower === '/api/github/credential') {
         return { status: 0, error: 'path_not_allowed' };
       }
-      const token = tokenNow();
+      const token = bindingToken();
       const health = rawPath === '/api/wellness/agent/summary';
       const binding = health ? runCloudAccount() : undefined;
       if (health && binding !== bindingOf(token)) return {status:403, error:'account_changed'};
@@ -859,7 +914,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
           signal: req.signal ? AbortSignal.any([req.signal, timeout]) : timeout,
         });
         const json = await r.json().catch(() => null);
-        if (health && binding !== bindingOf(tokenNow())) return {status:403, error:'account_changed'};
+        if (health && binding !== bindingOf(bindingToken())) return {status:403, error:'account_changed'};
         return { status: r.status, json };
       } catch (e: any) {
         return { status: 0, error: e?.name === 'TimeoutError' ? 'timeout' : e?.name === 'AbortError' ? 'aborted' : String(e?.message || e) };

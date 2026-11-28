@@ -3,6 +3,7 @@
  * 可见性:仅 Muse run(ctx.muse)、本机能跑自动化(hostExec)且 muse.automationSuggestions 开着;列入 PLAN_MODE_TOOLS(只是向用户提议,不建规则、不碰用户资产)。
  */
 import type { ToolProvider } from '../toolRegistry.js';
+import { amadeusVaultPath } from './amadeus.js';
 import { loadSpecialAgentsConfig } from '../../services/specialAgentsConfig.js';
 import { MAX_SUGGESTIONS, SUGGESTION_SOURCE_KINDS, setSuggestions, validateSuggestions } from '../../services/museAutomationSuggestions.js';
 
@@ -64,7 +65,7 @@ export const museAutomationSuggestionsProvider: ToolProvider = {
         },
       },
       execute: async (args, ctx) => {
-        const v = validateSuggestions(args.suggestions, { cwd: ctx.cwd });
+        const v = validateSuggestions(args.suggestions, { cwd: ctx.cwd, vaultPath: amadeusVaultPath(ctx) });
         if ('error' in v) return `Error: ${v.error}. Nothing was changed.`;
         try {
           const { shown, refused } = await setSuggestions(ctx.userId, v.suggestions);

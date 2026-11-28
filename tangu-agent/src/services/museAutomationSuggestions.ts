@@ -37,8 +37,8 @@ export const suggestionKey = (title: string): string => oneLine(title).toLowerCa
 
 /** 校验模型给的一组(纯函数,单测钉)。逐条报错:一条坏了整组不收,免得用户看到缺一条、Muse 却以为都放上了。
  *  rule 走 manage_automation 同一个校验(validateTriggerInput);草稿里不许 tool_call(那要用户在画布里自己选工具)。 */
-export function validateSuggestions(raw: unknown, opts: { vaultPath?: string; cwd?: string } = {}): { suggestions: SuggestionInput[] } | { error: string } {
-  const vaultPath = opts.vaultPath ?? amadeusVaultPath();
+export function validateSuggestions(raw: unknown, opts: { vaultPath?: string | null; cwd?: string } = {}): { suggestions: SuggestionInput[] } | { error: string } {
+  const vaultPath = opts.vaultPath === undefined ? amadeusVaultPath() : opts.vaultPath;
   if (!Array.isArray(raw)) return { error: 'suggestions must be an array (pass [] to clear)' };
   if (raw.length > MAX_SUGGESTIONS) return { error: `at most ${MAX_SUGGESTIONS} suggestions` };
   const out: SuggestionInput[] = [];
@@ -72,7 +72,7 @@ export function validateSuggestions(raw: unknown, opts: { vaultPath?: string; cw
     const rawActions = Array.isArray((ruleIn as any).actions) ? (ruleIn as any).actions as any[] : undefined;
     const picked = rawActions?.map((a) => a?.type === 'agent_run' && (!String(a.agentSlug || a.agent_slug || '').trim() || String(a.agentSlug || a.agent_slug).trim() === MUSE_AGENT_SLUG));
     const forCheck = rawActions ? { ...ruleIn, actions: rawActions.map((a, k) => (picked![k] ? { ...a, agentSlug: PICK, agent_slug: undefined } : a)) } : ruleIn;
-    const v = validateTriggerInput({ ...forCheck, desc: oneLine(ruleIn.desc) || title } as TriggerInput, { allowToolCall: false, vaultPath, cwd: opts.cwd });
+    const v = validateTriggerInput({ ...forCheck, desc: oneLine(ruleIn.desc) || title } as TriggerInput, { allowToolCall: false, vaultPath: vaultPath ?? undefined, cwd: opts.cwd });
     if (!v.ok) return { error: `${at}: rule: ${v.error}` };
     const { desc, cond, prompt, cooldownHours, only, maxPerDay } = v.value;
     const actions = v.value.actions?.map((a) => (a.type === 'agent_run' && a.agentSlug === PICK ? { ...a, agentSlug: '' } : a));

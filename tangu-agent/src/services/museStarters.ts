@@ -103,14 +103,15 @@ export function validateStarters(raw: unknown): { starters: StarterInput[] } | {
 
 /** 笔记来源的路径落到磁盘上真有的那个文件(绝对路径照用,`~/` 展开,相对路径按笔记库算),返回绝对路径;没有 → null。
  *  10-25 live:模型会把笔记库缺省路径和文件名拼成一个不存在的路径(种子笔记其实在授权文件夹里)—— 存进去就是一个点了打不开的链接。 */
-export function resolveNoteRef(ref: string, vault: string = amadeusVaultPath()): string | null {
+export function resolveNoteRef(ref: string, vault: string | null = amadeusVaultPath()): string | null {
   const raw = ref.trim().replace(/^~(?=[\\/])/, os.homedir());
-  const abs = path.isAbsolute(raw) ? path.normalize(raw) : path.join(vault, raw);
+  const abs = path.isAbsolute(raw) ? path.normalize(raw) : vault ? path.join(vault, raw) : null;
+  if (!abs) return null;
   try { return existsSync(abs) && statSync(abs).isFile() ? abs : null; } catch { return null; }
 }
 
 /** 逐条把笔记来源换成真实的绝对路径;有找不到的就整组不收(和 validateStarters 同一纪律)。 */
-export function resolveNoteRefs(list: StarterInput[], vault?: string): { starters: StarterInput[] } | { error: string } {
+export function resolveNoteRefs(list: StarterInput[], vault?: string | null): { starters: StarterInput[] } | { error: string } {
   const out: StarterInput[] = [];
   for (let i = 0; i < list.length; i++) {
     const s = list[i];

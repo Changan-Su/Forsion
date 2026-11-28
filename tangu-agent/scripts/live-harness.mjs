@@ -209,6 +209,7 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   npm run live:harness -- --only cuweb --cu-plugin <新协议的捆绑包> --cu-replace-installed-helper   # 验已装 helper 的真实升级(11-14):不设 PI_* 变量,
  *                                                           #   插件第一次调用时自己判过期、换掉 /Applications 里的 helper、重启真实 socket 上的守护进程。
  *                                                           #   ⚠️会换掉机器上装着的 helper(开着的桌面共用它):先备份,验完放回。缺省(不带这个开关)照旧拒跑。
+ *   npm run live:harness -- --only onlinevault-notes --model codex/gpt-6-luna --auth <isolated model auth file> # Local fake Amadeus API.
  *   npm run live:harness -- --only inline                    # 正文生成式 AI(09-28,G3-07):POST /agent/inline 润色保事实 / 翻译 / 续写 / 选区里的注入不照做 / 缺字段 400 / 不落会话;改 services/inlineAi.ts 提示词后跑
  *   npm run live:harness -- --only pageinstructions         # 页级 Instructions:分页读带本页约束、下一页不继承、inline 约束与用户当前要求优先
  *   npm run live:harness -- --only tool,stalewrite           # G3-02(09-28):读后被用户改过的文件,write_file 须拒写 → 模型重读 → 终稿留着用户那行;改 write_file / read_file / 读后指纹(readState)后跑
@@ -350,6 +351,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['pluginplan', 'pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 KEYS.push('imagerecovery'); OPT_IN.add('imagerecovery');
+KEYS.push('onlinevault-notes'); OPT_IN.add('onlinevault-notes');
 KEYS.push('heic'); OPT_IN.add('heic'); // --only heic: real HEIC photo through attachment hydration and the live vision model
 KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
 KEYS.push('cloudcal');
@@ -496,6 +498,11 @@ KEYS.push('storeupdate', 'storeupdatechat'); OPT_IN.add('storeupdate'); OPT_IN.a
 //   负对照两条:用户自己的代码报错、模型服务商限流 → 都不起草。负对照:给一份改过一个字节的包 → chat 面看不到工具 → 正例红。
 KEYS.push('agentfeedback'); OPT_IN.add('agentfeedback');
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
+const ONLINE_VAULT_LIVE = ONLY.has('onlinevault-notes');
+if (ONLINE_VAULT_LIVE && ONLY.size !== 1) {
+  console.error('Run onlinevault-notes on its own: it replaces the engine cloud endpoint.');
+  process.exit(2);
+}
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
 const SELF_ROUNDS = Number(opt('rounds', 3)); // selfmodel:每轮一个新 agent,出通过率
 // projkind:--projkind-philosophy 给判官换一段自定义「判断哲学」(设置里可填的那一栏),要它记「关键结论、重要产出」——
@@ -1073,6 +1080,10 @@ const HIST_MODE = opt('historian-mode', 'independent');
 if (!['independent', 'assist'].includes(HIST_MODE)) { console.error(`--historian-mode 只认 independent|assist,收到 ${HIST_MODE}`); process.exit(2); }
 if (!['ask', 'agent', 'auto'].includes(MUSE_MODE)) { console.error(`--muse-mode 只认 ask|agent|auto,收到 ${MUSE_MODE}`); process.exit(2); }
 if (!['host', 'sandbox'].includes(EXEC_MODE)) { console.error(`--exec-mode 只认 host|sandbox,收到 ${EXEC_MODE}`); process.exit(2); }
+if (ONLINE_VAULT_LIVE && !opt('auth', process.env.TANGU_LIVE_AUTH || '')) {
+  console.error('onlinevault-notes requires --auth with isolated model credentials.');
+  process.exit(2);
+}
 if (!existsSync(AUTH)) { console.error(`凭证不存在:${AUTH}\n先在 Forsion Desktop(dev)登录 Codex 订阅,或 --auth 指向 provider-auth.json`); process.exit(2); }
 // 生产凭证(~/.forsion/)默认拒绝:引擎启动时可能 refresh 并写回真身,别让台架去改正式安装的登录态(dev 一律 ~/.forsion-dev)。
 if (realpathSync(AUTH).startsWith(join(homedir(), '.forsion') + '/') && !argv.includes('--allow-production-auth')) { console.error(`--auth 指向生产共享域 ${AUTH};要用它请显式加 --allow-production-auth`); process.exit(2); }
@@ -1465,7 +1476,8 @@ if (SEED_PAD.length < 1000) { console.error(`填充行只有 ${SEED_PAD.length} 
 // webpublishreal:本地真 Connect 发的用户令牌就是引擎带给云端的令牌,所以在 TOKEN 之前起;台架退出时一并关掉。
 const SIM = ONLY.has('webpublishreal') || ONLY.has('webcardsreal') ? await startConnectLocal(opt('connect-server', process.env.TANGU_LIVE_CONNECT_SERVER || '')).catch((e) => { console.error(`webpublishreal:${e.message}`); process.exit(2); }) : null;
 if (SIM) process.on('exit', () => SIM.stop());
-const TOKEN = SIM?.token || process.env.TANGU_LIVE_CLOUD_TOKEN || randomUUID(); // 引擎的 --token 同时是它带给 Forsion 云端的登录令牌:走云端的场景(realtime 云端线路)传真令牌。缺省每次随机:撞上别的台架/引擎也只会 401,不会串到别人的引擎上报绿
+const onlineVaultFixture = ONLINE_VAULT_LIVE ? await import('./lib/onlinevault-notes-live.mjs') : null;
+const TOKEN = onlineVaultFixture?.onlineVaultToken() || SIM?.token || process.env.TANGU_LIVE_CLOUD_TOKEN || randomUUID(); // 引擎的 --token 同时是它带给 Forsion 云端的登录令牌:走云端的场景(realtime 云端线路)传真令牌。缺省每次随机:撞上别的台架/引擎也只会 401,不会串到别人的引擎上报绿
 const port = await new Promise((r) => { const srv = createServer(); srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => r(p)); }); });
 const base = `http://127.0.0.1:${port}`;
 const engineLog = join(OUT, 'engine.log');
@@ -1543,6 +1555,7 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 // account(10-10):假 Forsion 云端(额度 / 套餐 / 积分是已知数),只在跑它时起;显式给了 TANGU_LIVE_CLOUD_URL 的以那个为准。
 const FAKE_CLOUD = ONLY.has('imagerecovery') ? await startImageRecoveryCloud(TOKEN) : (ONLY.has('healthsummary') || ONLY.has('account') || ONLY.has('webpublish') || ONLY.has('pluginaware') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
 // marketplace / marketplacechat(11-23):在 server 的商店夹具前挡一层,列表带 include=collected 时多一条 skills.sh 收录技能(lib/market-collected-live.mjs)。
+const ONLINE_VAULT = onlineVaultFixture ? await onlineVaultFixture.startOnlineVaultNotes(TOKEN, OUT) : null;
 const MARKET_FRONT = (ONLY.has('marketplace') || ONLY.has('marketplacechat')) && process.env.TANGU_LIVE_CLOUD_URL ? await startCollectedMarketFront(process.env.TANGU_LIVE_CLOUD_URL) : null;
 
 // computerhistory:日文件逐行加密(desktop/electron/computerHistoryCrypto.ts),钥匙像桌面那样经 stdin 私有通道交给引擎
@@ -1566,12 +1579,25 @@ const chDecrypt = (line) => {
   d.setAuthTag(buf.subarray(buf.length - 16));
   return Buffer.concat([d.update(buf.subarray(12, buf.length - 16)), d.final()]).toString('utf8');
 };
+// The fixture inherits platform settings only. In particular, no token file, provider endpoint,
+// app directory, injected Node module or third-party configuration can come from the host environment.
+const engineEnv = ONLINE_VAULT
+  ? Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+      /^(PATH|SYSTEMROOT|WINDIR|COMSPEC|PATHEXT|LANG|LC_ALL|TEMP|TMP|TMPDIR)$/i.test(key)))
+  : process.env;
+if (ONLINE_VAULT) {
+  mkdirSync(FAKE_HOME, { recursive: true });
+  writeFileSync(join(home, '.env'), '');
+}
 const child = spawn(process.execPath, [
   ...(FAULT_FILE ? ['--import', pathToFileURL(join(root, 'scripts', 'lib', 'llm-fault-preload.mjs')).href] : []),
   entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'),
-  '--sandbox', SANDBOX, '--cloud-url', MARKET_FRONT?.url || process.env.TANGU_LIVE_CLOUD_URL || FAKE_CLOUD?.url || 'http://127.0.0.1:9', '--token', TOKEN,
+  '--sandbox', SANDBOX, '--cloud-url', ONLINE_VAULT?.url || MARKET_FRONT?.url || process.env.TANGU_LIVE_CLOUD_URL || FAKE_CLOUD?.url || 'http://127.0.0.1:9', '--token', TOKEN,
 ], { env: {
-  ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
+  ...engineEnv, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
+  ...(ONLINE_VAULT ? {
+    HOME: FAKE_HOME, USERPROFILE: FAKE_HOME, FORSION_AMADEUS_CONFIG: ONLINE_VAULT.config, FORSION_DEFAULT_CALENDAR: '',
+  } : {}),
   // 桌面宿主会注入(内置 skills.sh 来源开着时):台架照桌面的样子起引擎,收录技能腿才有东西可搜
   TANGU_MARKET_COLLECTED: process.env.TANGU_MARKET_COLLECTED ?? '1',
   ...(FAULT_FILE ? { TANGU_LIVE_FAULT_FILE: FAULT_FILE } : {}),
@@ -1972,6 +1998,7 @@ async function finish(reason) {
   userPages?.close();
   if (!childExit) { child.kill('SIGTERM'); await Promise.race([new Promise((r) => child.once('exit', r)), sleep(8000)]); }
   if (!childExit) { child.kill('SIGKILL'); await Promise.race([new Promise((r) => child.once('exit', r)), sleep(3000)]); }
+  ONLINE_VAULT?.stop();
   let timeline = '';
   try { timeline = timelineReport(await fromDb(join(home, 'state.db'), 1)); } catch (e) { timeline = `(时间线不可用:${e?.message || e})`; }
   const fence = (s, n = 2500) => '```\n' + String(s || '(空)').slice(0, n) + (String(s || '').length > n ? '\n…(截断)' : '') + '\n```';
@@ -4255,6 +4282,7 @@ try {
   // ③ 第三轮 edit_image 带了 previous_outputs,假后端收到的里头有上一张产出(只多带了附件记作未判定)。
   // 负对照 = dist 里两处:services/agentLoop.js 的 `if (!imageInputs.length && contextImages?.images.length)` 前加 `false && `,
   // tools/builtin/imageEdit.js 的 previousOutputs 开头 `if (refs === undefined) return []` 改成 `return []`(②③ 须红)。
+  await scenario('onlinevault-notes', 'Online independent library: read and update a note', () => ONLINE_VAULT.run(run));
   await scenario('imagerecovery', '断线动图恢复：聊天工具入口、会话持久化和确认扣费', () => imageRecoveryLive({ run, api, cloud: FAKE_CLOUD }));
 
   await scenario('imageedit', 'imageedit edit_image 用上一条消息的图、改自己刚生成的图', async () => {

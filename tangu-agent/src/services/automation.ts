@@ -28,8 +28,8 @@ import { createRun } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
 import { agentCapOf, getAgent, listAgents, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { isWithinActiveHours, loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
-import { condSummary, cursorMismatch, disableTrigger, loadTriggers, normalizeVaultRel, replaceKeyPart, sameVault, watchedCols, type MuseTrigger, type ActionSpec, type TriggerContext, type DbLike } from './museTriggers.js';
-import { mutateDb, readDbOrNull, type DbFile } from './amadeusDb.js';
+import { condSummary, cursorMismatch, disableTrigger, loadTriggers, normalizeVaultRel, replaceKeyPart, sameVault, watchedCols, type MuseTrigger, type ActionSpec, type TriggerContext } from './museTriggers.js';
+import { mutateDb, readDbOrNull } from './amadeusDb.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import { loadCursors, setCursors, type DbCursor } from './dbCursors.js';
 import { expandTemplate } from './automationTemplate.js';
@@ -255,20 +255,20 @@ export interface RunActionsResult {
   touched: TouchedDbs;
 }
 
-export async function runActions(t: MuseTrigger, origin: ActionOrigin, ctx?: TriggerContext): Promise<RunActionsResult> {
+export async function runActions(t: MuseTrigger, origin: ActionOrigin, ctx?: TriggerContext, vaultRoot = amadeusVaultPath()): Promise<RunActionsResult> {
   if (inFlight.has(t.id)) {
     log(`规则 ${t.id} 上一次动作链仍在执行,本次忽略(单飞)`);
     return { execId: '', status: 'busy', steps: [], touched: {} };
   }
   inFlight.add(t.id);
   try {
-    return await runActionsInner(t, origin, ctx);
+    return await runActionsInner(t, origin, vaultRoot, ctx);
   } finally {
     inFlight.delete(t.id);
   }
 }
 
-async function runActionsInner(t: MuseTrigger, origin: ActionOrigin, tctx?: TriggerContext): Promise<RunActionsResult & { status: 'done' | 'failed' }> {
+async function runActionsInner(t: MuseTrigger, origin: ActionOrigin, vaultRoot: string | null, tctx?: TriggerContext): Promise<RunActionsResult & { status: 'done' | 'failed' }> {
   const userId = automationUserId();
   const actions: ActionSpec[] = t.actions || [];
   const firstAgent = actions.find((a): a is Extract<ActionSpec, { type: 'agent_run' }> => a.type === 'agent_run');
@@ -335,7 +335,10 @@ async function runActionsInner(t: MuseTrigger, origin: ActionOrigin, tctx?: Trig
         steps.push({ type: 'tool_call', tool: a.tool, ok: !failed, summary: String(res.result).slice(0, 300) });
         if (failed) { error = String(res.result).slice(0, 300); break; }
       } else if (a.type === 'db_row_add' || a.type === 'db_row_edit') {
-        const r = await applyDbAction(a, tctx, dbActionIo);
+        const r = await applyDbAction(a, tctx, {
+          readDb: (rel) => readDbOrNull(rel, vaultRoot),
+          mutateDb: (rel, apply) => mutateDb(rel, apply, vaultRoot),
+        });
         steps.push({ type: a.type, ok: true, summary: `${r.summary}${origin === 'auto' ? '' : ` [${origin}]`}`, ...(r.skipped ? { skipped: true } : {}) });
         if (r.touch.addedIds.length || r.touch.edited.length) {
           const key = normalizeVaultRel(a.path);
@@ -374,18 +377,12 @@ async function runActionsInner(t: MuseTrigger, origin: ActionOrigin, tctx?: Trig
 
 // ── DB 动作(对标 Notion 的 Add page to… / Edit property…)────────────────────────
 
-/** 真 io:读走 readDbOrNull(**缺 → null,坏 → 抛**:坏表不能长得像空表),写走 mutateDb(每路径串行 + 跨进程锁 + 原子落位)。逻辑本体在 automationDbAction.ts。 */
-const dbActionIo = {
-  readDb: (rel: string): Promise<DbLike | null> => readDbOrNull(rel).then((db) => db as DbLike | null),
-  mutateDb: (rel: string, fn: (db: DbFile) => boolean | void): Promise<void> => mutateDb(rel, fn),
-};
-
 /** advanceSelfCursors 的 io(测试注入;缺省真读盘)。 */
 export interface SelfCursorIo {
   loadTriggers: () => Promise<MuseTrigger[]>;
   loadCursors: () => Promise<Record<string, DbCursor>>;
   setCursors: (patch: Record<string, DbCursor>) => Promise<void>;
-  currentVault?: string;
+  currentVault?: string | null;
 }
 
 /**
@@ -405,6 +402,7 @@ export async function advanceSelfCursors(
   touched: Record<string, TouchedDbs>,
   io: SelfCursorIo = { loadTriggers, loadCursors, setCursors, currentVault: amadeusVaultPath() },
 ): Promise<void> {
+  if (io.currentVault === null) return;
   const ids = Object.keys(touched).filter((id) => Object.keys(touched[id] ?? {}).length);
   if (!ids.length) return;
   const list = await io.loadTriggers();
@@ -454,9 +452,10 @@ export async function advanceSelfCursors(
  * busy 不推:什么都没写。
  */
 export async function fireTrigger(t: MuseTrigger, origin: ActionOrigin, ctx?: TriggerContext): Promise<RunActionsResult> {
-  const r = await runActions(t, origin, ctx);
+  const vaultRoot = amadeusVaultPath();
+  const r = await runActions(t, origin, ctx, vaultRoot);
   if (r.status !== 'busy' && Object.keys(r.touched).length) {
-    await advanceSelfCursors({ [t.id]: r.touched }).catch((e: any) => log(`试跑后推自游标失败(${t.id}):${e?.message || e}`));
+    await advanceSelfCursors({ [t.id]: r.touched }, { loadTriggers, loadCursors, setCursors, currentVault: vaultRoot }).catch((e: any) => log(`试跑后推自游标失败(${t.id}):${e?.message || e}`));
   }
   return r;
 }
@@ -513,7 +512,7 @@ async function recordObserved(t: MuseTrigger, ctx?: TriggerContext): Promise<voi
   ).then(() => ledger.inc('daily_muse', 'ruleObservedHits'), (e: any) => log(`观察记录写入失败(${t.id}):${e?.message || e}`));
 }
 
-export async function launchAutomationTriggers(hits: TriggerHit[], io: LaunchIo = { runActions }): Promise<LaunchResult> {
+export async function launchAutomationTriggers(hits: TriggerHit[], io: LaunchIo = { runActions }, vaultRoot = amadeusVaultPath()): Promise<LaunchResult> {
   const launched: string[] = [];
   const touched: Record<string, TouchedDbs> = {};
   if (!hits.length) return { launched, touched };
@@ -537,7 +536,7 @@ export async function launchAutomationTriggers(hits: TriggerHit[], io: LaunchIo 
     if (busy.has(t.id)) continue; // 同规则前一个 hit 已 busy:余下不跑,整条留到下轮
     try {
       if (t.actions?.length) {
-        const r = await io.runActions(t, 'auto', ctx);
+        const r = await io.runActions(t, 'auto', ctx, vaultRoot);
         if (r.status === 'busy') {
           busy.add(t.id);
           log(`规则 ${t.id} 本轮有命中被单飞挡下,整条不 ack,下轮重来`);

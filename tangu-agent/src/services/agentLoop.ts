@@ -35,7 +35,9 @@ import { takeRunThinking } from './sessionSettings.js';
 import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
-import { bindRunCloudAccount, enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
+import { bindRunCloudAccount, currentRunAmadeusVault, enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunAmadeusVault, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
+import { pinAmadeusVault, verifyAmadeusNotes } from '../core/amadeusVault.js';
+import { markedAmadeusRoots } from '../contracts/sessionDefaults.js';
 import { getAgentForRun } from '../agents/standIn.js';
 import { channelSourceOf, resolveRunStandIn, standInSection } from './standInRun.js';
 import { tightenChannelApprovalForAgent } from '../channels/runApproval.js';
@@ -936,6 +938,8 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     if (engineAgent) enterRunContext(userId, runId, resolveMemorySlug(engineAgent.def), engineAgent.slug);
     else enterRunContext(userId, runId);
     bindRunCloudAccount(deps().brain.cloud?.accountBinding?.());
+    const vault = pinAmadeusVault(runId, deps().brain.amadeus);
+    setRunAmadeusVault(vault);
     if (input.approvalTray === true) setApprovalTray(runId, true);
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
@@ -951,6 +955,10 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     const taskPolicy = storedAgentConfig?.pluginOwner ? storedAgentConfig : {};
     const bridgeTools=Array.isArray(taskPolicy.pluginToolNames)?taskPolicy.pluginToolNames:[];
     const allowedBridge=bridgeTools.length?bridgeTools:taskPolicy.pluginReadOnly?['read_file','list_dir','list_files','glob_files','search_files','view_image','calculator','get_datetime']:[];
+    const verifyNotes = vault.kind === 'online' && (engineAgent && !storedAgentConfig?.pluginOwner ||
+      allowedBridge.some((name: string) => /^amadeus_(list_notes|read_note|write_note)$/.test(name)))
+      ? verifyAmadeusNotes(vault, deps().brain.amadeus, ac.signal)
+      : undefined;
     let agentsHome: string | undefined;
     // 融合插件替这个引擎常驻了一个进程(DSH 工作台和对话同一个进程):普通对话改连它;插件任务照旧每轮起一个进程。
     // 插件说现在不该用(对不上上游新版 / 没起来)→ null,这一轮照旧走底层那条路。
@@ -958,10 +966,11 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     let residentHandoff: { instructions: string; key: string; serverName: string } | undefined;
     // 引擎会话此刻的模型(engines.run 的 onModel 报;交接的桥据此问「收不收图」)
     const engineModelNow: { known: boolean; id?: string } = { known: false };
+    if (verifyNotes) setRunAmadeusVault(await verifyNotes);
     if (allowedBridge.length) {
       const { createRunToolServer } = await import('../engines/toolServer.js');
       toolServer = await createRunToolServer({ userId, sessionId, runId, appId:deps().profile.appId, modelId,
-        execMode:'host',cwd:engineCwd,approvalMode:normalizeApprovalMode(storedAgentConfig?.approvalMode),signal:ac.signal,
+        amadeusVault: currentRunAmadeusVault(), execMode:'host',cwd:engineCwd,approvalMode:normalizeApprovalMode(storedAgentConfig?.approvalMode),signal:ac.signal,
         toolsStrict:true,toolsList:allowedBridge },allowedBridge);
     } else if (engineAgent && !storedAgentConfig?.pluginOwner) {
       // 交接:这个 Agent 在 Tangu 上能用的工具(按它的工具设置)经桥交给引擎,人设 / 协作说明 / 记忆 / 技能写进指令目录。
@@ -1797,6 +1806,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // microserver/standalone 的 brain/state 不读此上下文,无副作用。
   enterRunContext(userId, runId);
   bindRunCloudAccount(deps().brain.cloud?.accountBinding?.());
+  let amadeusVault = profile.capabilities.hostExec ? pinAmadeusVault(runId, deps().brain.amadeus) : undefined;
+  if (amadeusVault) setRunAmadeusVault(amadeusVault);
+  const verifyNotes = amadeusVault?.kind === 'online'
+    ? verifyAmadeusNotes(amadeusVault, deps().brain.amadeus, ac.signal)
+    : undefined;
   const modelId = run.model_id || '';
   const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
   const agentConfig = plainObject(input.agentConfig); // 非普通对象(字符串/数组)一律当 {}:下面会直接给它赋字段
@@ -1861,12 +1875,19 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   let preset: Preset | undefined = parsePreset(agentConfig.preset);
   let pluginReadOnly = agentConfig.pluginReadOnly === true;
   let storedAgentSlug: string | undefined; // 分身:这次之前会话存的是谁(换身份的会话不接着用旧历史,见下)
+  let storedAmadeusRoots: string[] = [];
+  let runAmadeusRoots = profile.capabilities.hostExec && agentConfig.execMode === 'host' ? markedAmadeusRoots(agentConfig) : [];
   let importedSession = false; // 外部聊天记录导入的会话(agent_config.imported):回放前要先给窗口外老行补摘要,见 hydrate 前
   try {
     const rawStored = await deps().state.getAgentConfig(sessionId);
     ac.signal.throwIfAborted();
     const stored = rawStored ? (typeof rawStored === 'string' ? JSON.parse(rawStored) : rawStored) : null;
     if (stored !== null && (typeof stored !== 'object' || Array.isArray(stored))) throw new Error('Invalid stored session Agent configuration');
+    storedAmadeusRoots = markedAmadeusRoots(stored);
+    if (Array.isArray(stored?.amadeusExtraRoots) && Array.isArray(stored.extraRoots)) {
+      // A stale client snapshot cannot reclassify a directory whose saved grant is manual.
+      runAmadeusRoots = runAmadeusRoots.filter((root) => !stored.extraRoots.includes(root) || storedAmadeusRoots.includes(root));
+    }
     pluginReadOnly ||= stored?.pluginReadOnly === true;
     if (typeof stored?.agentSlug === 'string') storedAgentSlug = stored.agentSlug;
     importedSession = !!(stored?.imported && typeof stored.imported === 'object');
@@ -1914,14 +1935,23 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     // 远程污点 run 的写回只剩 C7 白名单键(今天就是 agentSlug —— 远端本就能经 PATCH config 选 Agent)。
     if (remoteRun) for (const k of Object.keys(patch)) if (!REMOTE_WRITABLE_CONFIG_KEYS.has(k)) delete patch[k];
-    if (Object.keys(patch).length) {
+    if (Object.keys(patch).length || !remoteRun && runAmadeusRoots.some((root) => !storedAmadeusRoots.includes(root))) {
       ac.signal.throwIfAborted();
       // 写前现读再合:上面读存值到这儿隔着几次 await(团队会话的 getTeam 是真文件 I/O),期间用户在输入区切的档(PUT)不能被旧对象整份盖回去 —— 审批闸现读的就是它(Codex 09-21 P1)。
       // 现读 → 写之间只剩微任务:本机形态是 better-sqlite3(同步 API 包 Promise),HTTP 处理器(宏任务)插不进来;
       // PG / HTTP 状态层有真异步间隙,但那些形态(服务端 / 云 worker)没有 host 审批闸,不读这个档。
       const freshRaw = await deps().state.getAgentConfig(sessionId);
       const fresh = typeof freshRaw === 'string' ? JSON.parse(freshRaw) : freshRaw;
-      await deps().state.setAgentConfig(sessionId, JSON.stringify({ ...(fresh && typeof fresh === 'object' && !Array.isArray(fresh) ? fresh : stored || {}), ...patch }));
+      const freshReadable = fresh && typeof fresh === 'object' && !Array.isArray(fresh);
+      const freshConfig = freshReadable ? fresh : stored || {};
+      if (!remoteRun && freshReadable && Array.isArray(freshConfig.extraRoots) && runAmadeusRoots.length) {
+        // The host can save just extraRoots on first use of an existing session. Record explicit
+        // provenance from the run for roots already present in the fresh session config.
+        const known = markedAmadeusRoots(freshConfig);
+        const extra = runAmadeusRoots.filter((root) => freshConfig.extraRoots.includes(root) && !known.includes(root));
+        if (extra.length) patch.amadeusExtraRoots = [...known, ...extra];
+      }
+      if (Object.keys(patch).length) await deps().state.setAgentConfig(sessionId, JSON.stringify({ ...freshConfig, ...patch }));
     }
   } catch (e: any) {
     // 兜底失败不阻断 run,但要留痕:此时按 run 值跑(客户端自己声明的 preset),不是静默的
@@ -2087,6 +2117,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 额外工作文件夹(用户在「工作范围」里显式添加):只认 host、只认绝对路径,去重后封顶 8 个
   // —— 每个都要占一行系统提示,且都是免审批可写根,不该无节制。cwd 本身不重复列。
   // 远程污点 run 没有额外可写根(路由已剥;这里兜住绕过路由抄进来的 —— 会话存值 / 派生配置)。
+  const autoVaultRoots = new Set([...storedAmadeusRoots, ...runAmadeusRoots]
+    .filter((root) => path.isAbsolute(root.trim())).map((root) => path.resolve(root.trim())));
+  const pinnedLocalRoot = amadeusVault?.kind === 'local' ? path.resolve(amadeusVault.root) : undefined;
   const extraRoots: string[] =
     execMode === 'host' && !remote && Array.isArray(agentConfig.extraRoots)
       ? [
@@ -2096,7 +2129,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               .map((r) => path.resolve(r.trim())),
           ),
         ]
-          .filter((r) => !cwd || r !== path.resolve(cwd))
+          .filter((r) => (!cwd || r !== path.resolve(cwd)) && (!autoVaultRoots.has(r) || r === pinnedLocalRoot))
           .slice(0, 8)
       : [];
   // 多账号模式:额外工作文件夹也必须在账号文件夹里(会话存值 / 派生配置里抄来的也算),有一个在外面整轮拒。
@@ -2602,7 +2635,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const channelSession = channelBinding === true;
     const channelUnknown = channelBinding === null; // 工具和回复风格照「没连」走,隐私边界按「连着」走
     // 静态指引/环境段按 profile 装载（G4，见 profiles/promptSections.ts）。
-    const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession, preset, sandboxExec: profile.features.sandbox });
+    if (verifyNotes) {
+      amadeusVault = await verifyNotes;
+      setRunAmadeusVault(amadeusVault);
+    }
+    const promptSections = profile.promptSections({ execMode, cwd, extraRoots, amadeusVault, channelSession, preset, sandboxExec: profile.features.sandbox });
     // (suppressCompanionPersona 在本 run 开头读工作笔记处已定义:coding 预设 × 默认 agent 时人格与笔记一并跳过。)
     // 系统块按「稳定 → 易变」排布,让记忆改写只失效最短后缀(单 pin 单断点,见末尾 pinMessage)。
     // 1) developer_instructions(config.toml;身份/稳定)
@@ -2907,6 +2944,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       subAgentGrants: agentConfig.delegatedFrom ? new Set<string>(agentConfig.subAgentGrants || []) : undefined,
       subAgentDelegator: agentConfig.delegatedBy,
       agentSlug: activeAgentSlug,
+      amadeusVault,
       standIn, // 分身的权限域(工具面 / 读写根 / 委派 / 画像),子代理随 ctx 继承
       thinkingLevel,
       teamSessionId: isTeamMember ? String(teamMember.teamSessionId) : undefined,

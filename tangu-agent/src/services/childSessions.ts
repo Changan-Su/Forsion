@@ -63,7 +63,7 @@ const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim().slice(0, 30
 /** 父会话那一行的「重试」发给子会话的话(落成子会话的一条主会话消息,照常回报):模型读,英文。 */
 export const CHILD_RETRY_MESSAGE = 'Your previous turn stopped with an error before it finished. Pick up the task where you left off: check what is already done, then continue. Do not redo finished work.';
 /** 子会话从主会话的存值里继承的配置键(工作目录、人格、档位);团队 / 私聊引擎 / 计划模式这类会话事实不抄。 */
-const INHERIT_KEYS = ['preset', 'execMode', 'cwd', 'extraRoots', 'workspaceProject', 'agentSlug', 'approvalMode', 'thinkingLevel'];
+const INHERIT_KEYS = ['preset', 'execMode', 'cwd', 'extraRoots', 'amadeusExtraRoots', 'workspaceProject', 'agentSlug', 'approvalMode', 'thinkingLevel'];
 
 const decode = (x: unknown): any => {
   if (typeof x === 'string') { try { return JSON.parse(x) || {}; } catch { return {}; } }

@@ -233,7 +233,8 @@ export const manageAutomationProvider: ToolProvider = {
         if (action !== 'set') return 'Error: action must be set/list/remove';
 
         // 工具参数名是 agent(对模型友好),校验层键是 agent_slug——这里显式映射(修 muse_watch 时代静默掉落的 bug)。
-        const v = validateTriggerInput({ ...args, agent_slug: args.agent_slug ?? args.agent } as any, { cwd: ctx.cwd, vaultPath: amadeusVaultPath() });
+        const vaultPath = amadeusVaultPath(ctx);
+        const v = validateTriggerInput({ ...args, agent_slug: args.agent_slug ?? args.agent } as any, { cwd: ctx.cwd, vaultPath: vaultPath ?? undefined });
         if (!v.ok) return `Error: ${v.error}`;
         // Muse 自激防线:没有动作、也没有 agent 的规则 = 唤醒 Muse。事件它自己造不出来的触发源(电脑上 / 日历)才行;
         // 含 agent_run→muse 的动作链在 validate 里已拒。
@@ -273,8 +274,8 @@ export const manageAutomationProvider: ToolProvider = {
         if (prev?.observe && (v.value.observe === false || !canObserve(v.value.cond))) {
           return 'Error: only the user can turn an observing rule on. Tell them to enable it in Automation.';
         }
-        if (!prev || JSON.stringify(prev.cond) !== JSON.stringify(v.value.cond) || (v.value.enabled && !prev.enabled)) {
-          const badCol = await precheckWatchCols(v.value.cond, (rel) => readDbOrNull(rel) as Promise<DbLike | null>, amadeusVaultPath());
+        if (vaultPath && (!prev || JSON.stringify(prev.cond) !== JSON.stringify(v.value.cond) || (v.value.enabled && !prev.enabled))) {
+          const badCol = await precheckWatchCols(v.value.cond, (rel) => readDbOrNull(rel, vaultPath) as Promise<DbLike | null>, vaultPath);
           if (badCol) return `Error: ${badCol}`;
         }
         // actor='user':agent 经本工具的启停是**显式**操作(与面板同档),不是插件 ensure 那种幂等重放。

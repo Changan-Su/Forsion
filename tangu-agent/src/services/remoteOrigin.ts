@@ -180,7 +180,7 @@ export function clampApprovalMode(mode: string | undefined, cap: CapMode): CapMo
  * 会话配置的远程**写**走白名单,见 REMOTE_WRITABLE_CONFIG_KEYS。
  */
 export const REMOTE_STRIPPED_CONFIG_KEYS = [
-  'verifyCommand', 'engineId', 'soloEngineId', 'extraRoots', 'clientCapabilities', 'client_capabilities', 'devices', 'remoteOrigin', 'remoteContent',
+  'verifyCommand', 'engineId', 'soloEngineId', 'extraRoots', 'amadeusExtraRoots', 'clientCapabilities', 'client_capabilities', 'devices', 'remoteOrigin', 'remoteContent',
   'muse', 'activityAccess', 'automationOrigin', 'approvalDeferral', 'delegatedFrom', 'delegatedBy', 'subAgentGrants',
   'systemPrompt', 'soul', 'toolsMode', 'toolsList', 'toolsStrict',
 ] as const;

@@ -71,11 +71,8 @@ export function fmtClock(sec: number): string {
 }
 
 /** 时刻引用锚点(照抄 transcribe_audio 的 citeHint 口径:只教秒,冒号形态渲染端判非法)。 */
-function citeHint(videoPath: string): string {
-  let ref = videoPath;
-  try {
-    ref = citeRefFor(videoPath, amadeusVaultPath() || null, path.sep);
-  } catch { /* vault 配置缺失 → 绝对路径,锚点照样可点 */ }
+function citeHint(videoPath: string, ctx: ToolContext): string {
+  const ref = citeRefFor(videoPath, amadeusVaultPath(ctx), path.sep);
   return `Cite a moment for the user: [[${ref}#t=<seconds>|<mm:ss>]], e.g. [[${ref}#t=95|01:35]]. ` +
     'Seconds only after `t=` (a clock form like "1:35" is rejected); put the readable timestamp after the `|`. ' +
     'Copy BOTH bracket pairs; it renders as a clickable chip that opens the video at that moment.';
@@ -180,7 +177,7 @@ export const viewVideoProvider: ToolProvider = {
             if (buf.length > MAX_IMAGE_BYTES) return `Error: extracted frame unexpectedly large (${(buf.length / 1024 / 1024).toFixed(1)}MB)`;
             ctx.collectImage({ url: `data:image/jpeg;base64,${buf.toString('base64')}`, name: `${path.basename(abs)}@${fmtClock(t)}` });
             return `Frame at t=${t}s (${fmtClock(t)}) of ${rel} — duration ${durLine} (frame scaled to at most 1280px wide). ` +
-              'The frame has been provided to you as visual content — answer from it directly.\n' + citeHint(abs);
+              'The frame has been provided to you as visual content — answer from it directly.\n' + citeHint(abs, ctx);
           }
 
           // ── 概览模式:≤16 帧联络表 ──
@@ -220,7 +217,7 @@ export const viewVideoProvider: ToolProvider = {
             `(${cols} per row, read left-to-right then top-to-bottom). Frame timestamps:\n${rowLines.join('\n')}\n` +
             'The sheet has been provided to you as visual content — read it directly.\n' +
             'To inspect a moment closely, call view_video again with time:<seconds> (single full-resolution frame); ' +
-            'use start/end to re-sample a narrower window more densely.\n' + citeHint(abs);
+            'use start/end to re-sample a narrower window more densely.\n' + citeHint(abs, ctx);
         } finally {
           fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
         }

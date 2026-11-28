@@ -21,6 +21,8 @@ import { resolveMemorySlug, upgradeAriosoPersona, type NormalAgentDef } from '..
 import type { DisplayFileItem, ToolContext } from '../tools/toolTypes.js';
 import { resolveTools, visibleMcpTools } from '../tools/toolRegistry.js';
 import { deps } from '../seams/runtime.js';
+import { currentRunAmadeusVault } from '../seams/runContext.js';
+import { amadeusOnlinePromptSection } from '../tools/builtin/amadeus.js';
 import { normalizeApprovalMode } from './approvals.js';
 import { parsePreset } from '../core/presetTable.js';
 import { normalizeUIAppCards } from '../shared/intelligentCards.js';
@@ -89,6 +91,8 @@ async function buildHandoffSections(p: EngineAgentsHomeInput, opts: { userShared
   const name = String(def.name || '').trim();
   if (name) sections.push({ key: 'identity', text: agentIdentitySection({ name, nameZh: def.nameZh, nameEn: def.nameEn, namePref: def.namePref, description: String(def.description || '').trim() }) });
   sections.push({ key: 'tools', text: bridgeGuidance(p.serverName, p.budgetSeconds, p.handed, opts.skillsVia) });
+  const onlineVault = amadeusOnlinePromptSection(undefined, p.handed.includes('amadeus_read_note'));
+  if (onlineVault) sections.push({ key: 'amadeus', text: onlineVault });
   if (opts.skillsVia === 'tool' && opts.skills?.length) {
     sections.push({ key: 'skills', text: '## Your skills\n'
       + `Before you follow one of these skills, load it with \`mcp__${p.serverName}__${SKILL_TOOL}\` (pass the name exactly as listed).\n`
@@ -252,6 +256,7 @@ export async function prepareEngineAgentHandoff(p: EngineAgentHandoffInput) {
   }
   const projectRef = await resolveProjectMemory(p.userId, p.sessionId).catch(() => null);
   const toolCtx: ToolContext & { runId: string } = {
+    amadeusVault: currentRunAmadeusVault(),
     userId: p.userId, sessionId: p.sessionId, appId: deps().profile.appId, runId: p.runId, modelId: p.modelId,
     client: typeof input.client === 'string' ? input.client : undefined,
     preset: parsePreset(stored.preset), uiCommands, uiSettings, uiCards: normalizeUIAppCards(input.uiCards), clientCapabilities,

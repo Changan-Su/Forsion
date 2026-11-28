@@ -41,6 +41,7 @@ import { projectDocSection } from './projectDoc.js';
 import { buildProjectMemoryContext } from './projectMemory.js';
 import { loadSkillLoadout, type SkillLoadout } from './skillLoadout.js';
 import { loadCustomTools } from '../tools/customTools.js';
+import { amadeusOnlinePromptSection } from '../tools/builtin/amadeus.js';
 import { AUTONOMY_SECTION, TOOL_FAILURE_SECTION, hostEnvSection } from '../profiles/promptSections.js';
 import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 import { effectiveRemote } from './remoteOrigin.js';
@@ -357,7 +358,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   // 引擎级契约跟着走(07-30 Codex 对照轮):此前子代理只有 4 行契约,失败恢复与环境纪律全靠裸奔——
   // 与 Codex「child 继承父的全量 base instructions」对齐,但只带与子任务相关的段(不带人格/记忆/日程)。
   const envSection = parentCtx.execMode === 'host'
-    ? hostEnvSection(parentCtx.cwd, undefined, { coding: parentCtx.preset === 'coding' })
+    ? hostEnvSection(parentCtx.cwd, undefined, { coding: parentCtx.preset === 'coding', amadeusVault: parentCtx.amadeusVault })
     : null;
   // 具名 agent 的技能面跟着走(08-24):主循环经 enterRunContext 圈 ALS 后 loadSkillLoadout 装目录
   // (listLocalSkills 按 displayAgentSlug 叠加 agents/<slug>/skills)。此前子代理不装载——委派 bluebird
@@ -454,7 +455,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     try { projectMemory = (await buildProjectMemoryContext(parentCtx.userId, parentCtx.sessionId)) || null; }
     catch (e) { parentCtx.signal?.throwIfAborted(); console.warn('[sub-agent] load project memory failed:', (e as Error)?.message || e); }
   }
-  const sysPrompt = [persona, SUB_SYSTEM_PROMPT, TOOL_FAILURE_SECTION, AUTONOMY_SECTION, envSection, projectDoc, projectMemory, ...(skills?.sections ?? []), deferSection]
+  const sysPrompt = [persona, SUB_SYSTEM_PROMPT, TOOL_FAILURE_SECTION, AUTONOMY_SECTION, envSection, amadeusOnlinePromptSection(parentCtx), projectDoc, projectMemory, ...(skills?.sections ?? []), deferSection]
     .filter((s): s is string => !!s)
     .join('\n\n---\n');
   let toolDefs = getToolDefinitions(subCtx);

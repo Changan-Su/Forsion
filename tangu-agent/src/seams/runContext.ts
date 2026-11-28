@@ -10,6 +10,7 @@
  * 对 microserver/standalone **无害**:它们的 brain/state 不读此上下文(固定身份、本地库)。
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { RunAmadeusVault } from '../core/amadeusVault.js';
 
 interface RunCtx {
   userId: string;
@@ -29,6 +30,7 @@ interface RunCtx {
   remote?: boolean;
   /** 本 run 是分身(11-09,services/accessDomain.ts):agentLoop 在读任何上下文之前解析好放进来;子代理(in-process)沿用。 */
   standIn?: StandInDomain;
+  amadeusVault?: RunAmadeusVault;
 }
 
 /**
@@ -77,12 +79,25 @@ export function enterRunContext(
     runId,
     agentSlug,
     displayAgentSlug: displayAgentSlug ?? agentSlug,
-    ...(sameRun ? { cloudBinding: prev?.cloudBinding, sessionId: prev?.sessionId, remote: prev?.remote, standIn: prev?.standIn } : {}),
+    ...(sameRun ? { cloudBinding: prev?.cloudBinding, sessionId: prev?.sessionId, remote: prev?.remote, standIn: prev?.standIn, amadeusVault: prev?.amadeusVault } : {}),
     // 同一 run 解析 agentSlug 时会再次 enter；未显式覆盖就保留已解析出的客户端标签。
     // 只在同一个 run 内沿用(runId 相同,或不指定 runId 的作用域细化如 Historian):排队接力的下一个 run 是在
     // 上一个 run 的收尾上下文里起的,不能继承它的标签(外部引擎 loop 之后不再设 client,会一直带着)。
     clientTag: clientTag ?? (runId === undefined || runId === prev?.runId ? prev?.clientTag : undefined),
   });
+}
+
+export function setRunAmadeusVault(amadeusVault: RunAmadeusVault): void {
+  const run = als.getStore();
+  if (run?.runId === amadeusVault.generation) als.enterWith({ ...run, amadeusVault });
+}
+
+export function withoutRunContext<T>(fn: () => T): T {
+  return als.exit(fn);
+}
+
+export function currentRunAmadeusVault(): RunAmadeusVault | undefined {
+  return als.getStore()?.amadeusVault;
 }
 
 export function bindRunCloudAccount(binding: string | undefined): void {
