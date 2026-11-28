@@ -10,6 +10,7 @@ import { mergeText3With,splitLogBlocks,mergeBlocks,mergeLogHeaders } from '../..
 import { isMemoryDetailPath } from '../../tangu-agent/src/contracts/memoryLayers'
 import { contentOwnsOf,withContentOwns,withLegacyContentOwner,type ContentOwns } from '../../tangu-agent/src/contracts/contentSyncOwner'
 import type { MirrorRetirementPatch, SyncOwnershipV2 } from './amadeus/settings'
+import { defaultSyncOwnership } from './amadeus/cloudSeam'
 import { agentSlugLocalOnly,dropForgottenFacts,mergeAgentSyncContent,mergeTombstoneLists,parseAgentContentPath,parseTombstones,sameTombstones,serializeTombstones,validAgentSyncSlug,MEMORY_TOMBSTONES,type WireTombstone } from '../../tangu-agent/src/contracts/agentSyncRules'
 const mergeText3=(ours:string,base:string,theirs:string)=>mergeText3With(ours,base,theirs,diff3Merge)
 const sha256=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex')
@@ -96,8 +97,7 @@ export async function readMaskedAmadeusConfig<T extends {cloudAccountId?:string|
  *  Extend 走 npm 单独更新、会跑在老桌面上:只有看到这里列了某个族才碰它;老宿主的 contentSync 里没有这个成员 = 没声明 = 那个族整个不动。
  *  只增不改:哪天规则换了不兼容的写法,换一个新名字,别改旧名字的意思。 */
 export const CONTENT_MERGE_FAMILIES:readonly string[]=Object.freeze(['settings'])
-/** 宿主认 Ownership.mirrorRetired(只停镜像,H3 定稿第 1 节)的声明:CloudHost.contentSync.mirrorRetire。
- *  没有它 = 不退役:老宿主(#945)的 ownership.set 收下这个字段不报错、静默丢掉,Extend 不能靠 set 不报错来判断。 */
+/** 宿主认 Ownership.mirrorRetired(只停镜像,H3 定稿第 1 节)的声明:CloudHost.contentSync.mirrorRetire。 */
 export const MIRROR_RETIRE:Readonly<{version:1}>=Object.freeze({version:1})
 /** 新同步两边都改了:agents/、human/ 走和旧同步同一份规则(contracts/agentSyncRules.ts);memoryBase 给了的话,
  *  Agent 的记忆(和记忆详情)合完再按本机墓碑滤一遍(第一次见面取并集时,别把这台忘掉的事实从对方那份带回来、再传上云)。 */
@@ -231,9 +231,8 @@ const validOwnership=(o:unknown):o is SyncOwnershipV2=>{
   const v=o as SyncOwnershipV2
   return !!v&&typeof v==='object'&&Array.isArray(v.entryRoots)&&v.entryRoots.every(r=>typeof r==='string'&&r.length>0)
     &&(v.mirror==='keep'||v.mirror==='off')&&(v.human==='engine'||v.human==='content')
-    &&(v.mirrorRetired===undefined||typeof v.mirrorRetired==='boolean')
 }
-/** 规整:根去重排序;mirrorRetired 只留 true(盘上只存 true,get 只在 true 时带)。 */
+/** 规整:根去重排序;get 只在退役时带 mirrorRetired:true。 */
 const normalizeOwnership=(o:SyncOwnershipV2,retired=o.mirrorRetired===true):SyncOwnershipV2=>
   ({entryRoots:[...new Set(o.entryRoots.map(canonRoot))].sort(),mirror:o.mirror,human:o.human,...(retired?{mirrorRetired:true}:{})})
 
@@ -301,7 +300,7 @@ export function contentSyncOwnershipV2(host:SyncOwnershipHost){
     const v2=await host.readV2(identity);assertAccount(identity)
     if(v2)return normalizeOwnership(v2)
     if(host.legacyOwned(identity))return normalizeOwnership({entryRoots:await host.entryRoots(identity),mirror:'off',human:'content'})
-    return {entryRoots:[],mirror:'keep',human:'engine'}
+    return defaultSyncOwnership()
   }
 
   const patch = host.patchMirrorRetired
@@ -320,15 +319,15 @@ export function contentSyncOwnershipV2(host:SyncOwnershipHost){
     /** 先撤掉失去所有权的一方,再给得到的一方;中途失败回滚已做的那半再抛,不留半截(契约 §3.7、实现期修订 H-1 第 5 条)。
      *  human 没变就不碰引擎(条目同步接手发生在启动那一刻,不能依赖引擎已经起来)。最后让旧引擎按新遮罩重建。
      *  同一个账号的 set 排队一个接一个;任何时候 human 最多一个写者:拿不准引擎那一位时宁可两边都停。 */
-    set(o:SyncOwnershipV2,identity:string|null|undefined=host.accountId()):Promise<void>{
-      if(!validOwnership(o))return Promise.reject(Error('invalid ownership'))
-      try{assertAccount(identity)}catch(e){return Promise.reject(e)}
+    async set(o:SyncOwnershipV2,identity:string|null|undefined=host.accountId()):Promise<void>{
+      if(!validOwnership(o))throw Error('invalid ownership')
+      assertAccount(identity)
       const account=identity
-      return serialized(account,async()=>{
+      await serialized(account,async()=>{
         assertAccount(account)
         const prevV2=await host.readV2(account);assertAccount(account)
-        // mirrorRetired 不给 = 沿用盘上的值(在队列里、读完盘才定):重建对象的老写法不会把退役位冲掉;false = 撤销
-        const next=normalizeOwnership(o,o.mirrorRetired===undefined?prevV2?.mirrorRetired===true:o.mirrorRetired)
+        // Only patchMirrorRetired changes the bit. A caller may have an older get() snapshot.
+        const next=normalizeOwnership(o,prevV2?.mirrorRetired===true)
         const cur=await get(account)
         if(next.human!==cur.human){
           if(next.human==='content'){
@@ -350,10 +349,10 @@ export function contentSyncOwnershipV2(host:SyncOwnershipHost){
             }
           }
         }else await host.writeV2(account,next)
-        assertAccount(account)
-        await host.restartSync()
-        assertAccount(account)
       })
+      assertAccount(account)
+      await host.restartSync()
+      assertAccount(account)
     },
     /** 新同步动过盘:只通知,不写 owner(老 changed() 每次都把 owner 写成 true)。老引擎没有这个口 → 不报错。 */
     async touched(identity:string|null|undefined=host.accountId()):Promise<void>{
