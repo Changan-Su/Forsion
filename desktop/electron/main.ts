@@ -6141,6 +6141,8 @@ app.whenReady().then(async () => {
   ipcMain.on('window:mainAction', (e, rawAction: unknown, rawPayload: unknown) => {
     const req = isTrustedSender(e) ? normalizeMainAction(rawAction, rawPayload) : undefined
     if (!req) return
+    // 用户那份的插件变了(商店装 / 卸、设置里卸):沙箱的「已安装」跟着重算,别拿卸载之前的结论挡按钮
+    if (req.action === 'extensions-changed') pluginSandbox?.hostPluginsChanged()
     // 只有要用户回主窗看结果的才把主窗抢到前面:重开引导、带着草稿 / 引用去聊天、打开 Agent、设置 › 设备里选了去处、设置里点「在蓬洲云中查看」(open-space)。其余(⌘K 重算、测试通知卡、恢复布局、
     // 成就弹窗、撤 Space)用户还在设置浮窗里,别打断。
     if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'chat-quote' || req.action === 'open-agents' || req.action === 'open-agent' || req.action === 'unit-route' || req.action === 'open-space' || req.action === 'open-link') showMainWindow()
@@ -6538,33 +6540,37 @@ async function installFromSandbox(origin: 'sandbox' | 'host', opts: { force?: bo
 }
 async function installOnce(origin: 'sandbox' | 'host', opts: { force?: boolean }): Promise<SandboxInstallResult> {
   const st = pluginSandbox?.state()
-  if (!pluginSandbox || !st?.running) return { ok: false, code: 'no_sandbox', error: 'no sandbox is running' }
-  const expect = { pluginId: st.pluginId, dir: st.dir } // 用户点「安装」同意的就是框里这一个
-  const tell = (r: SandboxInstallResult): SandboxInstallResult => { pluginSandbox?.tellInstallResult({ ...r, origin }); return r }
-  // 不用弹框就知道装不了 / 不用装的:直接回(沙箱窗口那边垂一张说明)
-  const inst = st.installed
+  const gen = pluginSandbox?.gen() ?? null
+  if (!pluginSandbox || !st?.running || gen === null) return { ok: false, code: 'no_sandbox', error: 'no sandbox is running' }
+  const expect = { pluginId: st.pluginId, dir: st.dir, gen } // 用户点「安装」同意的就是框里这一个(这一个沙箱进程;重置换了就不算)
+  const tell = (r: SandboxInstallResult): SandboxInstallResult => { pluginSandbox?.tellInstallResult(gen, { ...r, origin }); return r }
+  // 不用弹框就知道装不了 / 不用装的:直接回(沙箱窗口那边垂一张说明)。先重算一次:缓存的那份可能是用户在设置里卸载之前的
+  const inst = await pluginSandbox.installedNow()
+  if (pluginSandbox.gen() !== gen) return { ok: false, code: 'changed', error: 'the sandbox changed; try installing again' }
   if (inst?.state === 'store') return tell({ ok: false, code: 'store', error: `the same plugin is already installed in plugins/${inst.folder}; uninstall it first`, installed: inst })
   if (inst?.state === 'same' && !opts.force) return tell({ ok: false, code: 'same', error: 'this exact copy is already installed', installed: inst })
   // 装好后 ctx.net 能连哪些域名:确认框里如实列出(读的是将要拷走的那份 manifest)
   const network = st.dir ? (await readSandboxManifest(st.dir).catch(() => null))?.network : undefined
   const update = inst?.state === 'older'
+  const again = inst?.state === 'same' // 只会是带 force 的(回执卡上的「重新安装」):照实说是覆盖同一份
   const box = {
     type: 'question' as const, title: mt('main.pluginSandbox.installTitle'),
-    message: update
+    message: again
+      ? mt('main.pluginSandbox.reinstallMessage', { name: st.name ?? '', version: st.version ?? '' })
+      : update
       ? mt('main.pluginSandbox.updateMessage', { name: st.name ?? '', version: st.version ?? '', installed: inst?.version ?? '' })
       : mt('main.pluginSandbox.installMessage', { name: st.name ?? '', version: st.version ?? '' }),
     detail: mt('main.pluginSandbox.installDetail', { dir: st.dir ?? '' })
       + (network?.length ? `\n\n${mt('main.pluginSandbox.installNetwork', { domains: network.join(', ') })}` : ''),
-    buttons: [mt(update ? 'main.pluginSandbox.update' : 'main.pluginSandbox.install'), mt('main.pluginSandbox.cancel')], defaultId: 0, cancelId: 1, noLink: true,
+    buttons: [mt(again ? 'main.pluginSandbox.reinstall' : update ? 'main.pluginSandbox.update' : 'main.pluginSandbox.install'), mt('main.pluginSandbox.cancel')], defaultId: 0, cancelId: 1, noLink: true,
   }
   let response: number | null = null
   if (origin === 'sandbox') {
-    response = await pluginSandbox.confirmInChild(box)
-    // 等用户点的工夫沙箱没了(关了窗口 / 停了):当取消,别再到主窗上问一个已经不在的沙箱
-    if (response === null && !pluginSandbox.state().running) return { ok: false, cancelled: true }
-  }
-  if (response === null) {
-    // 主窗上弹(卡片 / Coding Studio 点的;或沙箱那边弹不出来)。沙箱里和本进程里钉住的浮窗先让开,主窗抢到前面
+    response = await pluginSandbox.confirmInChild(gen, box)
+    // 沙箱那边没回答(关了窗口 / 停了 / 重置换了一个 / 等太久):一律当取消。不回落到主窗再问 —— 那边的框可能还开着,两个框同意的不是同一回事
+    if (response === null) return { ok: false, cancelled: true }
+  } else {
+    // 主窗上弹(卡片 / 右栏 / Coding Studio 点的)。沙箱里和本进程里钉住的浮窗先让开,主窗抢到前面
     pluginSandbox.yieldChild(true)
     const restore = yieldPinnedWindows()
     try {

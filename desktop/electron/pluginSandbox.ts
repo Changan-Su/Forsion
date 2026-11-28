@@ -38,6 +38,8 @@ export const PLUGIN_SANDBOX_MESSAGES = defineMainMessages({
   'main.pluginSandbox.install': { zh: '安装', en: 'Install' },
   'main.pluginSandbox.updateMessage': { zh: '用沙箱里这份更新你 Forsion 里的「{name}」？', en: 'Update "{name}" in your Forsion with the sandbox copy?' },
   'main.pluginSandbox.update': { zh: '更新', en: 'Update' },
+  'main.pluginSandbox.reinstallMessage': { zh: '你的 Forsion 里已经是这一份「{name}」{version}。再装一遍，覆盖装好的那份？', en: 'Your Forsion already has this copy of "{name}" {version}. Install it again over the installed one?' },
+  'main.pluginSandbox.reinstall': { zh: '重新安装', en: 'Install again' },
   'main.pluginSandbox.cancel': { zh: '取消', en: 'Cancel' },
   'main.pluginSandbox.windowTitle': { zh: 'Forsion 沙箱 · {name}', en: 'Forsion sandbox · {name}' },
 })
@@ -147,19 +149,22 @@ export async function pluginDigest(dir: string, limits = { files: DIGEST_MAX_FIL
   const root = await realpath(dir).catch(() => null)
   if (!root) return null
   const out = new Map<string, string>()
-  const seen = new Set<string>() // 软链绕回自己:同一个真实目录只走一次
   let bytes = 0
-  const walk = async (abs: string, rel: string): Promise<boolean> => {
+  // 读不了的目录 / 文件 = 比不了(null),不当没有;同一个目录被软链两处 cp 会拷两份,这里也各算一份,只有绕回祖先才停
+  const walk = async (abs: string, rel: string, up: ReadonlySet<string>): Promise<boolean> => {
     const real = await realpath(abs).catch(() => null)
-    if (!real || seen.has(real)) return true
-    seen.add(real)
-    for (const name of (await readdir(abs).catch(() => [] as string[])).sort()) {
+    if (!real) return false
+    if (up.has(real)) return true
+    const chain = new Set(up).add(real)
+    const names = await readdir(abs).catch(() => null)
+    if (!names) return false
+    for (const name of names.sort()) {
       const r = rel ? `${rel}/${name}` : name
       if (INSTALL_SKIP.test(`/${r}`)) continue
       const p = join(abs, name)
       const st = await stat(p).catch(() => null)
-      if (!st) continue
-      if (st.isDirectory()) { if (!(await walk(p, r))) return false; continue }
+      if (!st) return false
+      if (st.isDirectory()) { if (!(await walk(p, r, chain))) return false; continue }
       if (!st.isFile()) continue
       bytes += st.size
       if (out.size >= limits.files || bytes > limits.bytes) return false
@@ -169,11 +174,12 @@ export async function pluginDigest(dir: string, limits = { files: DIGEST_MAX_FIL
     }
     return true
   }
-  return (await walk(root, '')) ? out : null
+  return (await walk(root, '', new Set())) ? out : null
 }
 
-/** 安装换目录时留的临时目录(install 里的 .installing- / .old-):不算另装了一份。 */
+/** 安装换目录时的临时目录。新的以点开头(装载器跳过点目录);老版本留下的 <id>.installing- / .old- 也不算另装了一份。 */
 const INSTALL_TEMP = /\.(installing|old)-[0-9a-f]+$/
+const MARKET_DIR = /^market-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * 用户那份 Forsion 里这个插件装没装、装的是不是沙箱里这一份(契约 SandboxInstalled)。同一个 id 以别的目录名装着(商店的
@@ -182,18 +188,25 @@ const INSTALL_TEMP = /\.(installing|old)-[0-9a-f]+$/
 export async function sandboxInstalledState(forsionHome: string, dir: string, pluginId: string, limits?: { files: number; bytes: number }): Promise<SandboxInstalled> {
   const root = join(forsionHome, 'plugins')
   const blank = { version: '', changed: 0, folder: '' }
+  // 读不到 = null;读到了解析不了 = id 未知(.then 的第二个参数接不住 JSON.parse 抛的错,所以 parse 自己兜)
   const manifestOf = (d: string): Promise<{ id: unknown; version: string } | null> => readFile(join(d, 'manifest.json'), 'utf8').then((t) => {
-    const m = JSON.parse(t) as Record<string, unknown> | null
+    let m: Record<string, unknown> | null = null
+    try { m = JSON.parse(t) as Record<string, unknown> | null } catch { /* 写坏了 */ }
     return { id: m?.id, version: typeof m?.version === 'string' ? m.version.trim().slice(0, 40) : '' }
   }, () => null)
   for (const e of await readdir(root, { withFileTypes: true }).catch(() => [])) {
     if (!e.isDirectory() || e.name === pluginId || e.name.startsWith('.') || INSTALL_TEMP.test(e.name)) continue
     const m = await manifestOf(join(root, e.name))
-    if (m && effectivePluginId(e.name, m.id) === pluginId) return { ...blank, state: 'store', version: m.version, folder: e.name }
+    if (!m) continue
+    // 普通目录(install_slug)按 manifest id 跑;商店的 market-<uuid> 按目录名跑,但装载器会拿它顶掉同 manifest id 的普通目录
+    // (supersededPlainInstalls)—— 装进 plugins/<id> 的这份就不会被装载,所以也算另装着一份
+    if (effectivePluginId(e.name, m.id) === pluginId || (MARKET_DIR.test(e.name) && m.id === pluginId)) return { ...blank, state: 'store', version: m.version, folder: e.name }
   }
   const dest = join(root, pluginId)
-  const mine = await manifestOf(dest)
-  if (!mine) return { ...blank, state: 'none' }
+  const there = await lstat(dest).then(() => true, () => false)
+  if (!there) return { ...blank, state: 'none' }
+  // 目录在、清单读不了 / 写坏了:仍是「装着一份(坏的)」,按逐文件比对算,好让「更新」把它修好
+  const mine = (await manifestOf(dest)) ?? { id: undefined, version: '' }
   const [a, b] = await Promise.all([pluginDigest(dir, limits), pluginDigest(dest, limits)])
   if (!a || !b) return { ...blank, state: 'unknown', version: mine.version }
   let changed = 0
@@ -294,9 +307,12 @@ interface Child {
   needs?: string
   /** 用户那份 Forsion 里装没装这一份(refreshInstalled 算);正在算时又要算 = again。 */
   installed?: SandboxInstalled | null
-  refreshing?: boolean
+  refreshing?: Promise<void> | null
   again?: boolean
+  /** 第几个沙箱(进程级递增):确认框 / 安装 / 回执都绑在点按钮那一刻的这一个上,重置换了一个就不算数。 */
+  gen: number
 }
+let sandboxGen = 0
 
 const HELLO_MS = 45_000
 const SETTLE_MS = 30_000
@@ -353,16 +369,17 @@ export function createPluginSandbox(deps: SandboxDeps) {
   }
 
   /** 父 → 子的通知(id 0:子进程不回)。 */
+  const installedOfInflight = new Map<string, Promise<SandboxInstalled | null>>()
   const push = (c: Child, op: string, args: Record<string, unknown>): void => {
     try { if (c.sock && !c.exited) c.sock.write(JSON.stringify({ id: 0, op, args }) + '\n') } catch { /* 通道断了 */ }
   }
 
   /** 重算「用户那份装没装这一份」:起好 / 重载完 / 装完各一次。变了就广播(卡片)并告诉沙箱窗口(顶条的按钮)。舞台不装,不算。 */
-  async function refreshInstalled(c: Child): Promise<void> {
-    if (folder !== 'sandbox') return
-    if (c.refreshing) { c.again = true; return }
-    c.refreshing = true
-    try {
+  // 正在算时又要算:记一笔 again,等的人拿到的是那一轮(含补算)算完的结果,不是开头那份旧的
+  function refreshInstalled(c: Child): Promise<void> {
+    if (folder !== 'sandbox') return Promise.resolve()
+    if (c.refreshing) { c.again = true; return c.refreshing }
+    const run = (async () => {
       do {
         c.again = false
         const next = await sandboxInstalledState(deps.forsionHome(), c.dir, c.manifest.pluginId).catch(() => null)
@@ -372,7 +389,9 @@ export function createPluginSandbox(deps: SandboxDeps) {
         if (c.status) c.status = { ...c.status, installed: next }
         if (!same) { changed(); push(c, 'installed', { installed: next }) }
       } while (c.again)
-    } finally { c.refreshing = false }
+    })().finally(() => { c.refreshing = null })
+    c.refreshing = run
+    return run
   }
 
   /** 等插件装载落定(不是 starting)。超时就按当时的样子报,不当失败。 */
@@ -462,7 +481,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
       throw new SandboxError('error', `could not start the sandbox: ${e instanceof Error ? e.message : String(e)}`)
     }
     let markDone!: () => void
-    const c: Child = { proc, server, sockPath, sock: null, manifest, dir, paths, sessionId, pending: new Map(), seq: 0, exited: false, done: new Promise((r) => { markDone = r }), lastUsed: Date.now(), status: null }
+    const c: Child = { proc, server, sockPath, sock: null, manifest, dir, paths, sessionId, pending: new Map(), seq: 0, exited: false, done: new Promise((r) => { markDone = r }), lastUsed: Date.now(), status: null, gen: ++sandboxGen }
     let helloFail: (e: Error) => void = () => {}
     // 正常退出 / 被杀 / 根本没起来(spawn 失败只发 error + close,不发 exit)都走这一条,只收拾一次
     const finish = (why: string): void => {
@@ -692,11 +711,11 @@ export function createPluginSandbox(deps: SandboxDeps) {
    * 「安装到我的 Forsion」:拷进 <forsionHome>/plugins/<插件 id>(先拷到旁边再换,失败不留半截)。确认框由 main.ts 先弹,
    * expect = 确认框里给用户看的那个插件:等用户点的工夫沙箱换了插件 / manifest 换了 id,就不拿这次同意去装别的。
    */
-  async function install(expect: { pluginId?: string; dir?: string }, opts: { force?: boolean } = {}): Promise<SandboxInstallResult> {
+  async function install(expect: { pluginId?: string; dir?: string; gen?: number }, opts: { force?: boolean } = {}): Promise<SandboxInstallResult> {
     const c = child && !child.exited ? child : null
     if (!c) return { ok: false, code: 'no_sandbox', error: 'no sandbox is running' }
     const changedMeanwhile: SandboxInstallResult = { ok: false, code: 'changed', error: 'the sandbox changed while you were confirming; try installing again' }
-    if (c.dir !== expect.dir || c.manifest.pluginId !== expect.pluginId) return changedMeanwhile
+    if (c.dir !== expect.dir || c.manifest.pluginId !== expect.pluginId || (expect.gen !== undefined && c.gen !== expect.gen)) return changedMeanwhile
     const rand = randomBytes(4).toString('hex')
     let tmp = ''
     try {
@@ -710,8 +729,9 @@ export function createPluginSandbox(deps: SandboxDeps) {
       if (inst.state === 'store') return { ok: false, code: 'store', error: `the same plugin is already installed in plugins/${inst.folder}; uninstall it first`, installed: inst }
       if (inst.state === 'same' && !opts.force) return { ok: false, code: 'same', error: 'this exact copy is already installed', installed: inst }
       const dest = join(root, manifest.pluginId)
-      tmp = `${dest}.installing-${rand}`
-      const old = `${dest}.old-${rand}`
+      // 临时目录以点开头:装载器跳过点目录,中途崩了留下的半截不会被当成第二份插件装上
+      tmp = join(root, `.${manifest.pluginId}.installing-${rand}`)
+      const old = join(root, `.${manifest.pluginId}.old-${rand}`)
       // 插件目录常是软链(开发者把项目链过来):按真实目录拷,里面的软链也拷成实体,装好的是一份真目录
       const src = await realpath(c.dir)
       await cp(src, tmp, { recursive: true, dereference: true, filter: (p) => !INSTALL_SKIP.test(p.slice(src.length)) })
@@ -755,27 +775,45 @@ export function createPluginSandbox(deps: SandboxDeps) {
     stop: () => serial(() => stop()),
     // 直接调的重置都是用户点的(卡片 / Coding Studio / 沙箱窗口自己的按钮);agent 的走 exec
     reset: () => revealed(serial(() => reset().catch(fail)), true),
-    install: (expect: { pluginId?: string; dir?: string }, opts?: { force?: boolean }) => serial(() => install(expect, opts)),
+    install: (expect: { pluginId?: string; dir?: string; gen?: number }, opts?: { force?: boolean }) => serial(() => install(expect, opts)),
+    /** 现在这个沙箱是第几个(没在跑 = null):main.ts 在用户点按钮那一刻记下,确认 / 安装 / 回执都对它。 */
+    gen: (): number | null => (child && !child.exited ? child.gen : null),
+    /** 重算一次装没装再回(要弹框前用:缓存的那份可能是用户在设置里卸载之前的)。 */
+    installedNow: async (): Promise<SandboxInstalled | null> => {
+      const c = child && !child.exited ? child : null
+      if (!c) return null
+      await refreshInstalled(c)
+      return c.installed ?? null
+    },
+    /** 用户那份的插件变了(商店装 / 卸、设置里卸):重算。 */
+    hostPluginsChanged: (): void => { const c = child && !child.exited ? child : null; if (c) void refreshInstalled(c) },
     /**
      * 沙箱窗口里点的安装:确认框挂在沙箱窗口上(子进程弹的系统框 —— 插件的网页代码和沙箱条同在一个渲染层,画在网页里的「同意」
      * 插件能自己点掉,系统框它够不着)。回用户点的按钮下标;通道断了 / 等不回来 = null。不排队:等人点的工夫别的动作照做。
      */
-    confirmInChild: async (box: { title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number }): Promise<number | null> => {
+    confirmInChild: async (gen: number, box: { title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number }): Promise<number | null> => {
       const c = child && !child.exited ? child : null
-      if (!c) return null
+      if (!c || c.gen !== gen) return null
       c.lastUsed = Date.now()
       const r = await request(c, 'confirmInstall', box, 15 * 60_000).catch(() => null)
-      return typeof r?.response === 'number' ? r.response : null
+      return typeof r?.response === 'number' && child === c ? r.response : null
     },
     /** 用户那份 Forsion 弹确认框期间:沙箱里钉住的浮窗 / 桌面小窗先让开(on = false 放回去)。 */
     yieldChild: (on: boolean): void => { const c = child && !child.exited ? child : null; if (c) push(c, 'yieldPinned', { on }) },
     /** 装完告诉沙箱窗口(顶条换「已安装」、从沙箱窗口点的那次垂回执卡 / 报错)。 */
-    tellInstallResult: (r: SandboxInstallResult & { origin: 'sandbox' | 'host' }): void => { const c = child && !child.exited ? child : null; if (c) push(c, 'installResult', { ...r }) },
+    tellInstallResult: (gen: number, r: SandboxInstallResult & { origin: 'sandbox' | 'host' }): void => { const c = child && !child.exited ? child : null; if (c && c.gen === gen) push(c, 'installResult', { ...r }) },
     /** 卡片上沙箱已经停了的那份:还是要知道装没装(只读;不是插件目录 = null)。 */
-    installedOf: async (dir: string): Promise<SandboxInstalled | null> => {
-      if (folder !== 'sandbox') return null
-      const m = await readSandboxManifest(dir).catch(() => null)
-      return m ? sandboxInstalledState(deps.forsionHome(), dir, m.pluginId).catch(() => null) : null
+    installedOf: (dir: string): Promise<SandboxInstalled | null> => {
+      if (folder !== 'sandbox') return Promise.resolve(null)
+      // 对话里好几张历史卡同时问同一个目录:并成一次
+      const hit = installedOfInflight.get(dir)
+      if (hit) return hit
+      const run = (async () => {
+        const m = await readSandboxManifest(dir).catch(() => null)
+        return m ? sandboxInstalledState(deps.forsionHome(), dir, m.pluginId).catch(() => null) : null
+      })().finally(() => installedOfInflight.delete(dir))
+      installedOfInflight.set(dir, run)
+      return run
     },
     state: publicState,
     openStage,

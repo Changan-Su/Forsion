@@ -44,7 +44,7 @@ export function SandboxChrome() {
   const act = (a: 'report' | 'install' | 'reset' | 'openHost' | 'close', n?: string) => void window.tangu?.sandbox?.action(a, n)
   // 用户那份 Forsion 里装没装这一份(父进程推);回执卡:done = 刚装好 / 点了「已安装」,fail = 没装上
   const [inst, setInst] = useState<SandboxInstalled | null>(null)
-  const [pop, setPop] = useState<null | { kind: 'done'; again: boolean } | { kind: 'fail'; text: string; store: boolean }>(null)
+  const [pop, setPop] = useState<null | { kind: 'done'; again: boolean; same: boolean } | { kind: 'fail'; text: string; store: boolean }>(null)
   const [popAt, setPopAt] = useState({ x: 0, y: 0 })
   const installRef = useRef<HTMLButtonElement | null>(null)
   const popRef = useRef<HTMLDivElement | null>(null)
@@ -60,7 +60,8 @@ export function SandboxChrome() {
       // 只有从这扇窗点的那次垂卡;卡片 / Coding Studio 点的,按钮跟着变就够了
       if (r.origin !== 'sandbox' || r.cancelled) return
       anchorPop()
-      if (r.ok || r.code === 'same') setPop({ kind: 'done', again: r.code === 'same' })
+      // 「和沙箱里是同一份」只在真比对过(state same)时才说;太大比不了(unknown)只说装好了
+      if (r.ok || r.code === 'same') setPop({ kind: 'done', again: r.code === 'same', same: r.installed?.state === 'same' })
       else setPop({ kind: 'fail', text: installErrorText(r, t), store: r.code === 'store' })
     })
     return () => { alive = false; off1?.(); off2?.() }
@@ -80,7 +81,7 @@ export function SandboxChrome() {
   }, [pop])
   const btn = installButton(inst)
   const onInstall = (): void => {
-    if (btn === 'done') { anchorPop(); setPop((p) => (p ? null : { kind: 'done', again: true })); return }
+    if (btn === 'done') { anchorPop(); setPop((p) => (p ? null : { kind: 'done', again: true, same: true })); return }
     // 另装着一份:不用问父进程也知道装不了,直接说怎么办
     if (btn === 'blocked') { anchorPop(); setPop({ kind: 'fail', text: t('sandbox.inst.err.store'), store: true }); return }
     setPop(null)
@@ -128,7 +129,7 @@ export function SandboxChrome() {
         <OverlayAt x={popAt.x} y={popAt.y} alignEnd className="sbx-pop sbx-rcpt ui-popover" data-sbx-host="" data-testid="sandbox-install-receipt" innerRef={(el: HTMLDivElement | null) => { popRef.current = el }}>
           {pop.kind === 'done' ? <>
             <div className="sbx-rcpt-head"><CircleCheck size={15} className="ok" />{t('sandbox.rcpt.doneTitle')}</div>
-            <div className="sbx-rcpt-body">{t('sandbox.rcpt.doneBody', { name: self.name, version: inst?.version || self.version })}</div>
+            <div className="sbx-rcpt-body">{t(pop.same ? 'sandbox.rcpt.doneBody' : 'sandbox.rcpt.doneBodyPlain', { name: self.name, version: inst?.version || self.version })}</div>
             <div className="sbx-pop-actions">
               {pop.again && <button type="button" className="sbx-linkbtn" onClick={() => { setPop(null); act('install', 'force') }}>{t('sandbox.rcpt.reinstall')}</button>}
               <button type="button" className="sbx-cbtn" onClick={() => { setPop(null); act('close') }}>{t('sandbox.inst.close')}</button>

@@ -33,6 +33,10 @@ registerMessages({
     zh: '{name} {version}，和沙箱里这份是同一份。沙箱还开着，可以接着试；改了插件文件，这里会变成「更新」。',
     en: '{name} {version}, the same files as the sandbox. The sandbox stays open so you can keep trying it; when you change the plugin files, this turns into Update.',
   },
+  'sandbox.rcpt.doneBodyPlain': {
+    zh: '{name} {version} 已经装好。沙箱还开着，可以接着试；改了插件之后再装一次就是更新。',
+    en: '{name} {version} is installed. The sandbox stays open so you can keep trying it; install again after you change the plugin to update it.',
+  },
   'sandbox.rcpt.reinstall': { zh: '重新安装', en: 'Install again' },
   'sandbox.rcpt.failTitle': { zh: '没装上', en: 'Not installed' },
   'sandbox.rcpt.ok': { zh: '知道了', en: 'Got it' },

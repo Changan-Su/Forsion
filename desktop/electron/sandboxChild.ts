@@ -541,7 +541,7 @@ export function startSandboxChild(self: SandboxSelf, opts: {
     try {
       // 走包过的 dialog.showMessageBox:弹着的时候状态里 dialog 有值,agent 的动作一律先拒(它会挡住窗口)
       const r = await dialog.showMessageBox(w, {
-        type: 'question', title: text(args.title, 200), message: text(args.message, 600), detail: text(args.detail, 2000),
+        type: 'question', title: text(args.title, 200), message: text(args.message, 600), detail: text(args.detail, 8000),
         buttons, defaultId: 0, cancelId: 1, noLink: true,
       })
       return { response: r.response }

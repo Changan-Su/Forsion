@@ -127,8 +127,11 @@ installed{state,version,changed,folder}|null}`(vault 起五个 11-03 起;install
 - `installed`:用户那份 Forsion 里这个插件的安装情况。父进程逐文件比 `<forsionHome>/plugins/<id>` 与沙箱目录的内容(sha256,
   范围同安装:真实目录、软链跟进、跳过 node_modules / .git / .forsion / .DS_Store;超 4000 个文件或 256 MB 不比 = `unknown`):
   `none` 没装 / `same` 装的就是这一份 / `older` 装过、之后改过(`changed` = 不同的文件数,版本号没变也按内容算)/
-  `store` 同一个 id 以别的目录名装着(`folder`,多半是商店的 `market-…`,`.installing-` / `.old-` 临时目录不算)/ `unknown`。
-  起好、保存即重载(`loads` 变了)、装完各重算一次;变了就广播(卡片)并推给沙箱窗口(顶条按钮)。引擎把它写成一行给模型。
+  `store` 同一个 id 以别的目录名装着(`folder`:install_slug 目录按 manifest id 认;商店的 `market-<uuid>` 按目录名跑,但装载器
+  会用它顶掉同 manifest id 的普通目录(`supersededPlainInstalls`),所以 manifest id 相同也算;点目录与老的 `.installing-` / `.old-` 临时目录不算)/
+  `unknown`(太大、或有目录 / 文件读不了 —— 读不了不当没有)。`plugins/<id>` 在而清单读不了 / 写坏了 = 按内容比(多半 `older`),好让「更新」修好它。
+  起好、保存即重载(`loads` 变了)、装完、用户那份插件变了(`extensions-changed`,商店装 / 卸)各重算一次;正在算时再要算,等的人拿补算后的结果。
+  变了就广播(卡片)并推给沙箱窗口(顶条按钮)。引擎把它写成一行给模型。
 
 - `state`:`starting`(插件宿主还没装载落定)/ `running` / `failed`(setup 抛错或没列出来)/ `blocked`(宿主拒载)/ `stopped`;
 - `loads`:自启动以来装载了几次(保存即重载会累加);
@@ -153,14 +156,15 @@ console 与最后的挂载报错 —— client_cmd 结果 text 与工具结果�
   首次打开垂一条说明。按钮只把意图交给父进程:报告问题 → 回到发起沙箱的那个对话,话放进输入框(用户自己决定发不发)。
 - **Coding Studio Sandbox 面板**:两档,隔离沙箱(缺省)/ 我的 Forsion(原来的开发加载器,原样保留)。
 - **安装到我的 Forsion**:先确认,再把插件目录拷进 `<forsionHome>/plugins/<id>`(先拷到旁边再换,不带
-  `node_modules` / `.git` / `.forsion`;按真实目录拷,软链拷成实体;换的那一步失败就把旧的放回去);同一个插件已从商店装在别的目录名下就拒绝(code `store`)。
-  同意绑在确认框里那个插件上:等用户点的工夫沙箱换了插件 / manifest 换了 id,就不装(code `changed`)。装好广播 `extensions-changed`,各窗自己重载。
+  `node_modules` / `.git` / `.forsion`;按真实目录拷,软链拷成实体;临时目录以点开头,装载器不会把中途崩了的半截当第二份装上;换的那一步失败就把旧的放回去);同一个插件已从商店装在别的目录名下就拒绝(code `store`)。
+  同意绑在确认框里那个插件上,也绑在那一个沙箱进程上(`gen`):等用户点的工夫沙箱换了插件 / manifest 换了 id / 被重置成新的一个,就不装(code `changed`),
+  回执也只推给点按钮时的那一个。弹框前先重算一次 `installed`(缓存的可能是卸载之前的)。装好广播 `extensions-changed`,各窗自己重载。
   - **确认框挂在点按钮的那扇窗上**(11-28 方案 A):沙箱窗口顶条点的 → 父进程把文案交给子进程,子进程在沙箱主窗上弹系统框
     (⚠️ 不画在沙箱网页里:插件代码和沙箱条同在一个渲染层,网页里的「同意」插件能自己点掉;系统框它够不着),弹着时状态 `dialog` 有值、agent 动作先拒;
     卡片 / 右栏 / Coding Studio 点的 → 用户那份主窗上弹,主窗用 `app.focus({steal})` 抬到最前。两种都先让开置顶的东西
     (钉住的浮动面板、插件桌面小窗,`main.ts yieldPinnedWindows`;沙箱那边经 `yieldPinned`),关掉放回去。
-    等确认的工夫沙箱没了 → 当取消,不再到主窗上问。同一时刻只开一个确认框。
-  - **装的就是这一份时不再覆盖**(code `same`,不弹框);沙箱窗口回执卡上的「重新安装」带 `force`。`older` 时按钮叫「更新」、确认框问「用沙箱里这份更新…」。
+    沙箱那边没回答(沙箱没了 / 换了一个 / 等满 15 分钟)→ 一律当取消,不回落到主窗再问(那边的框可能还开着)。同一时刻只开一个确认框。
+  - **装的就是这一份时不再覆盖**(code `same`,不弹框);沙箱窗口回执卡上的「重新安装」带 `force`,确认框照实问「再装一遍，覆盖装好的那份」。回执卡说「和沙箱里是同一份」只在 `same` 时;`unknown` 只说装好了。`older` 时按钮叫「更新」、确认框问「用沙箱里这份更新…」。
   - **装完**:沙箱留着(插件开发一轮轮改,装完常要再对一遍)。顶条「安装」→ 灰的「已安装 ✓」,从顶条点的那次在按钮下垂回执卡
     (在我的 Forsion 打开 / 关闭沙箱);装不上垂说明(`store` 带「打开插件设置」)。对话卡 / 右栏 / Coding Studio 读同一份 `installed`:
     已安装 → 「在我的 Forsion 打开」(主窗切到插件的 Space,没有就开设置页,`mainAction open-plugin`)+ 打开沙箱窗口 / 关闭沙箱;

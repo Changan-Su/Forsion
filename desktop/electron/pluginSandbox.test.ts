@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { connect } from 'node:net'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
@@ -276,6 +276,31 @@ describe('控制通道', () => {
     const d = await pluginDigest(dir)
     expect([...d!.keys()].sort()).toEqual(['main.js', 'manifest.json'])
     expect(await pluginDigest(dir, { files: 1, bytes: 1e9 })).toBeNull()
+  })
+
+  it('装没装(评审补):真商店目录 market-<uuid> 按目录名跑,同 manifest id 也算 store;目标清单写坏 = older 能修;读不了的子目录 = unknown;重置换了一个沙箱不拿旧同意装', async () => {
+    const home = tmp(); const dir = pluginDir()
+    const market = 'market-0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
+    mkdirSync(join(home, 'plugins', market), { recursive: true })
+    writeFileSync(join(home, 'plugins', market, 'manifest.json'), JSON.stringify({ id: 'reading-log', version: '1.0.0' }))
+    expect(await sandboxInstalledState(home, dir, 'reading-log')).toMatchObject({ state: 'store', folder: market })
+    rmSync(join(home, 'plugins', market), { recursive: true })
+    // 别的目录清单写坏:跳过,不让整个判断抛出去
+    mkdirSync(join(home, 'plugins', 'junk'), { recursive: true }); writeFileSync(join(home, 'plugins', 'junk', 'manifest.json'), '{ broken')
+    mkdirSync(join(home, 'plugins', 'reading-log'), { recursive: true }); writeFileSync(join(home, 'plugins', 'reading-log', 'manifest.json'), '{ broken')
+    expect(await sandboxInstalledState(home, dir, 'reading-log')).toMatchObject({ state: 'older', version: '' })
+    const sbx = sandbox(home, fakeSpawn({ states: ['running'] }))
+    await sbx.exec('start', { dir })
+    const gen = sbx.gen()!
+    expect(await sbx.install({ pluginId: 'reading-log', dir, gen: gen + 1 })).toMatchObject({ ok: false, code: 'changed' })
+    expect(await sbx.install({ pluginId: 'reading-log', dir, gen })).toMatchObject({ ok: true, installed: { state: 'same' } })
+    // 临时目录以点开头,装完不留
+    expect(readdirSync(join(home, 'plugins')).filter((n) => n.includes('installing') || n.includes('.old-'))).toEqual([])
+    await sbx.dispose()
+    if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+      mkdirSync(join(dir, 'locked')); writeFileSync(join(dir, 'locked', 'a.js'), '1'); chmodSync(join(dir, 'locked'), 0o000)
+      try { expect(await pluginDigest(dir)).toBeNull() } finally { chmodSync(join(dir, 'locked'), 0o755) }
+    }
   })
 
   it('叫到前面:用户在界面上点的启动 / 重置起好后 show;agent 起的不叫', async () => {
