@@ -8,7 +8,8 @@
 import { openPenzorSync, penzorSyncReady } from '../../services/syncSetup'
 import { useApp } from '../../stores/appStore'
 import { isDesktopExtendOff, isFullSync, isLegacySync } from './mode'
-import type { ScopeItemKind } from './types'
+import { parseDownloadPreview } from './download'
+import type { ScopeItemKind, VaultSyncPreviewArgs } from './types'
 
 export interface SyncFocus {
   /** 本机库根(绝对路径);缺 = 不定位 */
@@ -16,8 +17,14 @@ export interface SyncFocus {
   /** 库内相对路径:右键点的那一项(页面把它和它的关联项加进范围、出汇总卡) */
   path?: string
   kind?: ScopeItemKind
-  /** 'start' = 首登卡片点了「开始同步」:这个库直接走打开同步的流程(出汇总卡) */
-  intent?: 'add' | 'start'
+  /** 'start' = 首登卡片点了「开始同步」:这个库直接走打开同步的流程(出汇总卡);
+   *  'download' = 落到「只在云端」里 libraryId 那一行、直接出落盘对话框(蓬洲云库页的「落盘到这台…」,E 约定的形状);
+   *  'preview' = 落盘撞上同名非空的文件夹:拿 preview 原样出汇总卡(对话框在主窗、汇总卡在设置窗时用) */
+  intent?: 'add' | 'start' | 'download' | 'preview'
+  /** 云端库清单那一项的 id(intent = 'download') */
+  libraryId?: string
+  /** download 回的 next:'preview' 那份参数(intent = 'preview') */
+  preview?: VaultSyncPreviewArgs
 }
 
 let pending: SyncFocus | null = null
@@ -33,13 +40,25 @@ export function parseSyncFocus(v: unknown): SyncFocus | undefined {
   if (!v || typeof v !== 'object') return undefined
   const o = v as Record<string, unknown>
   const kind = o.kind === 'folder' || o.kind === 'file' || o.kind === 'page' ? o.kind : undefined
-  const intent = o.intent === 'add' || o.intent === 'start' ? o.intent : undefined
+  const libraryId = typeof o.libraryId === 'string' && o.libraryId ? o.libraryId : undefined
+  const preview = parseDownloadPreview(o.preview)
+  // download 要有 libraryId,preview 要有核得过的参数;缺了就不认这个 intent(不退化成别的流程)
+  const intent = o.intent === 'add' || o.intent === 'start' ? o.intent
+    : o.intent === 'download' && libraryId ? 'download'
+      : o.intent === 'preview' && preview ? 'preview' : undefined
   return {
     ...(typeof o.root === 'string' && o.root ? { root: o.root } : {}),
     ...(typeof o.path === 'string' && o.path ? { path: o.path } : {}),
     ...(kind ? { kind } : {}),
     ...(intent ? { intent } : {}),
+    ...(libraryId ? { libraryId } : {}),
+    ...(intent === 'preview' && preview ? { preview } : {}),
   }
+}
+
+/** 落盘撞上同名非空文件夹时,交给设置 › 同步出汇总卡的 focus(root 定位那一行,preview 原样)。 */
+export function downloadPreviewFocus(preview: VaultSyncPreviewArgs): SyncFocus {
+  return { root: preview.root, intent: 'preview', preview }
 }
 
 export function openSyncSettings(focus?: SyncFocus): void {

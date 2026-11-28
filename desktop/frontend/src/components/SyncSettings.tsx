@@ -183,7 +183,7 @@ export function SyncSettings({ focus, legacy, drive }: { focus?: SyncFocus; lega
   return <SyncSettingsFull data={gate.data} reload={load} focus={focus} legacy={drive ?? legacy} />
 }
 
-interface Pending {
+export interface Pending {
   root: string
   name: string
   kind: 'cloud' | 'new' | 'scope' | 'target'
