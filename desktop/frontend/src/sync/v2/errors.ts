@@ -6,7 +6,8 @@ import { TARGET_ERROR_CODES, targetErrorKey } from './targets'
 type T = (key: string, vars?: Record<string, unknown>) => string
 /** E 抛的错误码(`Error('xxx')` 经两层信封后可能带前缀)→ 一句人话。 */
 const OVERLAP = new Set(['root_nested', 'primary_exists', 'folder_target_nested', 'mirror_root'])
-export function syncErrorText(err: string, t: T, name = ''): string {
+/** inUseBy:remote_dir_in_use 时占着那个目录的库(E-17,VsResult 带出来的)。 */
+export function syncErrorText(err: string, t: T, name = '', inUseBy?: { name: string }): string {
   const code = /([a-z][a-z0-9_-]+)\s*$/.exec(err)?.[1] ?? err
   if (code === 'not_signed_in') return t('ssync.err.signedOut')
   if (code === 'reserved') return t('ssync.err.reserved', { name })
@@ -23,6 +24,7 @@ export function syncErrorText(err: string, t: T, name = ''): string {
   if (code === 'deletes_changed') return t('ssync.err.deletesChanged')
   if (code === 'binding_not_running') return t('ssync.err.notRunning')
   if (code === 'remote_dir_nested') return t('ssync.err.remoteDirNested')
+  if (code === 'remote_dir_in_use') return inUseBy?.name ? t('ssync.err.remoteDirInUse', { name: inUseBy.name }) : t('ssync.err.remoteDirInUseAnon')
   if (code === 'direction_forbids') return t('ssync.err.directionForbids')
   // 换去处(含蓬洲云 ↔ 网盘 / 文件夹,Extend #140、契约 E-16 附)的拒绝码;not_signed_in / takeover_in_progress 用上面那两句
   if (code === 'compat_mode') return t('ssync.err.compatMode')

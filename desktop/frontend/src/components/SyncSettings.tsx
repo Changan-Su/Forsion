@@ -26,7 +26,7 @@ import { syncErrorText } from '../sync/v2/errors'
 import { addedItems, closureItems, isExcluded, mergeScope, rebaseScope, removeItem, scopeCovers, topLevelEntries } from '../sync/v2/scope'
 import type { SyncFocus } from '../sync/v2/openSyncSettings'
 import type { StatusBindingExtras } from '../sync/v2/feed'
-import { CREATE_CANDIDATE } from '../sync/v2/types'
+import { CREATE_CANDIDATE, type RemoteDirHolder } from '../sync/v2/types'
 import { addFolderTarget, canAuth, cancelAuth, currentTargetKey, finishAuth, hasTargets, listTargets, onAuth, isUnsupportedKind, previewTargetOf, startAuth, targetErrorKey, targetIdentity, type AuthEvent, type AuthKind } from '../sync/v2/targets'
 import type { SyncTargetSummary } from '../types'
 import type {
@@ -46,17 +46,31 @@ type TFn = (key: string, vars?: Record<string, unknown>) => string
  *  认不得的码不把键名露出来。 */
 function reasonText(b: BindingView, t: TFn): string {
   const code = b.status.reason!
+  // 远端目录被别的库占着(E-17):写出是哪个库;停着的那条也占着
+  if (code === 'remote_dir_in_use') return b.status.inUseBy?.name ? t('ssync.reason.remote_dir_in_use', { name: b.status.inUseBy.name }) : t('ssync.reason.remote_dir_in_use_anon')
   const remote = b.target.kind === 'remote' && (code === 'server_unsupported' || code === 'remote_same_root')
   const key = remote ? `ssync.reason.remote.${code}` : `ssync.reason.${code}`
   const text = t(key)
   return text === key ? t('ssync.reason.unknown', { code }) : text
 }
 
+/** 跳到占着远端目录的那一行(E-17 的出口:要用这个目录,得先让那个库停止同步)。 */
+function gotoBinding(data: VaultSyncGet, id: string): void {
+  const root = data.bindings.find((x) => x.id === id)?.root
+  const el = root ? document.querySelector<HTMLElement>(`[data-ssync-root="${CSS.escape(root)}"]`) : null
+  el?.scrollIntoView({ block: 'center' })
+  el?.querySelector<HTMLElement>('.ssync-target-btn, button')?.focus({ preventScroll: true })
+}
+
 /** 汇总卡上写明「本机这个库 → 云端哪一处」:标题是通用的,库名和去处要看得见(Codex P1-4)。 */
 function destOf(p: Pending, data: VaultSyncGet, t: TFn): string {
   if (p.target.kind === 'remote') {
     const cur = p.bindingId ? data.bindings.find((x) => x.id === p.bindingId)?.target : undefined
-    return p.targetLabel || (cur?.kind === 'remote' && cur.targetId === p.target.targetId ? cur.label : '') || t('vsync.target.other')
+    const same = cur?.kind === 'remote' && cur.targetId === p.target.targetId ? cur : undefined
+    const label = p.targetLabel || same?.label || t('vsync.target.other')
+    // 远端目录缺省 = 库文件夹名(引擎 pair.ts);写出来,两个同名库撞同一个目录时一眼看得见(E-17)
+    const dir = p.target.dir ?? same?.dir ?? folderName(p.root)
+    return dir ? t('ssync.dest.remote', { label, dir }) : label
   }
   const c = p.target.kind === 'penzor' ? p.target.candidate : undefined
   if (c?.kind === 'new') return t('ssync.dest.new', { name: p.name })
@@ -142,9 +156,9 @@ interface Pending {
 const isCrossKind = (p: Pick<Pending, 'bindingId' | 'baseTarget' | 'target'>): boolean =>
   !!p.bindingId && !!p.baseTarget && !p.baseTarget.startsWith(p.target.kind === 'remote' ? 'remote:' : 'penzor:')
 /** 预演 / 换去处出错的人话。从蓬洲云那一行换走时没登录:账号那本账看不到,预演回 binding_not_found、apply 回 not_signed_in,都按「要先登录」说。 */
-function crossKindError(p: Pick<Pending, 'bindingId' | 'baseTarget' | 'target' | 'name'>, err: string, t: TFn): string {
+function crossKindError(p: Pick<Pending, 'bindingId' | 'baseTarget' | 'target' | 'name'>, err: string, t: TFn, inUseBy?: RemoteDirHolder): string {
   if (isCrossKind(p) && p.baseTarget!.startsWith('penzor:') && /(binding_not_found|not_signed_in)\s*$/.test(err)) return t('ssync.err.moveSignIn')
-  return syncErrorText(err, t, p.name)
+  return syncErrorText(err, t, p.name, inUseBy)
 }
 
 /** 落点只认一次:设置层拿着同一个 focus 对象,子页切走再回来(组件重挂)不再重放一遍预演(Codex P2-4)。 */
@@ -245,7 +259,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       }
     }
     setPending(null)
-    say(p.root, crossKindError(p, err, t))
+    say(p.root, crossKindError(p, err, t, r.ok ? undefined : r.inUseBy))
     return false
   }, [t])
 
@@ -394,7 +408,8 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       const was = data.bindings.find((x) => x.id === p.bindingId)
       const g = was?.enabled && isCrossKind(p) ? await vaultSync.get() : null
       const now = g?.ok ? g.value?.bindings.find((x) => x.id === p.bindingId) : undefined
-      say(p.root, now && !now.enabled ? `${crossKindError(p, r.error, t)} ${t('ssync.err.moveHalf')}` : crossKindError(p, r.error, t))
+      const text = crossKindError(p, r.error, t, r.inUseBy)
+      say(p.root, now && !now.enabled ? `${text} ${t('ssync.err.moveHalf')}` : text)
     }
     refreshVaultSync()
     await reload()
@@ -453,10 +468,10 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
               const b = bindingOf(r.root)
               if (!on) {
                 if (pending?.root === r.root) { ++reqRef.current; setPending(null) }
-                if (b) { const res = await vaultSync.setEnabled(b.id, false); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name)); refreshVaultSync(); await reload() }
+                if (b) { const res = await vaultSync.setEnabled(b.id, false); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, res.inUseBy)); refreshVaultSync(); await reload() }
                 return
               }
-              if (b) { const res = await vaultSync.setEnabled(b.id, true); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name)); await reload(); return }
+              if (b) { const res = await vaultSync.setEnabled(b.id, true); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, res.inUseBy)); await reload(); return }
               await startOpen(r.root, r.name, { mode: 'all' }, [])
             }}
             onScope={(b, next, added) => void changeScope(b, next, added)}
@@ -471,7 +486,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
             onNewVault={(b) => void (async () => {
               // 改名后「当成新库上云」:引擎回 next: preview → 按新文件夹名预演一个新库,汇总卡确认了才建、换过去(旧库原样留着)
               const res = await vaultSync.renameAnswer(b.id, 'newVault')
-              if (!res.ok) { say(r.root, syncErrorText(res.error, t, r.name)); return }
+              if (!res.ok) { say(r.root, syncErrorText(res.error, t, r.name, res.inUseBy)); return }
               await runPreview({ root: b.root, name: r.name, kind: 'new', bindingId: b.id, target: { kind: 'penzor', candidate: CREATE_CANDIDATE }, scope: b.scope, added: [], preview: null })
             })()}
             reload={reload} say={(text) => say(r.root, text)} onRecovery={() => setRecKey((k) => k + 1)} />
@@ -661,7 +676,16 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
       {blocked && !on && <div className="ssync-note ssync-faint">{blocked}</div>}
       {message && <div className="ssync-note" role="status">{message}</div>}
       {auth && <AuthPanel auth={auth} onCancel={onAuthCancel} onCode={onAuthCode} />}
-      {b?.status.reason && <div className="ssync-note ssync-warn" data-ssync-reason={b.status.reason}>{reasonText(b, t)}</div>}
+      {b?.status.reason && (
+        <div className="ssync-note ssync-warn" data-ssync-reason={b.status.reason}>
+          <span>{reasonText(b, t)}</span>
+          {b.status.reason === 'remote_dir_in_use' && b.status.inUseBy && data.bindings.some((x) => x.id === b.status.inUseBy!.bindingId) && (
+            <button type="button" className="btn ghost sm" data-ssync-goto={b.status.inUseBy.bindingId} onClick={() => gotoBinding(data, b.status.inUseBy!.bindingId)}>
+              {t('ssync.reason.gotoHolder', { name: b.status.inUseBy.name })}
+            </button>
+          )}
+        </div>
+      )}
       {b?.state === 'takeover' && (
         <div className="ssync-note">
           <span>{t('ssync.note.takeover')}</span>

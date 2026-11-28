@@ -10,10 +10,11 @@
 import {
   VAULT_SYNC_CHANNELS as CH,
   type BindingScope, type BindingView, type Cadence, type HeldAction, type HeldRef, type RecoveryEventView, type ResolveNameResult,
-  type VaultSyncApplyArgs, type VaultSyncGet, type VaultSyncPreview, type VaultSyncPreviewArgs, type VaultSyncResolveAllResult, type VaultSyncStatus,
+  type RemoteDirHolder, type VaultSyncApplyArgs, type VaultSyncGet, type VaultSyncPreview, type VaultSyncPreviewArgs, type VaultSyncResolveAllResult, type VaultSyncStatus,
 } from './types'
 
-export type VsResult<T> = { ok: true; value: T } | { ok: false; error: string }
+/** inUseBy:remote_dir_in_use 时引擎带上的「谁占着这个远端目录」(契约 E-17),界面要写出库名。 */
+export type VsResult<T> = { ok: true; value: T } | { ok: false; error: string; inUseBy?: RemoteDirHolder }
 
 /** cloudInvoke 不在(Extend 没装载 / 停用,或网页 / 手机):所有调用回它。 */
 export const EXTEND_UNAVAILABLE = 'extend_unavailable'
@@ -37,7 +38,12 @@ export function normalizeReply<T>(channel: string, reply: unknown): VsResult<T> 
   if (r.ok !== true) return { ok: false, error: typeof r.error === 'string' && r.error ? r.error : 'failed' }
   const v = r.value as { ok?: unknown; error?: unknown } | null | undefined
   if (SOFT_FAIL.has(channel) && v && typeof v === 'object' && !Array.isArray(v)) {
-    if (v.ok === false) return { ok: false, error: typeof v.error === 'string' && v.error ? v.error : 'failed' }
+    if (v.ok === false) {
+      // remote_dir_in_use 带着占着那个目录的库(E-17):留下来,别只剩一个码
+      const u = (v as { inUseBy?: unknown }).inUseBy as { bindingId?: unknown; name?: unknown } | undefined
+      const inUseBy = u && typeof u === 'object' && typeof u.name === 'string' ? { bindingId: typeof u.bindingId === 'string' ? u.bindingId : '', name: u.name } : undefined
+      return { ok: false, error: typeof v.error === 'string' && v.error ? v.error : 'failed', ...(inUseBy ? { inUseBy } : {}) }
+    }
     // apply 成功回 BindingView(没有 error 字段);失败回 {error:'stale'} 这样只有 error 的对象
     if (v.ok === undefined && typeof v.error === 'string' && v.error) return { ok: false, error: v.error }
   }

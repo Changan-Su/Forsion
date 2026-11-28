@@ -187,6 +187,16 @@ describe('Codex 评审返修(第 2 步 U)', () => {
     expect(syncErrorText('takeover_in_progress', t)).toBe(t('ssync.err.takeoverBusy'))
     expect(syncErrorText('Error: binding_not_found', t)).toBe(t('ssync.err.bindingGone'))
   })
+  it('远端目录被别的库占着(E-17):value 里的失败带着 inUseBy 留下来;文案写出库名,和同一个库的 remote_dir_nested 分开', () => {
+    const r = normalizeReply(CH.preview, { ok: true, value: { ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: 'b2', name: '归档' } } })
+    expect(r).toEqual({ ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: 'b2', name: '归档' } })
+    expect(normalizeReply(CH.setEnabled, { ok: true, value: { ok: false, error: 'remote_dir_in_use', inUseBy: { name: 7 } } })).toEqual({ ok: false, error: 'remote_dir_in_use' })
+    const named = syncErrorText('remote_dir_in_use', t, '研究笔记', { name: '归档' })
+    expect(named).toBe(t('ssync.err.remoteDirInUse', { name: '归档' }))
+    expect(named).toContain('归档')
+    expect(syncErrorText('remote_dir_in_use', t)).toBe(t('ssync.err.remoteDirInUseAnon'))
+    expect(syncErrorText('remote_dir_nested', t)).not.toBe(syncErrorText('remote_dir_in_use', t))
+  })
   it('换去处(含蓬洲云 ↔ 网盘 / 文件夹,E-16 附)的拒绝码各有一句人话,不落到「没做成」', () => {
     const generic = (c: string) => t('ssync.err.generic', { error: c })
     for (const [code, key] of [

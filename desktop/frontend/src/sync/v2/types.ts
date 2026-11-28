@@ -44,6 +44,10 @@ export type SyncDirection = 'both' | 'push' | 'pull'
 export type BindingReason =
   | 'non_default_vault' | 'no_backing_identity' | 'too_large_for_new_sync' | 'cross_namespace_rules' | 'double_engine'
   | 'root_missing' | 'root_renamed' | 'server_unsupported' | 'state_unreadable' | 'takeover_failed' | 'remote_same_root'
+  | 'remote_dir_in_use' | 'move_in_progress'
+
+/** 占着这个远端目录的那条绑定(契约 E-17):name = 库文件夹名;可能是停着的那条(停着也占着,只有停止同步才释放)。 */
+export interface RemoteDirHolder { bindingId: string; name: string }
 
 export type BindingTargetView =
   | { kind: 'penzor'; vaultId: string; vaultName: string | null; placement: BindingPlacement; prefix: string }
@@ -59,6 +63,8 @@ export interface BindingStatusView {
   error?: string
   notice?: 'takeover' | 'needs-choice' | 'needs-card' | 'refused'
   reason?: BindingReason
+  /** reason = remote_dir_in_use 时:谁占着这个远端目录(E-17) */
+  inUseBy?: RemoteDirHolder
 }
 
 export interface BindingView {
