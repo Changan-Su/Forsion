@@ -3,11 +3,10 @@
  * 第一次打开走邀请卡(设了查看密码先输密码);已加入或所有者不用再同意;同意后到文件页。
  * 复用 Forsion 的 token,index.html 的首帧脚本已把主题、背景、明暗写到根元素上。
  */
-import { CLOUD_CONTENT_CAPS } from './amadeus/cloudScope'
 import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { acceptInvite, joinedInviteAddress, lookupInvite, type InviteEndpoint, type InviteInfo } from './amadeus/invite'
 import { getApiBase, getToken } from './webShim'
-import { fileAddress } from './openTarget'
 import { registerMessages, translate } from '@/i18n'
 import '@/styles/base.css'
 import '@/theme/skins.css'
@@ -37,18 +36,9 @@ registerMessages({
   'invite.switchAccount': { zh: '换个账号', en: 'Switch account' },
 })
 
-export interface InvitePageOptions {
-  apiBase: string
-  getToken(): string
-  request(path: string, init?: RequestInit): Promise<Response>
-  appBase: string
+export interface InvitePageOptions extends InviteEndpoint {
   accountName?: string
   switchAccount?(): void
-}
-
-interface InviteInfo {
-  title: string; role: string; ownerName: string | null; needPassword: boolean
-  joined?: boolean; owner?: boolean; vaultId?: string; path?: string
 }
 
 const CSS = `
@@ -80,32 +70,24 @@ function InviteApp({ token, account }: { token: string; account: InvitePageOptio
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    void account.request(`${api}/amadeus/invites/${encodeURIComponent(token)}`, {
-      headers: { Authorization: `Bearer ${account.getToken()}`, 'X-Content-Caps': CLOUD_CONTENT_CAPS },
-    }).then(async (r) => {
-      if (r.status === 404) { setGone(true); return }
-      if (!r.ok) { setErr(translate('invite.loadFailed', { status: r.status })); return }
-      const next = await r.json() as InviteInfo
-      setInfo(next)
-      if (next.vaultId && next.path) location.replace(fileAddress(account.appBase, next.vaultId, next.path))
+    void lookupInvite(account, token).then((result) => {
+      if (result.kind === 'gone') { setGone(true); return }
+      if (result.kind === 'failed') { setErr(translate('invite.loadFailed', { status: result.status })); return }
+      setInfo(result.info)
+      const address = joinedInviteAddress(account.appBase, result.info)
+      if (address) location.replace(address)
     }).catch(() => setErr(translate('invite.networkError')))
   }, [account, api, token])
 
   const accept = (): void => {
     setBusy(true)
-    void account.request(`${api}/amadeus/invites/${encodeURIComponent(token)}/accept`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${account.getToken()}`, 'X-Content-Caps': CLOUD_CONTENT_CAPS, 'Content-Type': 'application/json' },
-      body: JSON.stringify(info?.needPassword ? { password: pw } : {}),
-    }).then(async (r) => {
-      if (!r.ok) {
-        const b = await r.json().catch(() => null) as { code?: string } | null
-        setErr(translate(b?.code === 'PASSWORD' ? 'invite.passwordError' : 'invite.acceptFailed'))
+    void acceptInvite(account, token, info?.needPassword ? pw : undefined).then((result) => {
+      if (result.kind !== 'accepted') {
+        setErr(translate(result.kind === 'password' ? 'invite.passwordError' : 'invite.acceptFailed'))
         setBusy(false)
         return
       }
-      const { vaultId, path } = (await r.json()) as { vaultId: string; path: string }
-      location.replace(fileAddress(account.appBase, vaultId, path))
+      location.replace(result.address)
     }).catch(() => { setErr(translate('invite.networkError')); setBusy(false) })
   }
 
