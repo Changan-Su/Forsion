@@ -632,6 +632,42 @@ function legacyGate(): LegacyGate {
  *  - 外置后端(penzor 的指纹要 whoami 出网,这里不调它的工厂)或内置但认身份的字段缺了:按每个基线文件里记的指纹认 ——
  *    文件名正是 hash8(这个根|它记的指纹) 才算这个根的,再要后端前缀一致(penzor 再要库名一致;同一个根、同一个库、
  *    不同账号的也挪:宁可多挪,挪走 = 交还后首次合流、不做删除判定)。读不了 / 解析不了的基线引擎本来就当空的用,不挪。 */
+/** 只给日志用的错误码:不带异常正文(配置解析的报错带原文片段)。 */
+function errorCode(e: unknown): string {
+  const x = e as { code?: unknown; message?: unknown } | null
+  if (typeof x?.code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(x.code)) return x.code
+  if (typeof x?.message === 'string' && /^[a-z][a-z0-9_-]{2,63}$/.test(x.message)) return x.message
+  return 'error'
+}
+
+/** 归档原件里的自动同步两项写回现在的配置(在封口闸的锁里调,配置写队列里读改写)。现在的值不是归档写下的 0 / false = 用户改过,不动。 */
+async function restoreAutoSync(): Promise<boolean> {
+  const st = legacyGate().state()
+  if (!st.archived || !st.archiveDir) return false
+  let orig: { intervalMin?: unknown; syncOnStart?: unknown }
+  try { orig = JSON.parse(await fs.readFile(path.join(st.archiveDir, path.basename(configFile())), 'utf8')) } catch { throw new Error('archive-original-unreadable') }
+  const interval = typeof orig?.intervalMin === 'number' && Number.isFinite(orig.intervalMin) && orig.intervalMin >= 0 ? orig.intervalMin : 0
+  const onStart = orig?.syncOnStart === true
+  if (interval === 0 && !onStart) return false
+  return inConfigQueue(async () => {
+    const strict = await readLegacyConfigStrict()
+    if (!strict) return false
+    if ((strict.cfg.intervalMin ?? 0) !== 0 || strict.cfg.syncOnStart === true) return false
+    const obj = JSON.parse(strict.raw) as Record<string, unknown>
+    obj.intervalMin = interval
+    obj.syncOnStart = onStart
+    const file = configFile()
+    const mode = (await fs.stat(file)).mode & 0o777
+    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
+    await fs.writeFile(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8', mode })
+    await fs.rename(tmp, file)
+    cache = { ...DEFAULT_CONFIG, ...(obj as unknown as RemoteSyncConfig) }
+    loadBroken = false
+    resetTimer(cache)
+    return true
+  })
+}
+
 /** 「根 × 去处」的不透明键:内置后端用基线指纹,算不出的(penzor 等)用后端 + 目录 + 库名。只是 hash,不含凭据。 */
 function legacyKeyOf(cfg: RemoteSyncConfig, root: string): string {
   const penzorVault = cfg.backend === 'penzor' ? (typeof cfg.penzor?.vault === 'string' ? cfg.penzor.vault : 'default').trim() || 'default' : ''
@@ -747,7 +783,18 @@ export const legacyRemoteSync = {
     return { backend, section: section && typeof section === 'object' ? structuredClone(section as Record<string, unknown>) : {} }
   },
   seal: (): Promise<void> => legacyGate().seal(),
-  unseal: (): Promise<void> => legacyGate().unseal(),
+  /** 交还。opts.restoreAutoSync(契约 H-8,只给接手失败到头 / 用户退回):已归档的,先在还封着的时候把档案原件里的
+   *  intervalMin / syncOnStart 写回去,再交还 —— 否则首轮连败(U 盘没插)后旧自动同步也不回来,同步悄悄停了。
+   *  只在现在的值仍是归档写下的那两个(0 / false)时写回,用户之后自己改过的不动;基线已挪走,旧引擎回来按首次合流跑(不删)。
+   *  写回失败只记错误码、照样交还(退回到「只能手动」,不卡在封口里)。 */
+  async unseal(opts?: { restoreAutoSync?: boolean }): Promise<void> {
+    if (opts?.restoreAutoSync === true && legacyGate().state().hold === 'v2') {
+      await legacyGate().exclusive(async () => {
+        try { await restoreAutoSync() } catch (e) { console.warn(`[remotesync] restore auto-sync skipped: ${errorCode(e)}`) }
+      }).catch((e) => console.warn(`[remotesync] restore auto-sync skipped: ${errorCode(e)}`))
+    }
+    await legacyGate().unseal()
+  },
   /** 只在持有时:remotesync.json 原样复制进档案,原文件只改 intervalMin=0 / syncOnStart=false,remotesync-state/ 里
    *  **这个根 × 这个指纹**的基线挪进档案(契约 H-1 第 2 条;用户以前同步过的别的根 / 去处的基线留着)。幂等。
    *  整段在封口闸的锁里跑(gate.exclusive):闸关着、没有在途的一轮,中途来的 unseal 排在后面;

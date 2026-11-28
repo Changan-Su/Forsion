@@ -31,7 +31,8 @@ export interface SyncTargetsSeam {
   sealLegacyRemoteSync(): Promise<void>
   /** opts.expectKey = 接手时 legacyRemoteSync() 给的 legacyKey:现在的配置对不上就抛 legacy-config-changed、什么都不动。 */
   archiveLegacyRemoteSync(archiveDir: string, opts?: { expectKey?: string }): Promise<{ copied: string[]; moved: string[] }>
-  unsealLegacyRemoteSync(): Promise<void>
+  /** opts.restoreAutoSync:已归档的先把旧自动同步两项从档案原件写回(契约 H-8,接手失败到头 / 退回时用)。 */
+  unsealLegacyRemoteSync(opts?: { restoreAutoSync?: boolean }): Promise<void>
   vaults(): Promise<Array<{ root: string; name: string }>>
 }
 
@@ -192,7 +193,7 @@ export function createSyncTargets(): SyncTargetsSeam {
     },
     async sealLegacyRemoteSync() { await touch(); await legacyRemoteSync.seal() },
     async archiveLegacyRemoteSync(archiveDir, opts) { await touch(); return legacyRemoteSync.archive(archiveDir, opts) },
-    async unsealLegacyRemoteSync() { await touch(); await legacyRemoteSync.unseal() },
+    async unsealLegacyRemoteSync(opts) { await touch(); await legacyRemoteSync.unseal(opts) },
     async vaults() { await touch(); return localVaults() },
   }
 }

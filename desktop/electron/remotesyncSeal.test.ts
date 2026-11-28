@@ -193,6 +193,32 @@ describe('archiving the legacy remotesync', () => {
     expect(JSON.parse(readFileSync(join(env.root, 'archive', 'remotesync.json'), 'utf8'))).toEqual(moved)
   })
 
+  it('hand-back after a failed takeover can restore the two auto-sync fields from the archived original; plain unseal keeps manual-only; a user change is kept', async () => {
+    writeFileSync(cfgFile(), JSON.stringify(original(), null, 2), { mode: 0o600 })
+    await boot()
+    ipc.legacyRemoteSync.extendLoaded(true)
+    await ipc.legacyRemoteSync.seal()
+    await ipc.legacyRemoteSync.archive(join(env.root, 'archive'))
+    expect(JSON.parse(readFileSync(cfgFile(), 'utf8'))).toMatchObject({ intervalMin: 0, syncOnStart: false })
+    // 不带 restoreAutoSync:同第 2 步以前,交还后只能手动
+    await ipc.legacyRemoteSync.unseal()
+    expect(JSON.parse(readFileSync(cfgFile(), 'utf8'))).toMatchObject({ intervalMin: 0, syncOnStart: false })
+    // 再封一次、带 restoreAutoSync 交还:两项从档案原件回来,别的字段原样
+    await ipc.legacyRemoteSync.seal()
+    await ipc.legacyRemoteSync.unseal({ restoreAutoSync: true })
+    expect(JSON.parse(readFileSync(cfgFile(), 'utf8'))).toEqual(original())
+    expect((await call<any>('remotesync:get')).config).toMatchObject({ intervalMin: 15, syncOnStart: true })
+    expect(JSON.parse(readFileSync(join(userData(), 'sync-targets.json'), 'utf8')).legacy).toMatchObject({ holder: null, archived: true })
+    // 用户在归档之后自己改过(不是 0 / false):不动
+    const mine = { ...original(), intervalMin: 30, syncOnStart: false }
+    writeFileSync(cfgFile(), JSON.stringify(mine, null, 2), { mode: 0o600 })
+    await boot()
+    ipc.legacyRemoteSync.extendLoaded(true)
+    await ipc.legacyRemoteSync.seal()
+    await ipc.legacyRemoteSync.unseal({ restoreAutoSync: true })
+    expect(JSON.parse(readFileSync(cfgFile(), 'utf8'))).toEqual(mine)
+  })
+
   it('penzor (its fingerprint needs a whoami round-trip): moves only this root\'s penzor baselines for this vault, recognised by their own recorded fingerprint', async () => {
     writeFileSync(cfgFile(), JSON.stringify({ backend: 'penzor', intervalMin: 5, penzor: { vault: 'notes' } }))
     const sd = join(userData(), 'remotesync-state')
