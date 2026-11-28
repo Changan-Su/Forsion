@@ -29,7 +29,8 @@ registerMessages({
   'ssync.target.driveHint': { zh: '只同步文件', en: 'Files only' },
   'ssync.target.driveLater': { zh: '网盘同步这一版还用原来的方式，在下面「同步到网盘」里设置', en: 'Network drives still use the old setup for now. Set them up under “Sync to a network drive” below' },
   'ssync.target.addDrive': { zh: '添加网盘…', en: 'Add a network drive…' },
-  'ssync.target.noCas': { zh: '这个网盘不支持条件写入：重读和写入之间还有很短的空档', en: 'This drive has no conditional writes, so there is a short gap between re-reading and writing' },
+  'ssync.target.noCas': { zh: '这个网盘没法在写入前再核一次：别的设备正好同时改同一篇时，可能盖掉那边的改动', en: 'This drive can’t be re-checked right before a write. If another device edits the same note at that moment, its change may be overwritten' },
+  'ssync.target.noCasFolder': { zh: '本地文件夹没法在写入前再核一次：别的程序正好同时改同一篇时，可能盖掉那边的改动', en: 'A local folder can’t be re-checked right before a write. If another app edits the same note at that moment, its change may be overwritten' },
   'ssync.target.legacyPlace': { zh: '云端位置：「云端笔记」里的「{name}」文件夹', en: 'In the cloud: the “{name}” folder in Cloud notes' },
   // 打开同步时的几种结果
   'ssync.err.nameExists': { zh: '云端已经有叫「{name}」的库了，换个文件夹名再试', en: 'The cloud already has a vault called “{name}”. Rename the folder and try again' },

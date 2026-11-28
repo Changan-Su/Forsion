@@ -644,7 +644,7 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
       {b?.target.kind === 'penzor' && b.target.placement === 'legacy-entry' && (
         <div className="ssync-note ssync-faint">{t('ssync.target.legacyPlace', { name: b.target.prefix.split('/').filter(Boolean).pop() ?? b.target.prefix })}</div>
       )}
-      {b?.target.kind === 'remote' && !b.target.conditionalWrites && <div className="ssync-note ssync-faint">{t('ssync.target.noCas')}</div>}
+      {b?.target.kind === 'remote' && !b.target.conditionalWrites && <div className="ssync-note ssync-faint">{t(b.target.backend === 'folder' ? 'ssync.target.noCasFolder' : 'ssync.target.noCas')}</div>}
       {blocked && !on && <div className="ssync-note ssync-faint">{blocked}</div>}
       {message && <div className="ssync-note" role="status">{message}</div>}
       {auth && <AuthPanel auth={auth} onCancel={onAuthCancel} onCode={onAuthCode} />}
