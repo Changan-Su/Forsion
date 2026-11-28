@@ -1,15 +1,13 @@
 /**
- * 智库同步 H3 清单第 5 件:退出登录 → 旧 remotesync 跑一轮 → 重新登录。
- * 条目同步(entrySync)按账号存(amadeus-config 的 cloudAccounts[账号]),旧 remotesync 的忽略名单读的是当前账号那份。
- * 退出登录时读不到任何账号的条目名单:旧同步这一轮不能把它当「这个库没有条目同步」,去碰条目路径(条目引擎重新登录后会把
- * 这些改动当成用户的改动推上云,或者两边的同名文件互相盖)。这里钉住:
- * - 登录时:条目路径让开(同第 2 步);
- * - 退出登录:这个根上有别的账号的条目同步 = 不知道,这一轮不跑(固定码),零读零写零删;
- *   这个根上没有任何账号的条目同步(从没用过条目同步的人):照常跑,不因为没登录就停;
- * - 重新登录后再跑:条目路径仍然让开,零删除。
+ * 智库同步 H3 清单第 5 件 + Codex P1:旧 remotesync 一轮的条目忽略名单是一条规矩 ——
+ * 盘上**所有**条目同步登记里落在这个根上的路径(当前账号的、别的账号的、待认领的 legacyCloudState、还没挪进去的顶层老字段),
+ * 都从同一次严格读来;「不知道」才整轮不跑(entry-ignores-unknown):配置严格读不出 / 名单读不懂 / 某个条目库根解析出
+ * ENOENT、ENOTDIR 以外的错。
+ * 第一版(只看当前账号)跑出的红:退出登录那一轮名单读成空,条目里的 a.md 被换成远端那份(本机那份成了冲突副本)、
+ * Shared/s.md 推上了远端、远端独有的文件拉进了条目文件夹。现在:登出也照名单让开着跑;登录着 B、条目在 A 名下也让开。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -57,15 +55,23 @@ beforeEach(() => {
 })
 afterEach(() => { vi.resetModules(); rmSync(env.root, { recursive: true, force: true }) })
 
-async function bootWith(entrySyncRoot: string | null): Promise<void> {
+const ENTRIES = [{ path: 'a.md', kind: 'page' }, { path: 'Shared', kind: 'folder' }]
+const OTHER = 'https://cloud.test/api::account-2'
+
+/** where:条目同步登记放在哪 —— 'A' = 账号 1 名下、'B' = 账号 2 名下、'legacy' = 待认领的 legacyCloudState、
+ *  'top' = 还没挪进 legacyCloudState 的顶层老字段(旁边已经有一份别的 legacyCloudState)、null = 哪儿都没有。 */
+async function bootWith(entrySyncRoot: string | null, where: 'A' | 'B' | 'legacy' | 'top' = 'A'): Promise<void> {
   vi.resetModules()
   const settings = await import('./amadeus/settings')
-  const ns = settings.cloudAccountNamespace(ACCOUNT)
-  const entrySync = entrySyncRoot ? [{ vaultRoot: entrySyncRoot, cloudName: 'Vault', entries: [{ path: 'a.md', kind: 'page' }, { path: 'Shared', kind: 'folder' }] }] : []
-  writeFileSync(join(env.root, 'userData', 'amadeus-config.json'), JSON.stringify({
-    lastVault: vault(), localVault: vault(),
-    cloudAccounts: { [ns]: { entrySync } },
-  }))
+  const entrySync = entrySyncRoot ? [{ vaultRoot: entrySyncRoot, cloudName: 'Vault', entries: ENTRIES }] : []
+  const nsA = settings.cloudAccountNamespace(ACCOUNT)
+  const nsB = settings.cloudAccountNamespace(OTHER)
+  const stored: Record<string, unknown> = { lastVault: vault(), localVault: vault(), cloudAccounts: { [nsA]: { entrySync: [] }, [nsB]: { entrySync: [] } } }
+  if (where === 'A') stored.cloudAccounts = { [nsA]: { entrySync }, [nsB]: { entrySync: [] } }
+  if (where === 'B') stored.cloudAccounts = { [nsA]: { entrySync: [] }, [nsB]: { entrySync } }
+  if (where === 'legacy') stored.legacyCloudState = { entrySync }
+  if (where === 'top') { stored.entrySync = entrySync; stored.legacyCloudState = { entrySync: [{ vaultRoot: join(env.root, 'Elsewhere'), cloudName: 'E', entries: [] }] } }
+  writeFileSync(join(env.root, 'userData', 'amadeus-config.json'), JSON.stringify(stored))
   const ipc = await import('./remotesyncIpc')
   ipc.registerRemoteSync()
   ipc.legacyRemoteSync.extendLoaded(false)
@@ -82,7 +88,7 @@ function entryPathsUntouched(): void {
 }
 
 describe('signing out, a legacy round, signing back in', () => {
-  it('signed out: the root has entry sync under an account we cannot read now → the round does not run; back in: still skipped, nothing deleted', async () => {
+  it('signed out: the list is still known (all accounts), so the round runs and stays off the entry paths; back in: nothing deleted', async () => {
     await bootWith(vault())
     const first = await call<any>('remotesync:run')
     expect(first.ok).toBe(true)
@@ -90,55 +96,108 @@ describe('signing out, a legacy round, signing back in', () => {
     expect(read(join(remote(), 'b.md'))).toBe('beta (legacy sync manages this)')
 
     env.account = null // 退出登录
+    writeFileSync(join(vault(), 'b2.md'), 'written while signed out')
     const out = await call<any>('remotesync:run')
-    expect(out.ok).toBe(false)
-    expect(out.errors).toEqual(['entry-ignores-unknown'])
+    expect(out.ok).toBe(true)
     entryPathsUntouched()
+    expect(read(join(remote(), 'b2.md'))).toBe('written while signed out') // 条目之外照常同步
 
     env.account = ACCOUNT // 重新登录
-    writeFileSync(join(vault(), 'b2.md'), 'another legacy file')
+    writeFileSync(join(vault(), 'b3.md'), 'another legacy file')
     const back = await call<any>('remotesync:run')
     expect(back.ok).toBe(true)
     expect(back.deletedLocal + back.deletedRemote).toBe(0)
     entryPathsUntouched()
-    expect(read(join(remote(), 'b2.md'))).toBe('another legacy file')
+    expect(read(join(remote(), 'b3.md'))).toBe('another legacy file')
   })
 
-  it('signed out and no account has entry sync on this root (never used it, or it is on another vault): the round runs as before', async () => {
-    await bootWith(join(env.root, 'OtherVault'))
+  it('signed in as another account, the entry sync registered under the first one is still stayed off', async () => {
+    await bootWith(vault(), 'A')
+    env.account = OTHER
+    expect((await call<any>('remotesync:run')).ok).toBe(true)
+    entryPathsUntouched()
+  })
+
+  it('entry sync waiting to be adopted (legacyCloudState) and the old top-level field next to it are stayed off too', async () => {
+    for (const where of ['legacy', 'top'] as const) {
+      await bootWith(vault(), where)
+      expect((await call<any>('remotesync:run')).ok).toBe(true)
+      entryPathsUntouched()
+    }
+  })
+
+  it('no entry sync on this root anywhere (never used it, or it is on another vault): the whole vault syncs as before, signed in or out', async () => {
     mkdirSync(join(env.root, 'OtherVault'), { recursive: true })
+    await bootWith(join(env.root, 'OtherVault'))
     env.account = null
     const out = await call<any>('remotesync:run')
     expect(out.ok).toBe(true)
     expect(read(join(remote(), 'b.md'))).toBe('beta (legacy sync manages this)')
+    expect(existsSync(join(remote(), 'Shared', 's.md'))).toBe(true) // 不是条目:照常推
   })
 
-  it('signed out and the config on disk can no longer be read (the cached copy still can): not knowing = the round does not run', async () => {
+  it('the config on disk can no longer be read (the cached copy still can): not knowing = the round does not run', async () => {
     await bootWith(vault())
     expect((await call<any>('remotesync:run')).ok).toBe(true) // 读进缓存
     writeFileSync(join(env.root, 'userData', 'amadeus-config.json'), '{"cloudAccounts":')
-    env.account = null
+    for (const acct of [ACCOUNT, null]) {
+      env.account = acct
+      expect((await call<any>('remotesync:run')).errors).toEqual(['entry-ignores-unknown'])
+      entryPathsUntouched()
+    }
+  })
+
+  it('a list it cannot make sense of (an account\'s entrySync is not a list) is not "no entry sync": the round does not run', async () => {
+    await bootWith(vault(), 'A')
+    const settings = await import('./amadeus/settings')
+    const cfgPath = join(env.root, 'userData', 'amadeus-config.json')
+    const cur = JSON.parse(read(cfgPath))
+    cur.cloudAccounts[settings.cloudAccountNamespace(OTHER)] = { entrySync: 'broken' }
+    writeFileSync(cfgPath, JSON.stringify(cur))
     expect((await call<any>('remotesync:run')).errors).toEqual(['entry-ignores-unknown'])
     entryPathsUntouched()
   })
 
-  it('signed out halfway through a round: the ignore list is read for the account the round started with, never as empty', async () => {
-    await bootWith(vault())
-    env.calls = 0
-    env.signOutAfter = 1 // 这一轮开头那一次还是登录着的,之后都是登出
-    const out = await call<any>('remotesync:run')
-    expect(env.calls).toBeGreaterThan(1) // 这一轮里确实又问过账号
-    expect(out.ok).toBe(true)
-    entryPathsUntouched()
-    expect(read(join(remote(), 'b.md'))).toBe('beta (legacy sync manages this)')
+  it('another entry vault root that cannot be resolved (no permission) is not "another vault": the round does not run', async () => {
+    const locked = join(env.root, 'locked')
+    mkdirSync(join(locked, 'Inner'), { recursive: true })
+    await bootWith(join(locked, 'Inner'), 'B')
+    chmodSync(locked, 0o000)
+    try {
+      expect((await call<any>('remotesync:run')).errors).toEqual(['entry-ignores-unknown'])
+    } finally { chmodSync(locked, 0o755) }
+    expect(existsSync(join(remote(), 'b.md'))).toBe(false)
   })
 
-  it('an entry sync registered through a symlink to this root counts too', async () => {
-    const { symlinkSync } = await import('node:fs')
+  it('signed out halfway through a round: still stayed off (the list does not depend on who is signed in)', async () => {
+    await bootWith(vault())
+    env.calls = 0
+    env.signOutAfter = 1
+    const out = await call<any>('remotesync:run')
+    expect(env.calls).toBeGreaterThan(1)
+    expect(out.ok).toBe(true)
+    entryPathsUntouched()
+  })
+
+  it('an entry sync registered through a symlink to this root counts too (signed out)', async () => {
     symlinkSync(vault(), join(env.root, 'VaultLink'))
     await bootWith(join(env.root, 'VaultLink'))
     env.account = null
-    expect((await call<any>('remotesync:run')).errors).toEqual(['entry-ignores-unknown'])
+    expect((await call<any>('remotesync:run')).ok).toBe(true)
     entryPathsUntouched()
+  })
+})
+
+describe('the takeover view reads one strict settings snapshot (Codex P2)', () => {
+  it('amadeus-config broken while remotesync.json and sync-targets are fine: the view throws a fixed code, never root:null with empty entryIgnores', async () => {
+    await bootWith(vault())
+    const ipc = await import('./remotesyncIpc')
+    expect((await ipc.legacyRemoteSync.view())?.entryIgnores).toEqual(['a.md', 'a.fd/', 'Shared/'])
+    writeFileSync(join(env.root, 'userData', 'sync-targets.json'), JSON.stringify({ version: 1, targets: {} }))
+    writeFileSync(join(env.root, 'userData', 'amadeus-config.json'), '{"lastVault":')
+    const err = await ipc.legacyRemoteSync.view().then(() => null, (e: Error) => e)
+    expect(err?.message).toBe('amadeus-config-unparseable')
+    const { createSyncTargets } = await import('./syncTargets')
+    await expect(createSyncTargets().legacyRemoteSync()).rejects.toThrow('amadeus-config-unparseable')
   })
 })

@@ -22,8 +22,11 @@ vi.mock('electron', () => ({
 vi.mock('./forsionHome', () => ({ isDevMode: () => false, forsionHomeDir: () => join(env.root, 'home') }))
 vi.mock('./amadeus/settings', () => ({
   readConfig: async () => ({ lastVault: join(env.root, 'Vault'), localVault: join(env.root, 'Vault'), entrySync: env.entrySync }),
-  // 这份夹具不分账号:当前账号的名单就是全部账号的名单(退出登录的那条路在 remotesyncSignedOut.test.ts 里用真 settings 测)
-  entrySyncRootsAllAccounts: async () => (env.entrySync as Array<{ vaultRoot: string }>).map((v) => v.vaultRoot),
+  // 这份夹具不分账号:当前账号的名单就是全部账号的名单(分账号、登出、待认领那几条路在 remotesyncSignedOut.test.ts 里用真 settings 测)
+  readEntrySyncSnapshotStrict: async () => ({
+    config: { lastVault: join(env.root, 'Vault'), localVault: join(env.root, 'Vault'), entrySync: env.entrySync },
+    allEntrySync: env.entrySync,
+  }),
   currentCloudAccountId: () => null,
 }))
 vi.mock('./amadeus/cloudPaths', () => ({
@@ -438,7 +441,7 @@ describe('entry ignores', () => {
     } finally { chmodSync(locked, 0o755) }
   })
 
-  it('the old engine\'s own round keeps the pre-step-2 rule for an unresolvable vault root: it is not this vault, nothing here is skipped', async () => {
+  it('the old engine\'s own round with an unresolvable entry vault root (no permission): not knowing = the round does not run (H3 Codex P1, replaces H-5 item 4)', async () => {
     const locked = join(env.root, 'locked')
     mkdirSync(join(locked, 'Inner'), { recursive: true })
     env.entrySync = [{ vaultRoot: join(locked, 'Inner'), cloudName: 'L', entries: [{ path: 'a.md', kind: 'page' }] }]
@@ -447,9 +450,13 @@ describe('entry ignores', () => {
     ipc.legacyRemoteSync.extendLoaded(false)
     chmodSync(locked, 0o000)
     try {
-      expect((await call<any>('remotesync:run')).ok).toBe(true)
-      expect((await ipc.legacyRemoteSync.view())?.entryIgnores).toEqual(['a.md', 'a.fd/']) // 接手视图:不知道 = 让开
+      expect((await call<any>('remotesync:run')).errors).toEqual(['entry-ignores-unknown'])
+      expect((await ipc.legacyRemoteSync.view())?.entryIgnores).toEqual(['a.md', 'a.fd/']) // 接手视图:不知道 = 让开(口径不变)
     } finally { chmodSync(locked, 0o755) }
+    expect(existsSync(join(env.root, 'Remote', 'a.md'))).toBe(false) // 什么都没传
+    expect(existsSync(join(env.root, 'Remote', 'b.md'))).toBe(false)
+    // 能解析了:那是另一个库,这个库照常整份同步
+    expect((await call<any>('remotesync:run')).ok).toBe(true)
     expect(readFileSync(join(env.root, 'Remote', 'a.md'), 'utf8')).toBe('alpha')
     expect(readFileSync(join(env.root, 'Remote', 'b.md'), 'utf8')).toBe('beta')
   })

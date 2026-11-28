@@ -11,7 +11,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, app, ipcMain, shell } from 'electron'
-import { readConfig as readAmadeusConfig } from './amadeus/settings'
+import { readConfig as readAmadeusConfig, type AmadeusConfig, type EntrySyncVault } from './amadeus/settings'
 import { syncVaultRoot } from './amadeus/vaultList'
 import { cloudVaultDir, hash8, isManagedCloudVault } from './amadeus/cloudPaths'
 import { isDevMode } from './forsionHome'
@@ -30,7 +30,7 @@ import { createS3Remote, normPrefix, type S3Config } from './remotesync/fsS3'
 import { createWebdavRemote, type WebdavConfig } from './remotesync/fsWebdav'
 import type { RemoteFs, SyncReport } from './remotesync/types'
 import { contentSyncOwned } from './contentSyncHost'
-import { currentCloudAccountId, entrySyncRootsAllAccounts } from './amadeus/settings'
+import { currentCloudAccountId, readEntrySyncSnapshotStrict } from './amadeus/settings'
 import { remoteReportProblems, SYNC_RECORD_MAX_FAILED, type SyncTarget } from '../shared/vaultSync'
 import { appendSyncRecord } from './syncRecordsIpc'
 import { createLegacyGate, type LegacyGate, type LegacyGateState } from './remotesync/legacySeal'
@@ -190,9 +190,10 @@ async function canon(p: string): Promise<string> {
 
 const overlaps = (a: string, b: string): boolean => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep)
 
-/** 同步根 = 钉住的同步库(没钉过 = 本地库);云镜像根拒绝(按 realpath 比较)。 */
-export async function resolveLocalSyncRoot(): Promise<{ root: string } | { error: string }> {
-  const am = await readAmadeusConfig()
+/** 同步根 = 钉住的同步库(没钉过 = 本地库);云镜像根拒绝(按 realpath 比较)。am = 调用方已经严格读好的那份(视图用);
+ *  不给就照旧读缓存那份。 */
+export async function resolveLocalSyncRoot(given?: AmadeusConfig): Promise<{ root: string } | { error: string }> {
+  const am = given ?? await readAmadeusConfig()
   const root = syncVaultRoot(am) ?? am.lastVault // 切库不换同步根
   if (!root) return { error: 'no-local-vault' }
   try {
@@ -207,43 +208,38 @@ export async function resolveLocalSyncRoot(): Promise<{ root: string } | { error
 }
 
 /** entrySync 绑定路径 → 忽略规则(双引擎不抢管辖)。库根按物理路径比(realpath:解开符号链接、mac 上纠正大小写,
- *  同 contentSyncHost.canonRoot 的口径):经软链登记的库也认得出;字面相同照旧算(第 2 步以前的口径)。
- *  条目库根解析不了时:不存在(ENOENT / ENOTDIR)= 不可能是这个(在的)根;别的错(没权限、链接打转):
- *  - 'legacy'(remotesync 自己 runNow):回到字面比较,别的库解析不了不该让这个库少同步文件(没登记 v2 时行为照旧);
- *  - 'takeover'(给接手的视图):不知道 = 当成同一个、让开它的条目(接手据此暂停),不猜。 */
-async function entrySyncIgnores(root: string, mode: 'legacy' | 'takeover', accountId: string | null = currentCloudAccountId()): Promise<string[]> {
-  const am = await readAmadeusConfig(accountId)
+ *  同 contentSyncHost.canonRoot 的口径):经软链登记的库也认得出;字面相同照旧算。
+ *  条目库根解析不了时:不存在(ENOENT / ENOTDIR)= 不可能是这个(在的)根;别的错(没权限、链接打转)= 不知道:
+ *  - 'fail'(旧 remotesync 自己那一轮,H3 Codex P1):整份回 null,这一轮不跑 —— 不能把解析不了当成「另一个库」;
+ *  - 'same'(给接手的视图,契约 H-2):当成同一个、让开它的条目(接手据此暂停)。 */
+async function ignoresOf(root: string, vaults: readonly EntrySyncVault[], onUnknown: 'fail' | 'same'): Promise<string[] | null> {
   const here = await canon(root)
-  const out: string[] = []
-  for (const v of am.entrySync ?? []) {
+  const out = new Set<string>()
+  for (const v of vaults) {
     let same = path.resolve(v.vaultRoot) === path.resolve(root)
     if (!same) {
       try { same = (await fs.realpath(v.vaultRoot)) === here } catch (e) {
         const code = (e as NodeJS.ErrnoException)?.code
-        same = mode === 'takeover' && code !== 'ENOENT' && code !== 'ENOTDIR'
+        if (code !== 'ENOENT' && code !== 'ENOTDIR') { if (onUnknown === 'fail') return null; same = true }
       }
     }
     if (!same) continue
     for (const e of v.entries ?? []) {
-      if (e.kind === 'folder') out.push(`${e.path}/`)
-      else out.push(e.path)
-      if (e.kind === 'page' && e.path.endsWith('.md')) out.push(`${e.path.slice(0, -3)}.fd/`)
+      out.add(e.kind === 'folder' ? `${e.path}/` : e.path)
+      if (e.kind === 'page' && e.path.endsWith('.md')) out.add(`${e.path.slice(0, -3)}.fd/`)
     }
   }
-  return out
+  return [...out]
 }
 
-/** 退出登录时(条目名单按账号存,这时一份都读不到):盘上有没有哪个账号的条目同步登记在这个根上。判同一个根的口径同
- *  entrySyncIgnores 的 'legacy'(字面相同,或 realpath 相同;解析不了的别的库不算这个根)。读不了配置 = 不知道 = 算有。 */
-async function entrySyncOnRootSignedOut(root: string): Promise<boolean> {
-  let roots: string[]
-  try { roots = await entrySyncRootsAllAccounts() } catch { return true }
-  const here = await canon(root)
-  for (const r of roots) {
-    if (path.resolve(r) === path.resolve(root)) return true
-    try { if ((await fs.realpath(r)) === here) return true } catch { /* 解析不了:不是这个根 */ }
-  }
-  return false
+/** 旧 remotesync 一轮的条目忽略名单(H3 Codex P1,一条规矩):盘上**所有**条目同步登记里落在这个根上的路径 —— 当前账号的、
+ *  别的账号的(登录着 B、条目在 A 名下也让开)、待认领的 legacyCloudState —— 都从同一次严格读来。
+ *  不知道 = null(这一轮不跑):配置严格读不出来,或者哪个条目库根解析出 ENOENT / ENOTDIR 以外的错。
+ *  退出登录不再单独判:名单不按账号取,登出时照样算得出来。 */
+async function legacyRoundIgnores(root: string, accountId: string | null): Promise<string[] | null> {
+  let all: EntrySyncVault[]
+  try { all = (await readEntrySyncSnapshotStrict(accountId)).allEntrySync } catch { return null }
+  return ignoresOf(root, all, 'fail')
 }
 
 function sendAll(channel: string, payload: unknown): void {
@@ -297,9 +293,10 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
     if ('error' in built) return fail(built.error)
     const rooted = await resolveLocalSyncRoot()
     if ('error' in rooted) return fail(rooted.error)
-    // 退出登录:读不到这个根上条目同步要让开的路径(名单按账号存)。有别的账号的条目同步登记在这里 = 不知道,这一轮不跑,
-    // 不当空名单(H3 清单第 5 件:当空会把条目里的文件换成远端那份、把远端的拉进条目文件夹,重新登录后条目引擎当成用户改动推上云)
-    if (!recordAccount && await entrySyncOnRootSignedOut(rooted.root)) return fail('entry-ignores-unknown')
+    // 条目同步要让开的路径:盘上所有登记(不分账号)。算不出来 = 不知道,这一轮不跑、不当空名单(H3 第 5 件 + Codex P1:当空会把
+    // 条目里的文件换成远端那份、把远端的拉进条目文件夹,条目引擎之后当成用户改动推上云)
+    const entryIgnores = await legacyRoundIgnores(rooted.root, recordAccount)
+    if (!entryIgnores) return fail('entry-ignores-unknown')
     if (cfg.backend === 'folder' && cfg.folder?.path) {
       // folder 后端与同步根互相嵌套 = 递归自我复制,拒绝
       const target = await canon(cfg.folder.path)
@@ -314,8 +311,7 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
       remote: built.remote,
       statePath: path.join(app.getPath('userData'), 'remotesync-state', `${hash8(scope)}.json`),
       fingerprint: built.fingerprint,
-      // 名单按这一轮开头取的账号读:和上面的退出登录判断同一个账号,中途登出也不会读成空名单
-      ignoreGlobs: [...(cfg.ignore ?? []), ...(await entrySyncIgnores(rooted.root, 'legacy', recordAccount))],
+      ignoreGlobs: [...(cfg.ignore ?? []), ...entryIgnores],
       maxFileSize: effectiveMaxFileSize(cfg, built.maxFileBytes),
       direction: cfg.direction,
       concurrency: cfg.concurrency,
@@ -783,7 +779,8 @@ export interface LegacyRemoteSyncView {
   hold: 'none' | 'v2'
   archived: boolean
   handshake: 'pending' | 'ok' | 'released'
-  /** 「让开条目绑定的路径」(契约 H-2 第 2 条):同 runNow 里的 entrySyncIgnores,现算(条目库根解析不了按同一个算)。非空 = 这个根也配着条目同步。 */
+  /** 「让开条目绑定的路径」(契约 H-2 第 2 条):当前账号登记在这个根上的条目,现算(条目库根解析不了按同一个算)。非空 = 这个根也配着条目同步。
+   *  旧同步自己那一轮另按全部账号算(legacyRoundIgnores),这份口径不变(给 E-19)。 */
   entryIgnores: string[]
   /** 这份配置「根 × 去处」的不透明键(不含凭据):接手前后各取一次比对、交给 archive 核对,换了根 / 桶 / 账号就对不上。根解析不了 = null。 */
   legacyKey: string | null
@@ -791,7 +788,9 @@ export interface LegacyRemoteSyncView {
 
 /** 一份严格读到的配置 → 给 Extend 的视图(不含凭据)。 */
 async function viewOf(cfg: RemoteSyncConfig): Promise<LegacyRemoteSyncView> {
-  const rooted = await resolveLocalSyncRoot()
+  // 库根、键、条目排除项都从同一份严格读的设置快照算(Codex P2):读不了整个调用抛固定码,不回 root:null + 空的 entryIgnores
+  const snap = await readEntrySyncSnapshotStrict()
+  const rooted = await resolveLocalSyncRoot(snap.config)
   const st = legacyGate().state()
   if (st.hold === 'unknown') await syncTargetsStore.readLegacy() // 持有状态读不了:这里抛出去,别回一份「没持有」
   return {
@@ -808,7 +807,7 @@ async function viewOf(cfg: RemoteSyncConfig): Promise<LegacyRemoteSyncView> {
     root: 'root' in rooted ? rooted.root : null,
     rootError: 'error' in rooted ? rooted.error : null,
     legacyKey: 'root' in rooted ? legacyKeyOf(cfg, rooted.root) : null,
-    entryIgnores: 'root' in rooted ? await entrySyncIgnores(rooted.root, 'takeover') : [],
+    entryIgnores: 'root' in rooted ? (await ignoresOf(rooted.root, snap.config.entrySync ?? [], 'same')) ?? [] : [],
     running,
     hold: st.hold === 'v2' ? 'v2' : 'none',
     archived: st.archived,

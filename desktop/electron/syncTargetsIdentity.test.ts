@@ -20,7 +20,7 @@ vi.mock('electron', () => ({
 vi.mock('./forsionHome', () => ({ isDevMode: () => false, forsionHomeDir: () => join(env.root, 'home') }))
 vi.mock('./amadeus/settings', () => ({
   readConfig: async () => ({ lastVault: join(env.root, 'Vault'), localVault: join(env.root, 'Vault'), entrySync: [] }),
-  entrySyncRootsAllAccounts: async () => [],
+  readEntrySyncSnapshotStrict: async () => ({ config: { lastVault: join(env.root, 'Vault'), localVault: join(env.root, 'Vault'), entrySync: [] }, allEntrySync: [] }),
   currentCloudAccountId: () => null,
 }))
 vi.mock('./amadeus/cloudPaths', () => ({
