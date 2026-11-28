@@ -275,10 +275,12 @@ async function folderIdentity(base: string, segs: readonly string[]): Promise<st
   const rootOf = win ? (parsed.head === 'UNC' ? `\\\\${parsed.segs[0]}\\${parsed.segs[1]}\\` : `${parsed.head}\\`) : '/'
   const fold: boolean[] = []
   let dirAt = rootOf
+  const unc = win && parsed.head === 'UNC'
   for (let i = 0; i < parsed.segs.length; i++) {
     const name = parsed.segs[i]
-    // UNC 的 server / share 和盘符一样一律折
-    fold.push(win && parsed.head === 'UNC' && i < 2 ? true : await foldsAt(dirAt, name))
+    // UNC 的 server / share 和盘符一样一律折;它们已经在 rootOf 里,从第 3 段起才在 dirAt 下面探
+    if (unc && i < 2) { fold.push(true); continue }
+    fold.push(await foldsAt(dirAt, name))
     dirAt = path.join(dirAt, name)
   }
   if (rest.length) {

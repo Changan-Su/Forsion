@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const env = vi.hoisted(() => ({ root: '', handlers: new Map<string, (...a: unknown[]) => unknown>(), account: null as string | null }))
+const env = vi.hoisted(() => ({ root: '', handlers: new Map<string, (...a: unknown[]) => unknown>(), account: null as string | null, signOutAfter: -1, calls: 0 }))
 const ACCOUNT = 'https://cloud.test/api::account-1'
 vi.mock('electron', () => ({
   app: { getPath: () => join(env.root, 'userData') },
@@ -23,7 +23,8 @@ vi.mock('electron', () => ({
 }))
 vi.mock('./forsionHome', () => ({ isDevMode: () => false, forsionHomeDir: () => join(env.root, 'home') }))
 vi.mock('./forsionAuth', () => ({ loadTanguCreds: () => ({ cloudUrl: 'https://cloud.test/api', token: '' }) }))
-vi.mock('../shared/forsionAccount', () => ({ forsionAccountId: () => env.account }))
+// signOutAfter >= 0:问过这么多次账号以后就当退出登录了(一轮跑到一半登出)
+vi.mock('../shared/forsionAccount', () => ({ forsionAccountId: () => (env.signOutAfter >= 0 && env.calls++ >= env.signOutAfter ? null : env.account) }))
 vi.mock('./amadeus/fs/vaultHandlers', () => ({ withTextWriteLock: async (_p: string, fn: () => Promise<void>) => fn() }))
 vi.mock('./amadeus/cloudPaths', () => ({
   cloudVaultDir: () => join(env.root, 'cloud-mirror'),
@@ -42,6 +43,8 @@ beforeEach(() => {
   env.root = realpathSync(mkdtempSync(join(tmpdir(), 'forsion-rs-signout-')))
   env.handlers.clear()
   env.account = ACCOUNT
+  env.signOutAfter = -1
+  env.calls = 0
   mkdirSync(join(vault(), 'Shared'), { recursive: true })
   mkdirSync(join(remote(), 'Shared'), { recursive: true })
   mkdirSync(join(env.root, 'userData'), { recursive: true })
@@ -117,6 +120,17 @@ describe('signing out, a legacy round, signing back in', () => {
     env.account = null
     expect((await call<any>('remotesync:run')).errors).toEqual(['entry-ignores-unknown'])
     entryPathsUntouched()
+  })
+
+  it('signed out halfway through a round: the ignore list is read for the account the round started with, never as empty', async () => {
+    await bootWith(vault())
+    env.calls = 0
+    env.signOutAfter = 1 // 这一轮开头那一次还是登录着的,之后都是登出
+    const out = await call<any>('remotesync:run')
+    expect(env.calls).toBeGreaterThan(1) // 这一轮里确实又问过账号
+    expect(out.ok).toBe(true)
+    entryPathsUntouched()
+    expect(read(join(remote(), 'b.md'))).toBe('beta (legacy sync manages this)')
   })
 
   it('an entry sync registered through a symlink to this root counts too', async () => {

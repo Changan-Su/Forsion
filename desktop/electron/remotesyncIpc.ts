@@ -211,8 +211,8 @@ export async function resolveLocalSyncRoot(): Promise<{ root: string } | { error
  *  条目库根解析不了时:不存在(ENOENT / ENOTDIR)= 不可能是这个(在的)根;别的错(没权限、链接打转):
  *  - 'legacy'(remotesync 自己 runNow):回到字面比较,别的库解析不了不该让这个库少同步文件(没登记 v2 时行为照旧);
  *  - 'takeover'(给接手的视图):不知道 = 当成同一个、让开它的条目(接手据此暂停),不猜。 */
-async function entrySyncIgnores(root: string, mode: 'legacy' | 'takeover'): Promise<string[]> {
-  const am = await readAmadeusConfig()
+async function entrySyncIgnores(root: string, mode: 'legacy' | 'takeover', accountId: string | null = currentCloudAccountId()): Promise<string[]> {
+  const am = await readAmadeusConfig(accountId)
   const here = await canon(root)
   const out: string[] = []
   for (const v of am.entrySync ?? []) {
@@ -314,7 +314,8 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
       remote: built.remote,
       statePath: path.join(app.getPath('userData'), 'remotesync-state', `${hash8(scope)}.json`),
       fingerprint: built.fingerprint,
-      ignoreGlobs: [...(cfg.ignore ?? []), ...(await entrySyncIgnores(rooted.root, 'legacy'))],
+      // 名单按这一轮开头取的账号读:和上面的退出登录判断同一个账号,中途登出也不会读成空名单
+      ignoreGlobs: [...(cfg.ignore ?? []), ...(await entrySyncIgnores(rooted.root, 'legacy', recordAccount))],
       maxFileSize: effectiveMaxFileSize(cfg, built.maxFileBytes),
       direction: cfg.direction,
       concurrency: cfg.concurrency,

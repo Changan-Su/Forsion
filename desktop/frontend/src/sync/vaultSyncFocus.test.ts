@@ -37,9 +37,9 @@ describe('telling Extend the main window came back', () => {
     expect(invoke).not.toHaveBeenCalled()
   })
 
-  it('other windows (detached / mini / floating / pip) do not send', () => {
+  it('other windows (detached / mini / floating / pip / standalone Space) do not send', () => {
     setMode('full')
-    for (const kind of ['detached', 'mini', 'floating', 'pip']) {
+    for (const kind of ['detached', 'mini', 'floating', 'pip', 'standalone']) {
       stubWindow(`?window=${kind}&id=x`)
       kickVaultSyncOnFocus()
     }
