@@ -546,6 +546,7 @@
     "check:mininative": "node scripts/mini-auto.check.cjs --native-helper",
     "e2e:notemove:handoff": "node scripts/note-move-handoff.e2e.cjs",
     "e2e:contentsync": "GENESIS_DESKTOP=. node scripts/content-sync.e2e.cjs",
+    "e2e:syncrelease": "node scripts/sync-release.e2e.cjs --all",
     "test:security-deps": "node --test scripts/dependency-security.test.cjs build/runtime-policy.test.cjs scripts/release-security.test.cjs",
     "check:critical": "node scripts/critical-contracts.cjs",
     "bench:baseline": "node scripts/e2e-editor.cjs --script=performance-baseline.check.cjs",
