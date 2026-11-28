@@ -223,6 +223,23 @@ async function pullRemote(): Promise<void> {
   if (st) set({ remote: { config: st.config, running: st.running, lastReport: st.lastReport, progress: st.progress, root: st.root, rootError: st.rootError } })
 }
 
+/** 主窗 = 没有 ?window= 参数(同 services/syncSetup.ts)。windowKind() 会把 standalone 之类它不认识的值也算成 main。 */
+const isMainWindow = (): boolean => { try { return !new URLSearchParams(location.search).get('window') } catch { return false } }
+
+/** vaultsync:run 这条通道:missing = 老 Extend / Extend 不在(preload 的 cloud:present 开窗前就定了,这扇窗的一辈子不变),不再发。 */
+let focusRunChannel: 'unknown' | 'missing' = 'unknown'
+
+/** 主窗切回前台:告诉 Extend(vaultsync:run {reason:'focus'}),跑不跑一轮、重不重取云端库清单、节流(隔 1 分钟)都由 Extend 定
+ *  (契约 step34 E3L-2)。只主窗发(独立窗 / 浮窗 / Mini 不发);不看界面模式(Codex P2:模式还没问出来、或兼容模式时照样发,
+ *  兼容模式下 Extend 自己回 compat_mode)。只看通道在不在:第一次回「通道不在」就记住、以后不发。结果不看、不记日志。
+ *  宿主主进程那边不另发(两处只发一处)。 */
+export function kickVaultSyncOnFocus(): void {
+  if (!isMainWindow() || focusRunChannel === 'missing') return
+  void vaultSync.run(undefined, 'focus').then((r) => { // call() 不会抛:通道不在 / 调用失败都回 { ok:false }
+    if (!r.ok && (r.error === CHANNEL_MISSING || r.error === EXTEND_UNAVAILABLE)) focusRunChannel = 'missing'
+  })
+}
+
 /** 幂等:第一个用到状态源的组件挂载时调一次。 */
 export function ensureVaultSyncSubscribed(): void {
   if (subscribed || typeof window === 'undefined') return
@@ -250,5 +267,5 @@ export function ensureVaultSyncSubscribed(): void {
   } catch { /* 桥不全 */ }
   setInterval(() => set({ now: Date.now() }), 30_000)
   setInterval(() => { void pullVaults(); void pullRemote() }, 60_000)
-  if (typeof window.addEventListener === 'function') window.addEventListener('focus', () => { void pullVaults(); void pollContent(); void pullRemote() })
+  if (typeof window.addEventListener === 'function') window.addEventListener('focus', () => { void pullVaults(); void pollContent(); void pullRemote(); kickVaultSyncOnFocus() })
 }

@@ -51,6 +51,14 @@ describe('clampMenu', () => {
   it('center 溢出右边→仍收进视口', () => {
     expect(clampMenu(980, 100, 200, 300, 1000, 800, { center: true }).left).toBe(792)
   })
+  it('h 恰好等于一侧可用高度、只差浮点尾数 → 仍算放得下,不掉进夹取压住锚点(账号面板 110%,Codex 评审)', () => {
+    // 头像上沿 605.21875、上边距 8:上方可用 597.21875;封顶后除 zoom 再乘回成了 597.2187500000001
+    const h = (597.21875 / 1.1) * 1.1
+    expect(h).toBeGreaterThan(597.21875)
+    expect(clampMenu(10, 640, 320, h, 1200, 647, { anchorTop: 605.21875 }).top).toBeCloseTo(8, 6)
+    // 超出半像素以上照旧判放不下(容差只吃浮点 / 取整的零头)
+    expect(clampMenu(10, 640, 320, 598, 1200, 647, { anchorTop: 605.21875 }).top).toBeCloseTo(647 - 598 - 8, 6)
+  })
 })
 
 // 锚定 absolute 菜单的横向兜底(useEdgeNudge 的算术核)。手机 390 宽 + body zoom 1.15 是真实工况。

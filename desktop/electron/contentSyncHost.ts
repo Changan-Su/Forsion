@@ -20,13 +20,21 @@ export function contentSyncOwned(account:string|null):boolean {
   const name=createHash('sha256').update(account).digest('hex')+'.json'
   try{return JSON.parse(readFileSync(join(forsionHomeDir(),'content-sync',name),'utf8')).owned===true}catch{return false}
 }
-/** 同上,严格版:没有文件 = false;读不了 / 坏了就抛(ownership.get 用:读失败 ≠ 没认领)。 */
+/** 同上,严格版:没有文件 = false;读不了 / 坏了就抛(ownership.get 和旧引擎的遮罩用:读失败 ≠ 没认领)。
+ *  「坏了」= 解析不了、顶层不是对象、owned 在却不是 boolean(Codex 12b 一轮第 3 条:`"true"` 读成 false 会放行旧引擎)。
+ *  Extend 自己写的这份恒带 boolean 的 owned;它读的时候判得更严(contentSyncValidation.assertStoredContentState),这里判坏的都在它判坏的里面。
+ *  没有 owned 键照旧 = false。抛固定的话,不带文件原文。 */
 export function contentSyncOwnedStrict(account:string|null):boolean {
   if(!account)return false
   const name=createHash('sha256').update(account).digest('hex')+'.json'
   let raw:string
   try{raw=readFileSync(join(forsionHomeDir(),'content-sync',name),'utf8')}catch(e:any){if(e?.code==='ENOENT')return false;throw e}
-  return JSON.parse(raw)?.owned===true
+  let state:unknown
+  try{state=JSON.parse(raw)}catch{throw Error('content sync state is unparseable')}
+  if(!state||typeof state!=='object'||Array.isArray(state))throw Error('content sync state is malformed')
+  const owned=(state as {owned?:unknown}).owned
+  if(owned!==undefined&&typeof owned!=='boolean')throw Error('content sync state is malformed')
+  return owned===true
 }
 
 /** 本机库根的比较口径(契约实现期修订 H-1 第 5 条):realpath.native(mac 上纠正大小写、解开符号链接),不存在就 resolve,去尾斜杠。 */
@@ -39,19 +47,58 @@ export function canonRoot(p:string):string{
 export type OwnershipRead={kind:'v2';value:SyncOwnershipV2}|{kind:'none'}|{kind:'unknown'}
 /** 宿主递给 Extend 旧在线引擎的 readConfig 遮罩(amadeus/ipc.ts)。磁盘上的配置一条不动,只改这份读数。
  *  - 读不了(unknown)或老的全局认领(.owned)= 整份遮掉:镜像停、条目同步一个不起(和第 2 步之前新同步开着时一样);
- *  - 有 syncOwnershipV2:只滤掉接手的那几个根,镜像照 mirror(keep = 照用户的开关);
+ *  - 有 syncOwnershipV2:只滤掉接手的那几个根,镜像照 mirror(keep = 照用户的开关;off = enabled:false,旧引擎全停);
+ *    mirror:'keep' + mirrorRetired(第 3 步,H3 定稿第 1 节)= 只加 cloudSync.mirror:false,enabled 不动:条目、与我共享照跑,只停镜像;
  *  - 都没有:原样。 */
-export function maskAmadeusConfig<T extends {cloudSync?:{enabled?:boolean};entrySync?:Array<{vaultRoot:string}>}>(cfg:T,own:OwnershipRead,legacyOwned:boolean):T{
+export function maskAmadeusConfig<T extends {cloudSync?:{enabled?:boolean;mirror?:boolean};entrySync?:Array<{vaultRoot:string}>}>(cfg:T,own:OwnershipRead,legacyOwned:boolean):T{
   if(own.kind==='unknown'||legacyOwned)return {...cfg,cloudSync:{...cfg.cloudSync,enabled:false},entrySync:[]}
   if(own.kind==='none')return cfg
   const roots=new Set(own.value.entryRoots.map(canonRoot))
-  return {...cfg,...(own.value.mirror==='off'?{cloudSync:{...cfg.cloudSync,enabled:false}}:{}),entrySync:(cfg.entrySync??[]).filter(v=>!roots.has(canonRoot(v.vaultRoot)))}
+  const mirror=own.value.mirror==='off'?{cloudSync:{...cfg.cloudSync,enabled:false}}:own.value.mirrorRetired===true?{cloudSync:{...cfg.cloudSync,mirror:false}}:{}
+  return {...cfg,...mirror,entrySync:(cfg.entrySync??[]).filter(v=>!roots.has(canonRoot(v.vaultRoot)))}
+}
+/** 宿主递给旧引擎的 readConfig 由这些读拼成(amadeus/ipc.ts 只调 readMaskedAmadeusConfig)。 */
+export interface MaskedConfigReads<T> {
+  /** 宽松读(settings.readConfig)。 */
+  readConfig():Promise<T>
+  /** 上面那份宽松读的底稿来自一次读失败(缓存成了 {},看着像「什么都没配」)。 */
+  looseReadFailed():boolean
+  /** syncOwnershipV2 严格读:读不了 / 形状不对就抛。 */
+  readV2(account:string|null):Promise<SyncOwnershipV2|null>
+  /** 老的全局认领(新同步状态文件的 .owned)严格读:没有文件 = false,读不了 / 坏了就抛。 */
+  legacyOwned(account:string|null):boolean
+}
+const isRecord=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v)
+/** 旧引擎读得动的账号配置:cloudSync 是对象(enabled 在的话是 boolean),entrySync 是一列带字符串 vaultRoot 和 entries 数组的根。 */
+const maskableShape=(c:{cloudSync?:unknown;entrySync?:unknown}):boolean=>
+  (c.cloudSync===undefined||isRecord(c.cloudSync)&&(c.cloudSync.enabled===undefined||typeof c.cloudSync.enabled==='boolean'))
+  &&(c.entrySync===undefined||Array.isArray(c.entrySync)&&c.entrySync.every(v=>isRecord(v)&&typeof v.vaultRoot==='string'&&Array.isArray(v.entries)))
+/** 旧引擎看到的配置(H3 清单第 6 件):遮罩依赖的读任何一样读不出 = unknown = 整份遮掉,旧引擎按「不知道」停着,
+ *  不拿一份看着像「没认领 / 什么都没配」的读数照跑。这份读数只读,不写回。
+ *  配置本身读不出(读抛错)或账号那几项形状不对,也给停机配置、不 reject(Codex 12b 一轮第 4 条):enabled:false 下旧引擎
+ *  三种引擎都不起,engine.ts 里拿这份读数写回 deviceId / vaultId 的两处走不到;形状不对时本机那几项(lastVault / localVault)照带上。 */
+export async function readMaskedAmadeusConfig<T extends {cloudAccountId?:string|null;cloudSync?:{enabled?:boolean};entrySync?:Array<{vaultRoot:string}>}>(reads:MaskedConfigReads<T>):Promise<T>{
+  let cfg:T
+  try{cfg=await reads.readConfig()}catch{return {cloudSync:{enabled:false},entrySync:[]} as unknown as T}
+  if(!maskableShape(cfg))return {...cfg,cloudSync:{enabled:false},entrySync:[]}
+  const account=cfg.cloudAccountId??null
+  let own:OwnershipRead,legacy=false
+  try{
+    if(reads.looseReadFailed())throw Error('amadeus-config-unreadable')
+    const v2=await reads.readV2(account)
+    own=v2?{kind:'v2',value:v2}:{kind:'none'}
+    legacy=reads.legacyOwned(account)
+  }catch{own={kind:'unknown'}}
+  return maskAmadeusConfig(cfg,own,legacy)
 }
 /** 宿主对新同步(Forsion Extend contentSync)的能力声明:这些可选族 merge() 会按它们自己的规则合并(契约 agentSyncRules)。
  *  'settings' = 随账号走的设置文件 human/Settings/<name>.db 走 mergeSettingsDb(恒有结果、不出冲突副本、本机独有的行不丢)。
  *  Extend 走 npm 单独更新、会跑在老桌面上:只有看到这里列了某个族才碰它;老宿主的 contentSync 里没有这个成员 = 没声明 = 那个族整个不动。
  *  只增不改:哪天规则换了不兼容的写法,换一个新名字,别改旧名字的意思。 */
 export const CONTENT_MERGE_FAMILIES:readonly string[]=Object.freeze(['settings'])
+/** 宿主认 Ownership.mirrorRetired(只停镜像,H3 定稿第 1 节)的声明:CloudHost.contentSync.mirrorRetire。
+ *  没有它 = 不退役:老宿主(#945)的 ownership.set 收下这个字段不报错、静默丢掉,Extend 不能靠 set 不报错来判断。 */
+export const MIRROR_RETIRE:Readonly<{version:1}>=Object.freeze({version:1})
 /** 新同步两边都改了:agents/、human/ 走和旧同步同一份规则(contracts/agentSyncRules.ts);memoryBase 给了的话,
  *  Agent 的记忆(和记忆详情)合完再按本机墓碑滤一遍(第一次见面取并集时,别把这台忘掉的事实从对方那份带回来、再传上云)。 */
 export function mergeSyncContent(path:string,ours:string,base:string|null,theirs:string,memoryBase?:string):{content:string;conflict:boolean}|null {
@@ -183,8 +230,11 @@ const validOwnership=(o:unknown):o is SyncOwnershipV2=>{
   const v=o as SyncOwnershipV2
   return !!v&&typeof v==='object'&&Array.isArray(v.entryRoots)&&v.entryRoots.every(r=>typeof r==='string'&&r.length>0)
     &&(v.mirror==='keep'||v.mirror==='off')&&(v.human==='engine'||v.human==='content')
+    &&(v.mirrorRetired===undefined||typeof v.mirrorRetired==='boolean')
 }
-const normalizeOwnership=(o:SyncOwnershipV2):SyncOwnershipV2=>({entryRoots:[...new Set(o.entryRoots.map(canonRoot))].sort(),mirror:o.mirror,human:o.human})
+/** 规整:根去重排序;mirrorRetired 只留 true(盘上只存 true,get 只在 true 时带)。 */
+const normalizeOwnership=(o:SyncOwnershipV2,retired=o.mirrorRetired===true):SyncOwnershipV2=>
+  ({entryRoots:[...new Set(o.entryRoots.map(canonRoot))].sort(),mirror:o.mirror,human:o.human,...(retired?{mirrorRetired:true}:{})})
 
 export function contentSyncOwnershipV2(host:SyncOwnershipHost){
   function assertAccount(identity:string|null|undefined):asserts identity is string{if(!identity||host.accountId()!==identity)throw Error('account_changed')}
@@ -264,8 +314,9 @@ export function contentSyncOwnershipV2(host:SyncOwnershipHost){
       const account=identity
       return serialized(account,async()=>{
         assertAccount(account)
-        const next=normalizeOwnership(o)
         const prevV2=await host.readV2(account);assertAccount(account)
+        // mirrorRetired 不给 = 沿用盘上的值(在队列里、读完盘才定):重建对象的老写法不会把退役位冲掉;false = 撤销
+        const next=normalizeOwnership(o,o.mirrorRetired===undefined?prevV2?.mirrorRetired===true:o.mirrorRetired)
         const cur=await get(account)
         if(next.human!==cur.human){
           if(next.human==='content'){

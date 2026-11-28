@@ -34,6 +34,7 @@ const ALLOW: Record<string, [number, string]> = {
   'desktop/frontend/src/amadeus/unified/linkCard.tsx': [1, '链接编辑卡居中在窗口 30% 处,落位走 OverlayAt'],
   'desktop/frontend/src/amadeusViews.tsx': [10, '共享卡居中、手机软键盘高度，以及点「⋯」前判断键盘是否展开（visualViewport / adjustResize）'],
   'desktop/frontend/src/views/WorkspaceView.tsx': [1, '手机「更多」菜单的起点,落位走 OverlayAt'],
+  'desktop/frontend/src/sync/VaultSyncPanel.tsx': [2, '同步面板找不到左栏那一行(锚点没挂上)时的起点 = 窗口左下角,落位走 OverlayAt'],
   'desktop/frontend/src/amadeus/plugins/guideSpotlight.ts': [1, '上手提示圈注的视口尺寸'],
   'desktop/frontend/src/amadeus/plugins/guideTips.ts': [1, '判断锚点是否在视口里'],
   'desktop/frontend/src/amadeus/blocks/excalidraw/ExcalidrawCanvas.tsx': [1, '全屏提示没有锚点时放窗口底部中间'],

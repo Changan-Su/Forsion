@@ -11,7 +11,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
-import { OverlayAt, accountMenuRows, openPanel, nativeSheetPresenter, runNativeSheetMenu, zoomOf, type Droplet, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { OverlayAt, accountMenuRows, openPanel, nativeSheetPresenter, rectAnchor, runNativeSheetMenu, type Droplet, type SheetMenuItem, type SheetMenuSection, type TextAnchor } from '@lcl/engine'
 import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Backpack, Gift } from 'lucide-react'
 import type { AuthAccountInfo, AuthStatusInfo } from '../types'
 import { registerMessages, useI18n } from '../i18n'
@@ -89,7 +89,7 @@ export const AccountCard: React.FC<{
   const [auth, setAuth] = useState<AuthStatusInfo | null>(null)
   const [loggingIn, setLoggingIn] = useState(false)
   const [imgError, setImgError] = useState(false)
-  const [menu, setMenu] = useState<{ x: number; y: number; anchorTop: number; below?: boolean; room: number } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; anchorTop: number; anchor: TextAnchor; anchorEl: HTMLElement } | null>(null)
   const [quota, setQuota] = useState<AccountQuotaView | null>(null)
   const [quotaErr, setQuotaErr] = useState(false)
   const [rewards, setRewards] = useState<AccountRewards>(emptyAccountRewards)
@@ -226,10 +226,11 @@ export const AccountCard: React.FC<{
   const openMenu = (el: HTMLElement): void => {
     menuAnchorRef.current = el
     const r = el.getBoundingClientRect()
-    // 锚点在窗口上半截(Chat 头像资料卡里点「账号」时锚在消息头像上)→ 往下开、高度按下方空间;侧栏底部的账号卡照旧往上开。
+    // 往哪边开、高度封多少都交给 OverlayAt(下面 menuEl):先试锚点下方,放不下翻到上方 —— 侧栏底部的账号卡往上开,
+    // Chat 头像资料卡里点「账号」(锚在消息头像上)锚在顶上时往下开。别在这里自己拿窗口高度算(overlayPlacement.guard)。
     // 原来一律往上开、Unit 段高度按锚点上方算:锚在顶上时只剩几十 px,菜单被压扁、各行叠在一起。
-    const below = r.top + r.height / 2 < window.innerHeight / 2
-    setMenu(below ? { x: r.left, y: r.bottom + 4, anchorTop: r.top, below, room: window.innerHeight - r.bottom - 12 } : { x: r.left, y: r.top, anchorTop: r.top, room: r.top - 8 })
+    // 锚点每次现量(rectAnchor):开着菜单缩放 / 拉高窗口时头像会挪,按打开那一刻的快照重算会翻到下方压住挪过去的头像(Codex 评审)。
+    setMenu({ x: r.left, y: r.bottom + 4, anchorTop: r.top, anchor: rectAnchor(el, () => el.getBoundingClientRect()), anchorEl: el })
     setQuotaOpen(false) // 同 09-28 前:每次打开从收起的一行摘要起步
     setConfirmCard(false)
     setQuotaErr(false)
@@ -263,6 +264,17 @@ export const AccountCard: React.FC<{
     void d.retract().then(() => { if (drop.current === d) setMenu(null) })
   }
   const menuOpen = !!menu
+  // 这一次的锚点随菜单关掉 / 换锚点一起作废(监听由 OverlayAt 退订时就摘了,这里只是不让旧对象再被读)。
+  // 锚点那个节点没了(开着菜单用键盘切 Ribbon 展开态、设备页换成远程面、Chat 里那条消息被移除)→ 直接收起:
+  // 不然面板只是藏起来(data-anchor-hidden),菜单还算开着,点新头像的第一下只会把它关掉(Codex 评审)。
+  // 只是滚出可见区不收:那是 OverlayAt 跟随的「藏起、回来原样出现」。
+  const menuAnchorObj = menu?.anchor
+  const menuAnchorEl = menu?.anchorEl
+  useEffect(() => {
+    if (!menuAnchorObj || !menuAnchorEl) return
+    const off = menuAnchorObj.subscribe(() => { if (!menuAnchorEl.isConnected) setMenu((m) => (m?.anchor === menuAnchorObj ? null : m)) })
+    return () => { off(); menuAnchorObj.dispose() }
+  }, [menuAnchorObj, menuAnchorEl])
   // 匿名遥测 v3:头像菜单里的额度详情展开 = 额度提示露出一次(展开 / 收起来回点各算一次;同一次展开里重渲染不算)
   const quotaShown = menuOpen && quotaOpen
   useEffect(() => { if (quotaShown) quotaPromptTelemetry('avatar-menu', 'shown') }, [quotaShown])
@@ -515,8 +527,8 @@ export const AccountCard: React.FC<{
   ) : avatarEl
 
   const webItems = accountItems(quota, quotaErr)
-  // Unit 段(只在真桌面主窗,排在最上面):面板加宽到 320,整张限高 = 头像上沿往上到窗口顶留 8px(既不出窗口、也不压头像),
-  // 多出来的只滚 Unit 那一段(base.css .account-pop--units)。
+  // Unit 段(只在真桌面主窗,排在最上面):面板加宽到 320,Unit 多了会比窗口还高 → OverlayAt 带上 boundary(整个窗口),
+  // 按锚点上下两侧里空间大的那侧封顶 max-height(既不出窗口、也不压头像),多出来的只滚 Unit 那一段(base.css .account-pop--units)。
   const units = !!menu && unitPanelAvailable()
   // Keep a single fade target, including rows that mount while the panel is animating.
   const menuContent = menu && <div className={units ? 'ap-body' : undefined}>
@@ -626,12 +638,14 @@ export const AccountCard: React.FC<{
   const menuEl = menu ? createPortal(
     <OverlayAt
       className={`account-pop${units ? ' account-pop--units' : ''}`}
-      style={units ? { '--ap-max': `${Math.max(0, menu.room) / zoomOf(document.body)}px` } as React.CSSProperties : undefined}
       innerRef={(el) => { popRef.current = el }}
       x={menu.x}
       y={menu.y}
       anchorTop={menu.anchorTop}
-      prefer={menu.below ? 'below' : 'above'}
+      anchor={menu.anchor}
+      gap={4}
+      prefer="below"
+      boundary={units ? document.documentElement : undefined}
       margin={8}
       onPointerDown={(e) => e.stopPropagation()}
     >
