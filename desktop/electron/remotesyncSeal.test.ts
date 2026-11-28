@@ -22,6 +22,8 @@ vi.mock('electron', () => ({
 vi.mock('./forsionHome', () => ({ isDevMode: () => false, forsionHomeDir: () => join(env.root, 'home') }))
 vi.mock('./amadeus/settings', () => ({
   readConfig: async () => ({ lastVault: join(env.root, 'Vault'), localVault: join(env.root, 'Vault'), entrySync: env.entrySync }),
+  // 这份夹具不分账号:当前账号的名单就是全部账号的名单(退出登录的那条路在 remotesyncSignedOut.test.ts 里用真 settings 测)
+  entrySyncRootsAllAccounts: async () => (env.entrySync as Array<{ vaultRoot: string }>).map((v) => v.vaultRoot),
   currentCloudAccountId: () => null,
 }))
 vi.mock('./amadeus/cloudPaths', () => ({

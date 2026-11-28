@@ -169,6 +169,16 @@ function configFrom(stored: StoredConfig, accountId: string | null): AmadeusConf
   })
 }
 
+/** 盘上所有账号登记的条目同步库根(原样,不解析)。退出登录时旧 remotesync 读不到当前账号的条目名单,拿它判「这个根上有没有
+ *  别的账号的条目同步」(H3 第 5 件)。严格读:读不了就抛(读失败 ≠ 没有)。没归属的 legacyCloudState 不算:条目引擎不跑它。 */
+export async function entrySyncRootsAllAccounts(): Promise<string[]> {
+  const out: string[] = []
+  for (const own of Object.values((await storedConfigStrict()).cloudAccounts ?? {})) {
+    for (const v of Array.isArray(own?.entrySync) ? own.entrySync : []) if (typeof v?.vaultRoot === 'string' && v.vaultRoot) out.push(v.vaultRoot)
+  }
+  return out
+}
+
 /** 同一个 lastVault:都没有算同一个;都有按 path.resolve 比。 */
 const sameLastVault = (a: unknown, b: unknown): boolean => {
   const has = (v: unknown): v is string => typeof v === 'string' && v !== ''

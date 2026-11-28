@@ -30,7 +30,7 @@ import { createS3Remote, normPrefix, type S3Config } from './remotesync/fsS3'
 import { createWebdavRemote, type WebdavConfig } from './remotesync/fsWebdav'
 import type { RemoteFs, SyncReport } from './remotesync/types'
 import { contentSyncOwned } from './contentSyncHost'
-import { currentCloudAccountId } from './amadeus/settings'
+import { currentCloudAccountId, entrySyncRootsAllAccounts } from './amadeus/settings'
 import { remoteReportProblems, SYNC_RECORD_MAX_FAILED, type SyncTarget } from '../shared/vaultSync'
 import { appendSyncRecord } from './syncRecordsIpc'
 import { createLegacyGate, type LegacyGate, type LegacyGateState } from './remotesync/legacySeal'
@@ -233,6 +233,19 @@ async function entrySyncIgnores(root: string, mode: 'legacy' | 'takeover'): Prom
   return out
 }
 
+/** 退出登录时(条目名单按账号存,这时一份都读不到):盘上有没有哪个账号的条目同步登记在这个根上。判同一个根的口径同
+ *  entrySyncIgnores 的 'legacy'(字面相同,或 realpath 相同;解析不了的别的库不算这个根)。读不了配置 = 不知道 = 算有。 */
+async function entrySyncOnRootSignedOut(root: string): Promise<boolean> {
+  let roots: string[]
+  try { roots = await entrySyncRootsAllAccounts() } catch { return true }
+  const here = await canon(root)
+  for (const r of roots) {
+    if (path.resolve(r) === path.resolve(root)) return true
+    try { if ((await fs.realpath(r)) === here) return true } catch { /* 解析不了:不是这个根 */ }
+  }
+  return false
+}
+
 function sendAll(channel: string, payload: unknown): void {
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send(channel, payload)
@@ -284,6 +297,9 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
     if ('error' in built) return fail(built.error)
     const rooted = await resolveLocalSyncRoot()
     if ('error' in rooted) return fail(rooted.error)
+    // 退出登录:读不到这个根上条目同步要让开的路径(名单按账号存)。有别的账号的条目同步登记在这里 = 不知道,这一轮不跑,
+    // 不当空名单(H3 清单第 5 件:当空会把条目里的文件换成远端那份、把远端的拉进条目文件夹,重新登录后条目引擎当成用户改动推上云)
+    if (!recordAccount && await entrySyncOnRootSignedOut(rooted.root)) return fail('entry-ignores-unknown')
     if (cfg.backend === 'folder' && cfg.folder?.path) {
       // folder 后端与同步根互相嵌套 = 递归自我复制,拒绝
       const target = await canon(cfg.folder.path)
