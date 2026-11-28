@@ -128,6 +128,15 @@ cd mobile/android && ./gradlew assembleDebug -PlocalEngine -PlocalEngineBase=/pa
 `~/.forsion-dev/local-engine/<file>`. A missing file or a sha256 mismatch fails a `-PlocalEngine` build. CI fetches it from
 `lock.json` `url` when that is set; while it is empty, test-channel CI builds go out without the launcher (with a notice).
 
+The base is hosted as a release file of the separate public repository
+[Changan-Su/forsion-local-engine-base](https://github.com/Changan-Su/forsion-local-engine-base), with its package list and
+the license / source notes. **Not in this repository's releases**: the desktop updater (electron-updater's GitHub provider)
+reads them, and with prereleases allowed on a stable version it takes the newest release of any kind, so a base-only
+release would make those update checks fail. A new base: build it with `build-env.sh`, create a release in that repository
+named after the base version (the file, `SHA256SUMS` and a `packages-<version>.tsv` from the base's `/var/lib/dpkg/status`),
+then update `lock.json` (version, file, sha256, size, unpacked size, url) and bump `line` if the native ↔ engine contract
+changes with it.
+
 ## Building and publishing the engine package
 
 ```bash
