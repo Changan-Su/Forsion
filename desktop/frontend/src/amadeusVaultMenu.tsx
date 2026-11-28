@@ -1,7 +1,7 @@
 // 左栏底部「智库」按钮 + 菜单(多智库第 1 步):本机用过的库、打开文件夹 / 新建 / 同步设置。
-// 只在桌面本地侧出现;云侧和网页仍是 CloudVaultPanel。切库走 pageStore.switchLocalVault(先在旧根落盘再换根)。
+// 本机切库走 pageStore.switchLocalVault(先在旧根落盘再换根);网页复用菜单组件，只提供云端库。
 import React, { useRef, useState } from 'react'
-import { ChevronsUpDown, Cloud, CloudOff, Download, Folder, FolderOpen, FolderPlus, FolderSearch, FolderX, ListX, RefreshCw } from 'lucide-react'
+import { Cloud, CloudOff, Download, Folder, FolderOpen, FolderPlus, FolderSearch, FolderX, ListX, RefreshCw } from 'lucide-react'
 import type { LocalVaultRow } from '@amadeus-shared/ipc'
 import { amadeus } from '@amadeus/api'
 import { usePageStore } from '@amadeus/store/pageStore'
@@ -27,6 +27,7 @@ import { VaultSyncPanel, bytesText } from './sync/VaultSyncPanel'
 import { DownloadVaultDialog } from './components/DownloadVaultDialog'
 import { NewVaultDialog } from './components/NewVaultDialog'
 import { StopDownloadCard } from './components/StopDownloadCard'
+import { cloudVaultDetail, cloudVaultMenuItems, vaultMenuAt, VaultMenuTrigger } from './components/VaultMenu'
 import { windowKind } from './windowKind'
 import { landingError } from './components/vaultLandingMessages'
 
@@ -167,13 +168,11 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
       })
     }
     if (grouped && (cloudRows.length || freshness !== 'fresh')) {
-      items.push({ kind: 'head', label: t('landing.inCloud'), separatorBefore: !!items.length, run: () => {} })
-      for (const row of cloudRows) {
+      const cloudItems = cloudRows.map((row): CtxItem => {
         const { devices, deviceNames, files, bytes } = row
-        const detail = devices === 1 && deviceNames?.[0] ? t('landing.oneDevice', { device: deviceNames[0] }) :
-          devices > 0 ? t('ssync.cloudDeviceCount', { n: devices }) : typeof files === 'number' ? t('ssync.cloudFiles', { n: files }) : t('ssync.cloudNoDevice')
-        items.push({
-          label: cloudName(row), icon: <Cloud size={15} />, detail: `${t('landing.online')} · ${detail}`,
+        const detail = cloudVaultDetail(t, devices, deviceNames?.[0], files) ?? t('ssync.cloudNoDevice')
+        return {
+          label: cloudName(row), detail: `${t('landing.online')} · ${detail}`,
           disabled: freshness !== 'fresh', dimmed: freshness === 'fresh',
           run: () => notify('landing.onlineUnavailable', {}),
           onSecondary: freshness !== 'fresh' ? undefined : (at) => setMenu({ ...at, items: [
@@ -192,12 +191,12 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
               },
             },
           ] }),
-        })
-      }
-      items.push({ kind: 'note', icon: <CloudOff size={15} />, run: () => {}, label: t(
+        }
+      })
+      items.push(...cloudVaultMenuItems(t('landing.inCloud'), cloudItems, { kind: 'note', icon: <CloudOff size={15} />, run: () => {}, label: t(
         freshness === 'offline' ? 'landing.err.offline' : freshness === 'unreadable' ? 'landing.cloudUnreadable' :
           canDownload ? 'landing.onlineGroupHint' : 'landing.onlineUnavailable',
-      ) })
+      ) }, !!items.length))
     }
 
     if (degraded) items.push({ kind: 'note', label: t('landing.err.vault_list_unreadable'), run: () => {} })
@@ -214,21 +213,16 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
     )
     if (isFullSync()) items.push({ label: t('vaultMenu.syncSettings'), icon: <RefreshCw size={15} />, run: () => openSyncSettings(vaultRoot ? { root: vaultRoot } : undefined) })
     else if (isLegacySync() && !isDesktopExtendOff() && penzorSyncReady()) items.push({ label: t('vaultMenu.syncSettings'), icon: <RefreshCw size={15} />, run: openPenzorSync })
-    const r = el.getBoundingClientRect()
-    setMenu({ x: r.left, y: r.bottom, anchorTop: r.top, className: grouped ? 'ctx-vault-menu' : undefined, items })
+    setMenu(vaultMenuAt(el, items, grouped))
   }
 
   // 名字和箭头开智库菜单,中间的状态小字开同步面板(VaultSyncChip;这个库没在同步时它不占地方)
   return (
     <>
-      <div className="t2s-special amx-vault-row" ref={rowRef}>
-        <button type="button" className="amx-vault-name" onClick={() => rowRef.current && void open(rowRef.current)} title={vaultRoot || undefined} aria-haspopup="menu" aria-expanded={!!menu}>
-          <span className="t2s-special-ic"><FolderOpen /></span>
-          <span className="t2s-special-title">{name ? t('amxv.vaultNamed', { name }) : t('amxv.openVault')}</span>
-        </button>
+      <VaultMenuTrigger rowRef={rowRef} onOpen={(el) => void open(el)} title={vaultRoot || undefined} expanded={!!menu}
+        label={name ? t('amxv.vaultNamed', { name }) : t('amxv.openVault')}>
         {vaultRoot && name && <VaultSyncChip vault={{ root: vaultRoot, side: 'local' }} name={name} rowRef={rowRef} />}
-        <button type="button" className="t2s-special-go" tabIndex={-1} aria-hidden="true" onClick={() => rowRef.current && void open(rowRef.current)}><ChevronsUpDown size={13} /></button>
-      </div>
+      </VaultMenuTrigger>
       {menu && <ContextMenu menu={menu} onClose={closeMenu} autoFocus />}
       {download && <DownloadVaultDialog key={download.id} library={download} onClose={() => setDownload(null)}
         onPreview={(preview) => openSyncSettings(downloadPreviewFocus(preview))} />}

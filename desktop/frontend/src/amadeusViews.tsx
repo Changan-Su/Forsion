@@ -82,7 +82,7 @@ import { PageView, focusBody } from '@amadeus/components/PageView'
 import { useAllSlashItems, getFocusedBlockApply, type SlashItem } from '@amadeus/blocks/markdown/MarkdownBlock'
 import { withSuggestedGroup } from '@amadeus/blocks/markdown/slashSuggested'
 import { hrefKind } from '@amadeus/blocks/markdown/linkHref'
-import { CloudVaultPanel } from './components/CloudVaultPanel'
+import { CloudVaultPanel, OnlineVaultSwitcher } from './components/CloudVaultPanel'
 import { PresenceDots } from './components/PresenceDots'
 import { ShareCard } from './components/ShareCard'
 import { ShareStatus } from './components/ShareStatus'
@@ -990,13 +990,16 @@ export function AmadeusPagesView() {
   const v2Status = useVaultSyncRaw((s) => s.v2)
   // 云端笔记库入口:web / 移动端(库本身在云端,cloudBridge 挂 amadeusCloudVaults)恒显示;桌面仅云端模式显示,本地模式给本地 Vault 选择器。
   // ⚠️ 不能用「没有 amadeusSync」当 web 的判据:桌面没装 Forsion Extend 时 amadeusSync 也不在,那是本地机器,不是云端库。
-  const cloudLib = !!(window as { amadeusCloudVaults?: unknown }).amadeusCloudVaults || vaultSide === 'cloud'
+  const cloudBridge = !!(window as { amadeusCloudVaults?: unknown }).amadeusCloudVaults
+  const cloudLib = cloudBridge || vaultSide === 'cloud'
+  const onlineCollab = cloudBridge && vaultSide === 'cloud' && window.tangu?.cloudWeb ? window.amadeusCollab : undefined
   const foreignOwner = useSharedVault(foreignVaultOwner)
   const foreignLabel = foreignOwner ? t('amxv.shared.vaultOf', { name: foreignOwner.ownerName ?? '' }) : null
 
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set()) // 文件夹默认全折叠
-  const [cloudPanel, setCloudPanel] = useState(false) // web:云端库面板(切换/成员/分享)
+  const [cloudPanel, setCloudPanel] = useState(false)
+  const [onlineVaultOpen, setOnlineVaultOpen] = useState(false)
   const [dragPath, setDragPath] = useState<string | null>(null) // 正在拖动的笔记
   const [dragOver, setDragOver] = useState<string | null>(null) // 悬停的目标文件夹('' = 根)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -1071,12 +1074,13 @@ export function AmadeusPagesView() {
   const pickPhoneTab = (tab: NotesPhoneTab): void => { setListSearch(false); setSavedTab(tab); saveNotesPhoneTab(tab) }
   const openSearch = (): void => useQuickFind.getState().openPalette()
   usePullToSearch(scrollRef, phone ? openSearch : undefined)
-  // 顶栏标题后面那一段 = 现在开着的智库;有「互联设备 / 智库」入口(手机的 rb-units-mobile)时点它就是切换。
+  // 在线侧的列表标题也能开智库抽屉；本机侧与检索中的顶栏沿用互联设备入口。
   const unitsEntry = useRibbonStore((s) => s.items.find((item) => item.id === 'rb-units-mobile'))
   useNativeChromeExtras(phone ? {
     where: 'list',
     search: { label: t('amxv.searchNotes'), run: openSearch },
-    ...(vaultRoot ? { title: { sub: vaultSide === 'cloud' ? t('amxv.cloudVault') : baseName(vaultRoot), run: unitsEntry?.onClick } } : {}),
+    ...(vaultRoot ? { title: { sub: vaultSide === 'cloud' ? t('amxv.cloudVault') : baseName(vaultRoot),
+      run: onlineCollab && !inListSearch ? () => setOnlineVaultOpen(true) : unitsEntry?.onClick } } : {}),
   } : null)
 
   // 侧栏分区(置顶/云同步/与我共享/收藏集合/笔记树)拖拽排序:抓分区头拖整块,顺序持久化。
@@ -1886,7 +1890,9 @@ export function AmadeusPagesView() {
         </button>
       )}
       <TrashSection />
-      {!cloudLib && amadeus?.listVaults ? <LocalVaultButton vaultRoot={vaultRoot} />
+      {onlineCollab ? <OnlineVaultSwitcher collab={onlineCollab} vaultRoot={vaultRoot} fallbackName={foreignLabel}
+        mobile={window.tangu?.mobile === true} open={onlineVaultOpen} onOpenChange={setOnlineVaultOpen} />
+        : !cloudLib && amadeus?.listVaults ? <LocalVaultButton vaultRoot={vaultRoot} />
         : cloudLib && vaultSide === 'cloud' && window.amadeusSync && !foreignLabel ? <CloudVaultRow onOpen={() => setCloudPanel(true)} />
           : <button
         className="t2s-special"

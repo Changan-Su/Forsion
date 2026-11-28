@@ -9,6 +9,7 @@
  * 桥里的记账(seq、见过的路径、别名、写队列的键)一律是视图里的相对路径,只在发请求 / 收回包那一层换算(toWire / fromWire)。
  */
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
+import type { LibraryDeviceSources } from '@amadeus-shared/libraryDevices'
 
 /** 能力头(请求头 X-Content-Caps;SSE 设不了头,走 `?caps=`)。声明了 vault-moves,写到分走的前缀上服务端回 409 VAULT_MOVED 而不是 423。 */
 export const CLOUD_CONTENT_CAPS = 'vaults,vault-moves'
@@ -19,13 +20,14 @@ export const ACTIVE_LIBRARY_KEY = 'amadeus.cloudLibrary'
 export const ACTIVE_VAULT_KEY = 'amadeus.cloudVaultId'
 
 /** `/libraries` 的一项(server microserver/amadeus/services/libraries.ts 的 Library,只取桥用得着的)。 */
-export interface LibraryDto {
+export interface LibraryDto extends LibraryDeviceSources {
   id: string
   kind: 'default' | 'own' | 'legacy'
   vaultId: string
   /** content 前缀:'Amadeus/' 或 'Amadeus/<X>/'。 */
   prefix: string
   name: string
+  files?: number
   deleted?: { at: string; purgeAt: string }
   /** 分出来的独立库:原来在默认库的哪个前缀(content 前缀)。 */
   splitFrom?: { splitId?: string; vaultId: string; prefix: string; at?: string }

@@ -18,10 +18,11 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
-import { ArrowRight, Check, ChevronDown, Cloud, Laptop, Monitor, MonitorSmartphone, Smartphone, X } from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, Cloud, Laptop, Monitor, MonitorSmartphone, Smartphone } from 'lucide-react'
 import { addRibbonIcon } from '@lcl/engine'
 import { registerMessages, useI18n } from '@/i18n'
 import { useApp } from '@/stores/appStore'
+import { MobileSheet } from '@/components/MobileSheet'
 import { usePageStore } from '@/amadeus/store/pageStore'
 import type { UnitInfo } from '@/types'
 import { cloudApiBase, focusRef, onFocusChange } from '@/services/engine/targets'
@@ -375,135 +376,126 @@ export function MobileUnitsSheet(): React.ReactElement | null {
   }
 
   return (
-    <div className="mb-sheet-scrim us-scrim" onClick={() => setOpen(false)} data-units-sheet>
-      <div className="mb-sheet us-sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-sheet-grip" />
-        <div className="us-head">
-          <span className="us-head-title">{t('unit.switcher')}</span>
-          <button className="us-icon-btn" aria-label={t('common.close')} onClick={() => setOpen(false)}><X size={18} /></button>
-        </div>
-        <div className="us-body">
-          {/* ① 智库:本地 / 云端(原左栏顶部的胶囊;只换笔记库)。排最前 = 桌面 Unit 切换器的顺序(用户 2026-10-05 拍板) */}
-          {vault && (
-            <section className="us-section" data-vault-side={vaultSide}>
-              <div className="us-section-title">{t('unitm.vault')}</div>
-              {(['local', 'cloud'] as const).map((side) => (
-                <button key={side} className="mb-sheet-row us-row" data-vault-row={side} aria-pressed={vaultSide === side} aria-busy={vaultBusy || undefined} onClick={() => pickVault(side)}>
-                  <span className="us-row-icon">{side === 'local' ? <Smartphone size={18} /> : <Cloud size={18} />}</span>
-                  <span className="us-row-main">
-                    <span className="us-row-title"><span className="us-row-name">{t(side === 'local' ? 'notes.cloud.local' : 'notes.cloud.cloud')}</span></span>
-                    <span className="us-row-sub">{t(side === 'local' ? 'unitm.vaultLocalDesc' : 'unitm.vaultCloudDesc')}</span>
-                  </span>
-                  <span className="us-row-end">{vaultSide === side && <><em className="us-pill">{t('unitm.current')}</em><Check size={16} /></>}</span>
-                </button>
-              ))}
-            </section>
-          )}
-
-          {/* ② 在哪运行 */}
-          <section className="us-section" data-run-on>
-            <div className="us-section-title">{t('unitm.runOn')}</div>
-            {issue && <div className="us-banner" role="status" data-phone-issue={issue}>{t(ISSUE_KEY[issue])}</div>}
-            <button className="mb-sheet-row us-row" data-run-row="home" aria-pressed={homeSelected} onClick={pickCloud}>
-              <span className="us-row-icon"><Cloud size={18} /></span>
+    <MobileSheet title={t('unit.switcher')} onClose={() => setOpen(false)} scrimProps={{ 'data-units-sheet': '' }}>
+      {/* ① 智库:本地 / 云端(原左栏顶部的胶囊;只换笔记库)。排最前 = 桌面 Unit 切换器的顺序(用户 2026-10-05 拍板) */}
+      {vault && (
+        <section className="us-section" data-vault-side={vaultSide}>
+          <div className="us-section-title">{t('unitm.vault')}</div>
+          {(['local', 'cloud'] as const).map((side) => (
+            <button key={side} className="mb-sheet-row us-row" data-vault-row={side} aria-pressed={vaultSide === side} aria-busy={vaultBusy || undefined} onClick={() => pickVault(side)}>
+              <span className="us-row-icon">{side === 'local' ? <Smartphone size={18} /> : <Cloud size={18} />}</span>
               <span className="us-row-main">
-                <span className="us-row-title"><span className="us-row-name">{t('unitm.cloud')}</span></span>
-                <span className="us-row-sub">{t('unitm.cloudDesc')}</span>
+                <span className="us-row-title"><span className="us-row-name">{t(side === 'local' ? 'notes.cloud.local' : 'notes.cloud.cloud')}</span></span>
+                <span className="us-row-sub">{t(side === 'local' ? 'unitm.vaultLocalDesc' : 'unitm.vaultCloudDesc')}</span>
               </span>
-              <span className="us-row-end">{homeSelected && <><em className="us-pill">{t('unitm.current')}</em><Check size={16} /></>}</span>
+              <span className="us-row-end">{vaultSide === side && <><em className="us-pill">{t('unitm.current')}</em><Check size={16} /></>}</span>
             </button>
-            {units === undefined && <div className="us-empty">…</div>}
-            {units === null && <div className="us-empty">{t('unit.notLoggedIn')}</div>}
-            {units && rows.length === 0 && <div className="us-empty">{t('unit.mobileNone')}</div>}
-            {/* 离线的电脑缺省折起(10-14 用户定:主要看在线的);当前运行位置那台掉线了也不折,「当前」标记不能跟着藏 */}
-            {rows.filter((r) => !isFolded(r)).map(runRowEl)}
-            {rows.some(isFolded) && (
-              <button className="us-section-title us-section-toggle" aria-expanded={offlineOpen} data-offline-fold onClick={() => setOfflineOpen((v) => !v)}>
-                <span style={{ flex: 1 }}>{t('unit.offlineGroup')} · {rows.filter(isFolded).length}</span>
-                <ChevronDown size={14} />
-              </button>
-            )}
-            {offlineOpen && rows.filter(isFolded).map(runRowEl)}
-          </section>
+          ))}
+        </section>
+      )}
 
-          {/* ③ 打开设备界面(次要,缺省折叠;行为同 P0) */}
-          <section className="us-section" data-open-screen>
-            <button className="us-section-title us-section-toggle" aria-expanded={devicesOpen} onClick={() => setDevicesOpen((v) => !v)}>
-              <span style={{ flex: 1 }}>{t('unitm.openScreen')}</span>
-              <ChevronDown size={14} />
-            </button>
-            {devicesOpen && (
-              <>
-                {devices.flatMap((u) => {
-                  const lanUrl = u.lanUrl
-                  const vias: Array<'lan' | 'tunnel'> = lanUrl ? ['lan', 'tunnel'] : ['tunnel']
-                  return vias.map((via) => {
-                    const dim = via === 'tunnel' && !u.online // 中转要 server 通道在;直连与登录态无关
-                    return (
-                      <button
-                        key={`${u.id}:${via}`}
-                        className="mb-sheet-row us-row"
-                        aria-disabled={dim || undefined}
-                        onClick={() => openUrl(via === 'lan' ? withSlash(lanUrl!) : guideUrl(u.id))}
-                      >
-                        <span className="us-row-icon">{rowIcon(u)}</span>
-                        <span className="us-row-main">
-                          <span className="us-row-title">
-                            <span className="us-row-name">{u.name}</span>
-                            <em className="us-pill muted">{t(via === 'lan' ? 'unit.viaLan' : 'unit.viaTunnel')}</em>
-                            {dim && <em className="us-pill muted">{t('unit.offline')}</em>}
-                          </span>
-                          <span className="us-row-sub">{t(via === 'lan' ? 'unit.deviceLanDesc' : 'unit.mobileTunnel')}</span>
-                        </span>
-                        <span className="us-row-end"><ArrowRight size={15} /></span>
-                      </button>
-                    )
-                  })
-                })}
-                {/* 手输地址直连(T1):对方切换器脚部可见,如 http://192.168.1.5:8791 */}
-                <div className="us-addr">
-                  <div className="us-addr-desc">{t('unit.byAddressDesc')}</div>
-                  <div className="us-addr-row">
-                    <input
-                      value={addr}
-                      onChange={(e) => setAddr(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') openByAddress() }}
-                      placeholder="http://<ip>:<port>"
-                      inputMode="url"
-                    />
-                    <button className="us-btn" onClick={openByAddress}>{t('unit.byAddress')}</button>
-                  </div>
-                </div>
-              </>
-            )}
-          </section>
+      {/* ② 在哪运行 */}
+      <section className="us-section" data-run-on>
+        <div className="us-section-title">{t('unitm.runOn')}</div>
+        {issue && <div className="us-banner" role="status" data-phone-issue={issue}>{t(ISSUE_KEY[issue])}</div>}
+        <button className="mb-sheet-row us-row" data-run-row="home" aria-pressed={homeSelected} onClick={pickCloud}>
+          <span className="us-row-icon"><Cloud size={18} /></span>
+          <span className="us-row-main">
+            <span className="us-row-title"><span className="us-row-name">{t('unitm.cloud')}</span></span>
+            <span className="us-row-sub">{t('unitm.cloudDesc')}</span>
+          </span>
+          <span className="us-row-end">{homeSelected && <><em className="us-pill">{t('unitm.current')}</em><Check size={16} /></>}</span>
+        </button>
+        {units === undefined && <div className="us-empty">…</div>}
+        {units === null && <div className="us-empty">{t('unit.notLoggedIn')}</div>}
+        {units && rows.length === 0 && <div className="us-empty">{t('unit.mobileNone')}</div>}
+        {/* 离线的电脑缺省折起(10-14 用户定:主要看在线的);当前运行位置那台掉线了也不折,「当前」标记不能跟着藏 */}
+        {rows.filter((r) => !isFolded(r)).map(runRowEl)}
+        {rows.some(isFolded) && (
+          <button className="us-section-title us-section-toggle" aria-expanded={offlineOpen} data-offline-fold onClick={() => setOfflineOpen((v) => !v)}>
+            <span style={{ flex: 1 }}>{t('unit.offlineGroup')} · {rows.filter(isFolded).length}</span>
+            <ChevronDown size={14} />
+          </button>
+        )}
+        {offlineOpen && rows.filter(isFolded).map(runRowEl)}
+      </section>
 
-          {/* ④ 本机 */}
-          <section className="us-section" data-this-phone>
-            <div className="us-section-title">{t('unitm.thisPhone')}</div>
-            <div className="us-self">
-              <span className="us-row-icon"><Smartphone size={18} /></span>
-              <span className="us-self-text">
-                {self?.relay === 'native_only'
-                  ? t('unitm.nativeOnly')
-                  : self?.registered
-                    ? t('unitm.registeredAs', { name: self.name || '' })
-                    : t('unitm.notRegistered')}
-              </span>
-              {self?.registered && !confirmForget && <button className="us-btn danger" onClick={() => setConfirmForget(true)}>{t('unitm.forget')}</button>}
-            </div>
-            {confirmForget && (
-              <div className="us-confirm" role="alertdialog">
-                <span>{t('unitm.forgetConfirm')}</span>
-                <span className="us-confirm-actions">
-                  <button className="us-btn" onClick={() => setConfirmForget(false)}>{t('common.cancel')}</button>
-                  <button className="us-btn danger" onClick={forget}>{t('unitm.forgetDo')}</button>
-                </span>
+      {/* ③ 打开设备界面(次要,缺省折叠;行为同 P0) */}
+      <section className="us-section" data-open-screen>
+        <button className="us-section-title us-section-toggle" aria-expanded={devicesOpen} onClick={() => setDevicesOpen((v) => !v)}>
+          <span style={{ flex: 1 }}>{t('unitm.openScreen')}</span>
+          <ChevronDown size={14} />
+        </button>
+        {devicesOpen && (
+          <>
+            {devices.flatMap((u) => {
+              const lanUrl = u.lanUrl
+              const vias: Array<'lan' | 'tunnel'> = lanUrl ? ['lan', 'tunnel'] : ['tunnel']
+              return vias.map((via) => {
+                const dim = via === 'tunnel' && !u.online // 中转要 server 通道在;直连与登录态无关
+                return (
+                  <button
+                    key={`${u.id}:${via}`}
+                    className="mb-sheet-row us-row"
+                    aria-disabled={dim || undefined}
+                    onClick={() => openUrl(via === 'lan' ? withSlash(lanUrl!) : guideUrl(u.id))}
+                  >
+                    <span className="us-row-icon">{rowIcon(u)}</span>
+                    <span className="us-row-main">
+                      <span className="us-row-title">
+                        <span className="us-row-name">{u.name}</span>
+                        <em className="us-pill muted">{t(via === 'lan' ? 'unit.viaLan' : 'unit.viaTunnel')}</em>
+                        {dim && <em className="us-pill muted">{t('unit.offline')}</em>}
+                      </span>
+                      <span className="us-row-sub">{t(via === 'lan' ? 'unit.deviceLanDesc' : 'unit.mobileTunnel')}</span>
+                    </span>
+                    <span className="us-row-end"><ArrowRight size={15} /></span>
+                  </button>
+                )
+              })
+            })}
+            {/* 手输地址直连(T1):对方切换器脚部可见,如 http://192.168.1.5:8791 */}
+            <div className="us-addr">
+              <div className="us-addr-desc">{t('unit.byAddressDesc')}</div>
+              <div className="us-addr-row">
+                <input
+                  value={addr}
+                  onChange={(e) => setAddr(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') openByAddress() }}
+                  placeholder="http://<ip>:<port>"
+                  inputMode="url"
+                />
+                <button className="us-btn" onClick={openByAddress}>{t('unit.byAddress')}</button>
               </div>
-            )}
-          </section>
+            </div>
+          </>
+        )}
+      </section>
+
+      {/* ④ 本机 */}
+      <section className="us-section" data-this-phone>
+        <div className="us-section-title">{t('unitm.thisPhone')}</div>
+        <div className="us-self">
+          <span className="us-row-icon"><Smartphone size={18} /></span>
+          <span className="us-self-text">
+            {self?.relay === 'native_only'
+              ? t('unitm.nativeOnly')
+              : self?.registered
+                ? t('unitm.registeredAs', { name: self.name || '' })
+                : t('unitm.notRegistered')}
+          </span>
+          {self?.registered && !confirmForget && <button className="us-btn danger" onClick={() => setConfirmForget(true)}>{t('unitm.forget')}</button>}
         </div>
-      </div>
-    </div>
+        {confirmForget && (
+          <div className="us-confirm" role="alertdialog">
+            <span>{t('unitm.forgetConfirm')}</span>
+            <span className="us-confirm-actions">
+              <button className="us-btn" onClick={() => setConfirmForget(false)}>{t('common.cancel')}</button>
+              <button className="us-btn danger" onClick={forget}>{t('unitm.forgetDo')}</button>
+            </span>
+          </div>
+        )}
+      </section>
+    </MobileSheet>
   )
 }

@@ -4,6 +4,8 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   server: { fs: { allow: [resolve(__dirname, '..')] } }, // LCL tests live alongside desktop, including in isolated worktrees.
   resolve: {
+    // Phone components tested here must also resolve when only desktop deps are installed.
+    dedupe: ['react', 'react-dom', 'zustand', 'lucide-react'],
     alias: {
       '@lcl': resolve(__dirname, '../lcl'),
       '@': resolve(__dirname, 'frontend/src'),
