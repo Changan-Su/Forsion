@@ -29,7 +29,10 @@ for p in dist skills agent-skills package.json package-lock.json LICENSE; do [ -
 [ -e "$SRC/LICENSE" ] || cp "$REPO/LICENSE" "$SRC/LICENSE"
 # the key the APK pins (EngineSignature.PRODUCTION_KEY_HEX = tangu-agent/src/boot/signingKey.ts); the bench overrides it
 EXPECT="${ANDROID_ENGINE_EXPECT_KEY:-$(node -e "const s=require('fs').readFileSync('$REPO/tangu-agent/src/boot/signingKey.ts','utf8');const b=s.match(/BEGIN PUBLIC KEY-----\\s*([A-Za-z0-9+\\/=]+)/)[1];console.log(Buffer.from(b,'base64').subarray(12).toString('hex'))")}"
-SETUP="export DEBIAN_FRONTEND=noninteractive
+# containers run as root; on a Linux host (CI) what they write in the bind mounts would be root's: hand it back on exit
+OWNER="$(id -u):$(id -g)"
+SETUP="trap 'chown -R $OWNER /out /cache 2>/dev/null || true' EXIT
+    export DEBIAN_FRONTEND=noninteractive
     T=/cache/node-$NODE_VER-linux-arm64.tar.gz
     if [ ! -f \$T ] || [ \"\${NEED_TOOLS:-}\" = 1 ]; then apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils python3 make g++ >/dev/null; fi
     [ -f \$T ] || curl -fsSL -o \$T https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-linux-arm64.tar.gz
@@ -37,16 +40,21 @@ SETUP="export DEBIAN_FRONTEND=noninteractive
     mkdir -p /opt/node && tar -xzf \$T -C /opt/node --strip-components=1
     export PATH=/opt/node/bin:\$PATH"
 run() { docker run --rm --platform linux/arm64 "$@"; }
-MOUNTS=(-v "$SRC":/src/tangu-agent:ro -v "$REPO/mobile/android/local-engine/lock.json":/src/lock.json:ro -v "$HERE":/src/scripts:ro -v "$OUT":/out -v "$CACHE":/cache)
+RO=(-v "$SRC":/src/tangu-agent:ro -v "$REPO/mobile/android/local-engine/lock.json":/src/lock.json:ro -v "$HERE":/src/scripts:ro)
+MOUNTS=("${RO[@]}" -v "$OUT":/out -v "$CACHE":/cache)
 # 1. stage: npm ci runs dependency install scripts — no key in this container
 run -e NEED_TOOLS=1 "${MOUNTS[@]}" ubuntu:24.04 bash -euc "$SETUP
     node /src/scripts/pack-android-engine.mjs --phase stage --tangu /src/tangu-agent --lock /src/lock.json --out /out"
 # 2. sign + pack + verify against the pinned key — the key is here, and no package code runs
 ANDROID_ENGINE_SIGNING_KEY="$KEY" run -e ANDROID_ENGINE_SIGNING_KEY "${MOUNTS[@]}" ubuntu:24.04 bash -euc "$SETUP
     node /src/scripts/pack-android-engine.mjs --phase sign --lock /src/lock.json --out /out --expect-key $EXPECT" > "$OUT/.stage/summary.json"
-# 3. start the engine from the tarball — no key
+TGZ="$(basename "$(tail -n 1 "$OUT/.stage/summary.json" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).tgz))")")"
+SHA_SIGNED="$(shasum -a 256 "$OUT/$TGZ" | cut -d' ' -f1)"
+# 3. start the engine from the tarball — no key; package code runs here, so the output is mounted read-only and the
+#    tarball must be byte-identical afterwards (what was signed and verified is what gets published)
 if [ "${#EXTRA[@]}" -gt 0 ]; then
-  run "${MOUNTS[@]}" ubuntu:24.04 bash -euc "$SETUP
-    node /src/scripts/pack-android-engine.mjs --phase boot --out /out"
+  run "${RO[@]}" -v "$OUT":/out:ro -v "$CACHE":/cache:ro ubuntu:24.04 bash -euc "$SETUP
+    node /src/scripts/pack-android-engine.mjs --phase boot --out /out --tgz $TGZ"
+  [ "$(shasum -a 256 "$OUT/$TGZ" | cut -d' ' -f1)" = "$SHA_SIGNED" ] || { echo "::error::$TGZ changed during the boot check" >&2; exit 1; }
 fi
 tail -n 1 "$OUT/.stage/summary.json"

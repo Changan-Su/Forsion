@@ -20,7 +20,9 @@ export const SCHEMA_FILES = [
   'dist/db/migrate.js',
   'dist/db/schemaStandalone.js',
 ]
-export const DDL = /\b(?:CREATE\s+(?:TEMP(?:ORARY)?\s+)?(?:TABLE|(?:UNIQUE\s+)?INDEX|VIRTUAL\s+TABLE|TRIGGER|VIEW)|ALTER\s+TABLE|DROP\s+(?:TABLE|INDEX|TRIGGER|VIEW)|user_version)\b/i
+// between keywords SQLite accepts any whitespace and comments (`CREATE /* x */ TABLE`): W matches both
+const W = String.raw`(?:\s|/\*[\s\S]*?\*/|--[^\n]*(?:\n|$))+`
+export const DDL = new RegExp(String.raw`\b(?:CREATE${W}(?:TEMP(?:ORARY)?${W})?(?:TABLE|(?:UNIQUE${W})?INDEX|VIRTUAL${W}TABLE|TRIGGER|VIEW)|ALTER${W}TABLE|DROP${W}(?:TABLE|INDEX|TRIGGER|VIEW)|user_version)\b`, 'i')
 
 export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
 

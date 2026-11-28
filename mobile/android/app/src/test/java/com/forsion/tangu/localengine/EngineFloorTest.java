@@ -36,6 +36,15 @@ public class EngineFloorTest {
         assertEquals(EngineFloor.Verdict.ALLOW, f.decide("3.0.0", A));
     }
 
+    @Test public void twoBuildsOfOneVersionAreDifferentEngines() {
+        // N/A ran (maybe migrated); a second signed build N/B must not start on that data, and once N/B were let on,
+        // N-1/A could not use "N has my fingerprint" to come back
+        EngineFloor f = EngineFloor.EMPTY.with("2.14.9", A).with("2.14.10", A);
+        assertEquals(EngineFloor.Verdict.REFUSE, f.decide("2.14.10", B));
+        assertEquals(EngineFloor.Verdict.ALLOW, f.decide("2.14.10", A));
+        assertEquals("a newer version is still free to move forward", EngineFloor.Verdict.ALLOW_AND_RECORD, f.decide("2.14.11", B));
+    }
+
     @Test public void numericNotLexical() {
         EngineFloor f = EngineFloor.EMPTY.with("1.10.0", B);
         assertEquals("1.9.0 is older than 1.10.0", EngineFloor.Verdict.REFUSE, f.decide("1.9.0", A));

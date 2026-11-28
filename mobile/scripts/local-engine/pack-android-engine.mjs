@@ -180,7 +180,8 @@ writeFileSync(path.join(stage, SIG_FILE), sig + '\n')
 
 // 7. pack, then check the tarball itself (no package code runs: --ignore-scripts, and the tree has no scripts of its own)
 mkdirSync(out, { recursive: true })
-for (const f of readdirSync(out)) if (f.endsWith('.tgz')) unlinkSync(path.join(out, f))
+const own = `${pkg.name.replace(/^@/, '').replace('/', '-')}-${version}.tgz` // npm pack's file name
+rmSync(path.join(out, own), { force: true })
 const packed = JSON.parse(sh('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', out], { cwd: stage }))[0]
 const tgz = path.join(out, packed.filename)
 const check = path.join(work, 'check')
@@ -199,8 +200,9 @@ console.log(JSON.stringify(summary))
 }
 
 async function runBoot() {
-const tgz = readdirSync(out).filter((f) => f.endsWith('.tgz'))
-if (tgz.length !== 1) fail(`expected one tarball in ${out}, found ${tgz.length}`)
+const name = arg('--tgz') || fail('--tgz <file name in out>')
+if (name.includes('/') || !name.endsWith('.tgz')) fail(`bad --tgz ${name}`)
+const tgz = [name]
 const check = path.join(work, 'boot')
 rmSync(check, { recursive: true, force: true })
 mkdirSync(check, { recursive: true })

@@ -4,7 +4,7 @@ The local engine runs the Tangu engine in an Ubuntu arm64 environment under PRoo
 
 | Half | What | Where it comes from | Changes with |
 |---|---|---|---|
-| **Base** | Ubuntu 24.04 arm64 rootfs + Node 24 (`/opt/node`), about 63.5 MB xz | Inside the test-channel APK (`-PlocalEngine`), as a stored (uncompressed) asset, pinned by sha256 in `base.lock.json` | App updates only |
+| **Base** | Ubuntu 24.04 arm64 rootfs + Node 24 (`/opt/node`), about 63.5 MB xz | Inside the test-channel APK (`-PlocalEngine`), as a stored (uncompressed) asset, pinned by sha256 in `lock.json` | App updates only |
 | **Engine** | Engine code + its linux-arm64 glibc `node_modules` (better-sqlite3, koffi, pglite …), about 50 MB gzip, ~10.5k files | npm package `@forsion/tangu-engine-android-arm64`, published by CI (`publish-android-engine.yml`), downloaded by the phone from npmmirror first, then registry.npmjs.org | Engine releases |
 
 Normal (non-test-channel) APKs carry neither the launcher nor the base; the build checks that.
@@ -28,7 +28,7 @@ rootfs: whatever the agent installed with apt is gone** (conversations and works
 ## Version line
 
 - The engine package version is the `tangu-agent` version it was built from (`x.y.z`, release versions only; npm versions are immutable).
-- **Line** = an integer in `base.lock.json` (`line`). It changes whenever the base changes or the native ↔ engine contract
+- **Line** = an integer in `lock.json` (`line`). It changes whenever the base changes or the native ↔ engine contract
   changes incompatibly (env names, ready line, bind layout). The APK carries its line; CI publishes each engine version with
   exactly one dist-tag, `android-<line>` (npm trusted publishing cannot run `npm dist-tag add`, so one publish = one tag).
 - The phone reads the dist-tag `android-<its line>`, never `latest`, so an engine that needs a newer base never reaches an APK
@@ -60,12 +60,15 @@ An older engine on a database a newer engine migrated can corrupt it or lose dat
 1. **Schema fingerprint.** `fingerprint(E)` = sha256 over the sorted `path:sha256\n` lines of the engine's schema files
    (`dist/db/migrate.js`, `dist/db/schemaStandalone.js`, `dist/core/dialectDDL.js`, `dist/adapters/standalone/multiAccountSqliteHost.js`).
    The packer refuses to pack if any other `dist` file contains DDL (`CREATE TABLE/INDEX/VIRTUAL TABLE/TRIGGER/VIEW`,
-   `ALTER TABLE`, `DROP TABLE`, `user_version`). The phone recomputes it from the signed hashes.
+   `ALTER TABLE`, `DROP TABLE`, `user_version`; any case, with whitespace or SQL comments between the keywords). The phone
+   recomputes it from the signed hashes.
 2. **Per-account history.** `accounts/<k>/engine-floor.json` lists `{version, fingerprint}` of every engine version that has
    been allowed to start on this account's data (outside `home`, so the guest cannot write it; it moves with the data on
    device transfer and survives deleting / reinstalling the environment). Before every real start, under the lifecycle lock
    that also blocks installs, for the engine E about to be bound:
-   - **E may start only if every recorded version newer than E has E's fingerprint.** (Nothing recorded, or E at least
+   - **E may start only if every recorded version newer than E, or equal to it, has E's fingerprint.** Equal counts too:
+     two signed builds of one version with different schema code are different engines, and the one that ran first may
+     have migrated the data (a version number alone proves nothing). (Nothing recorded, or E at least
      as new as everything recorded → allowed. An older E is allowed only when no newer engine with different schema code
      has ever been let onto the data — this is what "roll back only on an identical fingerprint" means, and it closes the
      A → B → A case: v1 (A) after v2 (B) and v3 (A) is refused because v2 is newer than v1 and differs.)
@@ -84,7 +87,9 @@ An older engine on a database a newer engine migrated can corrupt it or lose dat
    shows "needs an update", and nothing is deleted. A bad version is never offered as an update. A base change (app update
    with a new base) clears the bad list and the counters: the crash may have been the base.
 5. **Updates only go forward.** An update is strictly newer than the installed engine and not bad; there is no
-   user-triggered downgrade. The mirror's dist-tag is checked against the official registry when the mirror offers nothing
+   user-triggered downgrade. A repair (reset with a tree that no longer verifies, or a committed record whose tree is
+   gone) takes the same version or newer, never older. A same-version repair moves the old tree to `engines/.replaced`
+   and the journal names the version it came from; an interrupted repair puts it back under that name only. The mirror's dist-tag is checked against the official registry when the mirror offers nothing
    newer. Before every start the retained engine must still be `≥ minEngineVersion` of the running APK.
 6. **Versions** are canonical `x.y.z` release triples compared numerically (no prerelease, no `+meta`).
 
@@ -108,7 +113,9 @@ Known limits (accepted, written down so nobody mistakes the rule for more than i
 
 Download and unpack: the engine tarball is unpacked before its signature is read, by a strict extractor — regular files
 and directories under canonical names only (a link, hard link or special entry, `a//b`, `./x`, more than 40 000 entries
-or 64 levels fails the unpack), so nothing can be written through a link. A partial download is never resumed from
+or 64 levels fails the unpack), so nothing can be written through a link. Only gzip is accepted (no xz decoder sizes a
+dictionary for an unsigned file), and a header that does not parse makes the archive malformed: it is evicted and the
+next registry tried. A partial download is never resumed from
 another registry. Nothing in the staging tree runs before the verification passes.
 
 ## Building the test-channel APK
@@ -117,6 +124,22 @@ another registry. Nothing in the staging tree runs before the verification passe
 cd mobile/android && ./gradlew assembleDebug -PlocalEngine -PlocalEngineBase=/path/to/base-….tar.xz
 ```
 
-`-PlocalEngineBase` (or `ANDROID_LOCAL_ENGINE_BASE`) points at the file pinned in `base.lock.json`; without it the build looks in
+`-PlocalEngineBase` (or `ANDROID_LOCAL_ENGINE_BASE`) points at the file pinned in `lock.json`; without it the build looks in
 `~/.forsion-dev/local-engine/<file>`. A missing file or a sha256 mismatch fails a `-PlocalEngine` build. CI fetches it from
-`base.lock.json` `url` when that is set; while it is empty, test-channel CI builds go out without the launcher (with a notice).
+`lock.json` `url` when that is set; while it is empty, test-channel CI builds go out without the launcher (with a notice).
+
+## Building and publishing the engine package
+
+```bash
+mobile/scripts/local-engine/build-android-engine.sh <out-dir> --boot-check   # after `npm run build` in tangu-agent
+```
+
+Three containers (linux/arm64 Ubuntu 24.04, the base's Node): **stage** runs `npm ci --omit=dev` (dependency install
+scripts) with no key; **sign** runs no package code, signs, packs, and verifies the tarball against the key the APK pins
+(`--expect-key`); **boot** starts the engine from the tarball with no key and the output mounted read-only, and the
+tarball's sha256 must be unchanged afterwards. The sign phase replaces only this version's own tarball in `<out-dir>`.
+
+CI (`.github/workflows/publish-android-engine.yml`) is three jobs so no dependency code shares a job with a credential:
+**build** (host `npm ci` + `tsc`; no secret, no OIDC) → **sign** (fresh checkout + the built `dist`; the key is in this
+job, dependency scripts run only in the keyless stage container) → **publish** (OIDC; downloads the tarball and runs no
+package code), then a sync request to npmmirror.

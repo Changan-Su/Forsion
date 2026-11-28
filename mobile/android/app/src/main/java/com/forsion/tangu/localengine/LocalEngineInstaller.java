@@ -255,6 +255,15 @@ final class LocalEngineInstaller {
         return r;
     }
 
+    /**
+     * The committed record even when its trees are gone (a missing entrypoint makes installed() null). A repair bounds
+     * itself by this: the committed engine may have migrated account data, so a re-install never goes below it.
+     */
+    Installed record() {
+        String s = LocalEnginePaths.readSmall(paths.installedJson.getPath());
+        return s == null || s.isEmpty() ? null : Installed.parse(s);
+    }
+
     /** Raw: a record exists at all (a schema 1 record from before the npm engine counts; reset replaces it). */
     boolean hasAnyRecord() { return paths.installedJson.exists(); }
 
@@ -317,10 +326,12 @@ final class LocalEngineInstaller {
                 // an interrupted first install: whatever got swapped in never passed its self-test
                 if (!hadOld && !exists(paths.installedJson)) toTrash(paths.rootfs);
             }
-            // an interrupted repair of the same engine version: its previous tree was moved aside, not deleted
+            // an interrupted repair of the same engine version: its previous tree was moved aside, not deleted. It goes
+            // back under the name it came from (the journal's), never under the committed record's version: that may be
+            // another version, and a tree under the wrong name would start with the wrong fingerprint
             File replaced = new File(paths.engines, ".replaced");
             try {
-                String v = new JSONObject(String.valueOf(LocalEnginePaths.readSmall(paths.installedJson.getPath()))).getJSONObject("engine").getString("version");
+                String v = new JSONObject(String.valueOf(LocalEnginePaths.readSmall(pending.getPath()))).optString("replaces", "");
                 if (exists(replaced) && Versions.isRelease(v)) { toTrash(paths.engineDir(v)); replaced.renameTo(paths.engineDir(v)); }
             } catch (Exception ignored) {}
             pending.delete();
@@ -429,7 +440,7 @@ final class LocalEngineInstaller {
 
         swap.enter(); // no start runs from here until the caller leaves maintenance
         boolean baseSwap = base, hadOld = exists(paths.rootfs);
-        Installed now = installed(); // after enter(): bad marks a failing start wrote meanwhile are in here
+        Installed now = record(); // after enter(): bad marks a failing start wrote meanwhile are in here (and the record counts even when its tree is gone)
         String engVersion = release != null ? signed.version : cur.engineVersion;
         String engFp = release != null ? signed.fingerprint : cur.engineFingerprint;
         String prevV = null, prevF = null;
@@ -441,7 +452,13 @@ final class LocalEngineInstaller {
         String baseS = base ? cfg.baseSha256 : now != null ? now.baseSha256 : cfg.baseSha256;
         Installed next = new Installed(baseV, baseS, engVersion, engFp, prevV, prevF, bad);
         JSONObject journal = next.toJson();
-        try { journal.put("baseSwap", baseSwap); journal.put("hadOld", hadOld); } catch (Exception ignored) {}
+        File replaced = new File(paths.engines, ".replaced");
+        boolean repair = release != null && exists(paths.engineDir(signed.version));
+        try {
+            journal.put("baseSwap", baseSwap);
+            journal.put("hadOld", hadOld);
+            if (repair) journal.put("replaces", signed.version); // recover() puts .replaced back under this name only
+        } catch (Exception ignored) {}
         File old = oldRootfs();
         toTrash(old); // nothing pending (ensureRecovered): a leftover from a committed swap
         LocalEnginePaths.writeText(pendingJson(), journal.toString());
@@ -465,12 +482,11 @@ final class LocalEngineInstaller {
             if (release != null) toTrash(staging());
             throw new Failure("selftest", why);
         }
-        File replaced = new File(paths.engines, ".replaced");
         if (release != null) {
             File dst = paths.engineDir(signed.version);
             // a tree of the same version (a repair) moves aside, not away: recover() puts it back if we die before the commit
             toTrash(replaced);
-            if (exists(dst) && !dst.renameTo(replaced)) {
+            if (repair && !dst.renameTo(replaced)) {
                 if (baseSwap) rollback(hadOld); else pendingJson().delete();
                 throw new Failure("unpack", "engine move");
             }

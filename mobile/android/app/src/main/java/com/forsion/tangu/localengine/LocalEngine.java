@@ -240,19 +240,26 @@ public final class LocalEngine {
         if (!configured()) throw new LocalEngineInstaller.Failure("not_configured", null);
         LocalEngineInstaller ins = installerFor();
         LocalEngineInstaller.Installed inst = ins.installed();
-        release = ins.resolve(LocalEngineConfig.registries(registryOverride), inst == null ? null : inst.engineVersion,
-                inst == null ? null : inst.bad, false); // not part of an operation: a pause of one must not cancel this
+        // a committed record whose tree is gone: offer its own version again or newer (the repair), never older
+        LocalEngineInstaller.Installed rec = inst != null ? inst : ins.record();
+        release = ins.resolve(LocalEngineConfig.registries(registryOverride), rec == null ? null : rec.engineVersion,
+                inst == null && rec != null, rec == null ? null : rec.bad, false); // not part of an operation: a pause of one must not cancel this
         releaseChecked = true;
         return state();
     }
 
     /** Download + unpack (fresh install or resume). Runs in the background; progress via listeners. */
-    public void install(boolean reset) {
-        work.execute(() -> runInstall(reset ? "reset" : "install"));
-    }
+    public void install(boolean reset) { claim(reset ? "reset" : "install"); }
 
-    public void update() {
-        work.execute(() -> runInstall("update"));
+    public void update() { claim("update"); }
+
+    /** The state says "checking" from the call on: an earlier failure is not reported as this operation's outcome. */
+    private synchronized void claim(String kind) {
+        op = kind;
+        failCode = null;
+        phase = "checking";
+        emit();
+        work.execute(() -> runInstall(kind));
     }
 
     /**
@@ -282,9 +289,13 @@ public final class LocalEngine {
             boolean base;
             LocalEngineInstaller.Release rel;
             if (inst == null) {
-                // fresh install (also over a record from before the npm engine): base from the app + the line's engine
+                // fresh install (also over a record from before the npm engine): base from the app + the line's engine.
+                // A committed record whose tree is gone bounds it like a repair: that engine may have migrated account
+                // data, so nothing older than it is installed (a lagging mirror's older version would be a downgrade).
                 base = true;
-                rel = release != null ? release : ins.resolve(regs, null, null, true);
+                LocalEngineInstaller.Installed rec = ins.record();
+                rel = rec != null ? ins.resolve(regs, rec.engineVersion, true, rec.bad, true)
+                        : release != null ? release : ins.resolve(regs, null, null, true);
                 if (rel == null) throw new LocalEngineInstaller.Failure("no_engine", "nothing on " + cfg.distTag());
             } else if (kind.equals("reset")) {
                 // rebuild the system from the app; keep the engine when its tree still verifies, else fetch the line's
