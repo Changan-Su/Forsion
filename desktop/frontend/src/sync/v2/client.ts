@@ -14,7 +14,7 @@ import {
 } from './types'
 
 /** inUseBy:remote_dir_in_use 时引擎带上的「谁占着这个远端目录」(契约 E-17),界面要写出库名。 */
-export type VsResult<T> = { ok: true; value: T } | { ok: false; error: string; inUseBy?: RemoteDirHolder }
+export type VsResult<T> = { ok: true; value: T } | { ok: false; error: string; inUseBy?: RemoteDirHolder; uncovered?: string[] | 'all' }
 
 /** cloudInvoke 不在(Extend 没装载 / 停用,或网页 / 手机):所有调用回它。 */
 export const EXTEND_UNAVAILABLE = 'extend_unavailable'
@@ -38,21 +38,28 @@ function holderOf(x: unknown): RemoteDirHolder | undefined {
   return { bindingId: typeof u.bindingId === 'string' ? u.bindingId : null, name: u.name, ...(u.source === 'remotesync' ? { source: 'remotesync' as const } : {}) }
 }
 
+/** legacy_remote_same_root(E-21):新范围里旧网盘同步没忽略的那几项;'all' = 整个都没盖住(读不出时也是)。形状不对就不带。 */
+function uncoveredOf(x: unknown): string[] | 'all' | undefined {
+  const u = (x as { uncovered?: unknown } | null | undefined)?.uncovered
+  if (u === 'all') return 'all'
+  return Array.isArray(u) && u.every((s) => typeof s === 'string') ? (u as string[]) : undefined
+}
+
 /** 归一两层回复(纯函数,单测直接喂)。 */
 export function normalizeReply<T>(channel: string, reply: unknown): VsResult<T> {
   const r = reply as { ok?: unknown; value?: unknown; error?: unknown } | null | undefined
   if (!r || typeof r !== 'object') return { ok: false, error: 'invalid_reply' }
   if (r.ok !== true) {
     // 宿主把失败放在外层回时也可能带着 inUseBy(Codex 第四轮 P1-4)
-    const inUseBy = holderOf(r)
-    return { ok: false, error: typeof r.error === 'string' && r.error ? r.error : 'failed', ...(inUseBy ? { inUseBy } : {}) }
+    const inUseBy = holderOf(r), uncovered = uncoveredOf(r)
+    return { ok: false, error: typeof r.error === 'string' && r.error ? r.error : 'failed', ...(inUseBy ? { inUseBy } : {}), ...(uncovered ? { uncovered } : {}) }
   }
   const v = r.value as { ok?: unknown; error?: unknown } | null | undefined
   if (SOFT_FAIL.has(channel) && v && typeof v === 'object' && !Array.isArray(v)) {
     if (v.ok === false) {
       // remote_dir_in_use 带着占着那个目录的库(E-17):留下来,别只剩一个码
-      const inUseBy = holderOf(v)
-      return { ok: false, error: typeof v.error === 'string' && v.error ? v.error : 'failed', ...(inUseBy ? { inUseBy } : {}) }
+      const inUseBy = holderOf(v), uncovered = uncoveredOf(v)
+      return { ok: false, error: typeof v.error === 'string' && v.error ? v.error : 'failed', ...(inUseBy ? { inUseBy } : {}), ...(uncovered ? { uncovered } : {}) }
     }
     // apply 成功回 BindingView(没有 error 字段);失败回 {error:'stale'} 这样只有 error 的对象
     if (v.ok === undefined && typeof v.error === 'string' && v.error) return { ok: false, error: v.error }

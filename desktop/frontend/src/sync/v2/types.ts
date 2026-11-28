@@ -44,7 +44,10 @@ export type SyncDirection = 'both' | 'push' | 'pull'
 export type BindingReason =
   | 'non_default_vault' | 'no_backing_identity' | 'too_large_for_new_sync' | 'cross_namespace_rules' | 'double_engine'
   | 'root_missing' | 'root_renamed' | 'server_unsupported' | 'state_unreadable' | 'takeover_failed' | 'remote_same_root'
-  | 'remote_dir_in_use' | 'move_in_progress'
+  | 'remote_dir_in_use' | 'move_in_progress' | 'cloud_deleted'
+
+/** 云端这个库被删了(Extend #146,读到 410):这一条停着、本机文件都在。autoResume = 在蓬洲云回收站里恢复后自己接着跑(自己的库、没清理、不是分库撤销)。 */
+export interface CloudDeletedView { at: string; purgeAt: string | null; purging: boolean; purged: boolean; reverted: boolean; autoResume: boolean }
 
 /** 占着这个远端目录的那条绑定(契约 E-17):name = 库文件夹名;可能是停着的那条(停着也占着,只有停止同步才释放)。 */
 /** 谁占着这个远端目录(E-17)。bindingId = null、source = 'remotesync':被原来的网盘同步占着(E-19),name 是它本机库的文件夹名,读不出时为空串。 */
@@ -68,6 +71,8 @@ export interface BindingStatusView {
   inUseBy?: RemoteDirHolder
   /** 这条网盘绑定和原来的网盘同步用着同一个去处、旧同步没交给 v2(E-19):照跑,reason 不变,只是一句提示 */
   overlapsLegacy?: { name: string; targetId: string }
+  /** reason = cloud_deleted 时的细节(Extend #146) */
+  cloudDeleted?: CloudDeletedView
 }
 
 export interface BindingView {
