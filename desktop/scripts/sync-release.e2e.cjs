@@ -176,13 +176,14 @@ function preflight() {
     const got = fs.existsSync(verFile) ? fs.readFileSync(verFile, 'utf8').trim().replace(/^v/, '') : null
     if (got !== want) throw Error(`ELECTRON_BIN is Electron ${got}, desktop wants ${want}`)
   }
-  // Build provenance: an artifact older than its checkout's HEAD commit was not built from what we report.
+  // Build provenance: an artifact older than the last commit touching its sources was not built from what we report
+  // (commits that only add tests or docs don't make a build stale). Uncommitted source edits are reported as dirty.
   const git = (d, ...a) => { try { return execFileSync('git', ['-C', d, ...a]).toString().trim() } catch { return null } }
   const heads = {}
-  for (const [key, dir, file] of [['genesis', ROOT, main], ['engine', ENGINE, engine], ['extend', EXTEND, ext]]) {
-    const head = git(dir, 'rev-parse', '--short', 'HEAD'), at = Number(git(dir, 'log', '-1', '--format=%ct')) * 1000, built = fs.statSync(file).mtimeMs
-    if (at && built < at) throw Error(`${path.relative(dir, file)} (built ${new Date(built).toISOString()}) is older than ${key} HEAD ${head}; rebuild`)
-    heads[key] = { head, dirty: !!git(dir, 'status', '--porcelain', '--untracked-files=no'), built: new Date(built).toISOString() }
+  for (const [key, dir, file, sources] of [['genesis', ROOT, main, ['electron', 'frontend', 'shared', '../lcl']], ['engine', ENGINE, engine, ['src']], ['extend', EXTEND, ext, ['src']]]) {
+    const head = git(dir, 'rev-parse', '--short', 'HEAD'), at = Number(git(dir, 'log', '-1', '--format=%ct', '--', ...sources)) * 1000, built = fs.statSync(file).mtimeMs
+    if (at && built < at) throw Error(`${path.relative(dir, file)} (built ${new Date(built).toISOString()}) is older than the last ${key} source commit; rebuild`)
+    heads[key] = { head, dirty: !!git(dir, 'status', '--porcelain', '--untracked-files=no', '--', ...sources), built: new Date(built).toISOString() }
   }
   return heads
 }
