@@ -13,10 +13,11 @@ const KEYS: Record<string, string> = {
   'not-logged-in': 'ipcerr.notLoggedIn',
   'login-expired': 'ipcerr.loginExpired',
   'vault-missing': 'ipcerr.vaultMissing',
-  // 智库设置文件(amadeus-config)读不了 / 解析不了 / 形状不对(electron/amadeus/settings.ts):宿主不拿默认值盖它,原样留着
+  // 智库设置文件(amadeus-config)读不了 / 解析不了 / 形状不对(electron/amadeus/settings.ts):宿主不拿默认值盖它,原样留着。
+  // 读不了(I/O)让人查权限;内容坏的两种别引到权限上
   'amadeus-config-unreadable': 'ipcerr.amadeusConfigUnreadable',
-  'amadeus-config-unparseable': 'ipcerr.amadeusConfigUnreadable',
-  'amadeus-config-malformed': 'ipcerr.amadeusConfigUnreadable',
+  'amadeus-config-unparseable': 'ipcerr.amadeusConfigCorrupt',
+  'amadeus-config-malformed': 'ipcerr.amadeusConfigCorrupt',
   // 旧 remotesync 那一轮(electron/remotesyncIpc.ts runNow):条目同步的名单算不出来(设置读不了 / 名单读不懂 / 条目库根打不开),不跑
   'entry-ignores-unknown': 'ipcerr.entryIgnoresUnknown',
   'mirror-missing': 'ipcerr.mirrorMissing',
