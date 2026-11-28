@@ -71,8 +71,25 @@ beforeEach(async () => {
   await fs.mkdir(vaultA); await fs.mkdir(vaultB)
 })
 afterEach(async () => {
+  vi.restoreAllMocks()
   await fs.rm(env.root, { recursive: true, force: true })
 })
+
+/** 让配置文件的第一次 readFile 读完原文后挂起,release(ok / 报错)才返回;别的 readFile(严格读)照常。 */
+function holdFirstConfigRead() {
+  const real = fs.readFile.bind(fs) as (...a: unknown[]) => Promise<string>
+  let release!: (fail?: boolean) => void
+  const gate = new Promise<boolean>((r) => { release = (fail = false) => r(fail) })
+  let held = false
+  vi.spyOn(fs, 'readFile').mockImplementation((async (file: unknown, ...rest: unknown[]) => {
+    if (held || String(file) !== cfgFile()) return real(file, ...rest)
+    held = true
+    const text = await real(file, ...rest) // 读到的是写之前的旧文件
+    if (await gate) throw Object.assign(new Error('EACCES'), { code: 'EACCES' })
+    return text
+  }) as typeof fs.readFile)
+  return { release }
+}
 
 describe('the old engines stop when a read the mask depends on fails (H3 list item 6)', () => {
   it('control: nothing claimed and no state file → the config goes through unmasked, every engine runs', async () => {
@@ -225,5 +242,40 @@ describe('mirrorRetired: only the mirror stops (H3 final interface §1)', () => 
     await seam.set({ entryRoots: [vaultA], mirror: 'keep', human: 'engine', mirrorRetired: false }, ACCOUNT)
     expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8')).cloudAccounts[NS].syncOwnershipV2).not.toHaveProperty('mirrorRetired')
     expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultB] })
+  })
+})
+
+describe('the config cache and a loose read that lands late (Codex 12b round 1, #2)', () => {
+  const RETIRED = { entryRoots: [] as string[], mirror: 'keep' as const, human: 'engine' as const, mirrorRetired: true }
+  const rawClaim = async () => JSON.parse(await fs.readFile(cfgFile(), 'utf8')).cloudAccounts[NS].syncOwnershipV2
+
+  it('a loose read that opened the old file before a claim was committed does not put the old claim back; the next ordinary write keeps the new one', async () => {
+    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig({ syncOwnershipV2: { entryRoots: [], mirror: 'keep', human: 'engine' } })))
+    const { release } = holdFirstConfigRead()
+    const settings = await import('./settings')
+    const late = settings.readConfig()
+    await new Promise((r) => setTimeout(r, 20))
+    await settings.writeSyncOwnershipV2(ACCOUNT, RETIRED)
+    release()
+    await late
+    await settings.writeConfig({ lastPage: 'a.md' })
+    expect(await rawClaim()).toEqual(RETIRED)
+    expect(settings.looseConfigReadFailed()).toBe(false)
+  })
+
+  it('a late loose read that fails changes neither the committed cache nor the read-failure mark', async () => {
+    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig({ syncOwnershipV2: { entryRoots: [], mirror: 'keep', human: 'engine' } })))
+    const { release } = holdFirstConfigRead()
+    const settings = await import('./settings')
+    const late = settings.readConfig()
+    await new Promise((r) => setTimeout(r, 20))
+    await settings.writeSyncOwnershipV2(ACCOUNT, RETIRED)
+    release(true)
+    expect((await late).entrySync?.map((v) => v.vaultRoot)).toEqual([vaultA, vaultB])
+    expect(settings.looseConfigReadFailed()).toBe(false)
+    await settings.writeConfig({ lastPage: 'a.md' })
+    const disk = JSON.parse(await fs.readFile(cfgFile(), 'utf8'))
+    expect(disk.lastVault).toBe(vaultA)
+    expect(disk.cloudAccounts[NS].syncOwnershipV2).toEqual(RETIRED)
   })
 })

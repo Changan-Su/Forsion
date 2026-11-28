@@ -72,6 +72,9 @@ let writes: Promise<void> = Promise.resolve()
  *  给旧引擎的遮罩用(contentSyncHost.readMaskedAmadeusConfig):读失败 ≠ 什么都没配。 */
 let looseLoadFailed = false
 export function looseConfigReadFailed(): boolean { return looseLoadFailed }
+/** 缓存的提交代次:每次写把缓存换掉 +1。宽松读开始时记下,读完代次变了 = 途中有写提交了,丢掉自己读到的(可能是写之前的旧文件),
+ *  不覆盖缓存、也不改 looseLoadFailed(Codex 12b 一轮第 2 条:迟到的旧读数会让已退役的镜像、已接手的根在下一次普通写后复活)。 */
+let cacheGen = 0
 
 export function currentCloudAccountId(): string | null {
   const creds = loadTanguCreds()
@@ -102,15 +105,20 @@ function normalizeStored(stored: StoredConfig): StoredConfig {
 
 async function storedConfig(): Promise<StoredConfig> {
   if (cache) return cache
-  if (!loading) loading = (async () => {
-    let stored: StoredConfig
-    try { stored = JSON.parse(await fs.readFile(configFile(), 'utf8')) as StoredConfig } catch (e) {
-      stored = {}
-      looseLoadFailed = (e as NodeJS.ErrnoException)?.code !== 'ENOENT'
-    }
-    cache = normalizeStored(stored)
-    return cache
-  })()
+  if (!loading) {
+    const gen = cacheGen
+    loading = (async () => {
+      let stored: StoredConfig, failed = false
+      try { stored = JSON.parse(await fs.readFile(configFile(), 'utf8')) as StoredConfig } catch (e) {
+        stored = {}
+        failed = (e as NodeJS.ErrnoException)?.code !== 'ENOENT'
+      }
+      if (gen !== cacheGen) return cache! // 途中有写提交了:那一写已经换上了缓存
+      looseLoadFailed = failed
+      cache = normalizeStored(stored)
+      return cache
+    })()
+  }
   return loading
 }
 
@@ -163,6 +171,7 @@ export function writeSyncOwnershipV2(accountId: string, next: SyncOwnershipV2 | 
     await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
     await fs.rename(tmp, file)
     cache = out
+    cacheGen++
     looseLoadFailed = false // 以严格读为底:缓存换成了盘上的真值
   })
   writes = work.catch(() => {})
@@ -223,6 +232,7 @@ async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string
   await fs.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8')
   await fs.rename(tmp, file)
   cache = next
+  cacheGen++
   if (base) looseLoadFailed = false // 只有以严格读为底的这一写才算换上了真值;以宽松缓存为底的照旧不可信
   return drop
 }
@@ -333,6 +343,7 @@ async function writeStored(out: StoredConfig): Promise<void> {
   await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
   await fs.rename(tmp, file)
   cache = out
+  cacheGen++
   looseLoadFailed = false // 调用方都以严格读为底
 }
 
