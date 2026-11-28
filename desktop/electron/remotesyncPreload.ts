@@ -32,6 +32,19 @@ contextBridge.exposeInMainWorld('remoteSync', {
     remove: (id: string): Promise<unknown> => ipcRenderer.invoke('remotesync:targets:remove', id),
     check: (id: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('remotesync:targets:check', id),
   },
+  // 智库同步第 2 步:退出门禁卡(syncQuitGate.ts)。订阅了才会在有没同步完的时候被问;回 'quit' = 直接退出,'cancel' = 取消退出
+  quitGate: {
+    subscribe: (cb: (s: { open: boolean; result?: unknown }) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, st: { open: boolean; result?: unknown }): void => cb(st)
+      ipcRenderer.on('remotesync:quitGate', listener)
+      void ipcRenderer.invoke('remotesync:quitGate:subscribe', true)
+      return () => {
+        ipcRenderer.removeListener('remotesync:quitGate', listener)
+        void ipcRenderer.invoke('remotesync:quitGate:subscribe', false)
+      }
+    },
+    answer: (a: 'quit' | 'cancel'): Promise<unknown> => ipcRenderer.invoke('remotesync:quitGate:answer', a),
+  },
   onStatus: (cb: (st: unknown) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, st: unknown): void => cb(st)
     ipcRenderer.on('remotesync:status', listener)

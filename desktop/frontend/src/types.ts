@@ -1243,6 +1243,11 @@ declare global {
         remove(id: string): Promise<{ ok: boolean }>
         check(id: string): Promise<{ ok: boolean; error?: string }>
       }
+      /** 智库同步第 2 步起:退出门禁卡。订阅了才会在退出时还有没同步完的文件时被问(open:true 带结果,open:false = 收起)。旧主进程没有。 */
+      quitGate?: {
+        subscribe(cb: (s: { open: boolean; result?: { state: 'synced' | 'pending' | 'failed'; pending: number; failed: Array<{ path: string; reason: string }> } }) => void): () => void
+        answer(a: 'quit' | 'cancel'): Promise<unknown>
+      }
     }
   }
 }

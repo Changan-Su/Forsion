@@ -83,6 +83,7 @@ import { initMainLocale, mainLocale, mt, mtFor } from './mainI18n'
 import { createQuitGuards } from './quitGuard'
 import { closeDialogOptions, closeDialogPick, storedCloseAction, type CloseAction } from './closeAction'
 import { createContentFlush } from './contentSyncFlush'
+import { createRendererQuitGateUi, createSyncQuitGate } from './syncQuitGate'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
 import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' // P1-K3
 import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
@@ -1167,6 +1168,15 @@ let isQuitting = false
 const contentFlush = createContentFlush({ focused: () => !!BrowserWindow.getFocusedWindow(), log: (m) => console.warn(m) })
 // Workspace .md tabs still holding typed text (electron/editorQuitSave.ts): before quitting, the windows that have one save it
 const editorQuitSave = createEditorQuitSave({ events: ipcMain, log: (m) => console.warn(m) })
+// 退出门禁(electron/syncQuitGate.ts;智库同步第 2 步):新 Extend 经 CloudHost.addQuitCheck 登记了检查才生效,没登记 = 下面的退出链一字不变。
+// 放在任何不可逆清理之前:先存编辑器、冲刷,再问引擎还有没有没同步的;有就把结果推给订阅了门禁卡的窗口,等「直接退出 / 取消退出」
+const syncQuitGate = createSyncQuitGate({
+  ui: createRendererQuitGateUi({ events: ipcMain as never, isTrusted: (e) => isTrustedSender(e as never), reveal: () => showMainWindow() }),
+  log: (m) => console.warn(m),
+})
+/** 这一次退出已经过了门禁(重启 / 装更新那条路自己先过,紧跟着的 before-quit 不再拦)。退出没成时清掉。 */
+let syncGatePassed = false
+let syncGateChain: Promise<void> | null = null
 // 退出前问一次(electron/quitGuard.ts):内置包的主进程半身经 CloudHost.addQuitGuard 登记「还有事没做完」
 const quitGuards = createQuitGuards({
   locale: mainLocale,
@@ -3986,6 +3996,8 @@ app.whenReady().then(async () => {
       addQuitGuard: (fn) => quitGuards.add(fn),
       // ── 2.13.8 起(新同步频率 F2):失焦 / 合盖 / 退出时叫一次 ──
       addFlushHook: (fn) => contentFlush.add(fn),
+      // ── 智库同步第 2 步:退出门禁的检查(syncQuitGate.ts)。没人登记 = 退出链照旧 ──
+      addQuitCheck: (fn) => syncQuitGate.add(fn),
       // ── 2.13.8 起:帮助改进 Forsion 的宿主事件(崩溃 / 性能 / 功能使用),见 telemetryHost.ts ──
       telemetry: telemetry.seam,
       // ── 智库同步第 1 步起:两套引擎每轮交一行同步记录(存取在 syncRecords.ts,按账号一份)──
@@ -4073,8 +4085,14 @@ app.whenReady().then(async () => {
       }
       // 还有文件在传(蓬洲云):重启 / 装更新前先问一次;点了退出,后面的 before-quit 就不再问
       if (!(await quitGuards.confirmFirst())) return
+      // 同步门禁(新 Extend 登记了才有):先存编辑器、冲刷,再问还有没有没同步的;取消 = 什么都没清理,应用照常用
+      if (!syncGatePassed && syncQuitGate.has()) {
+        await Promise.all([contentFlush.quit(), editorQuitSave.quit()])
+        if (!(await syncQuitGate.run())) { quitGuards.reset(); contentFlush.reset(); editorQuitSave.reset(); return }
+        syncGatePassed = true
+      }
       // mac:先让 Squirrel.Mac 取包验签,成了才停后端;不成已退回「下载安装包」,应用照常用(见 updater.prepareInstall)
-      if (install && !(await prepareInstall())) { quitGuards.reset(); return }
+      if (install && !(await prepareInstall())) { quitGuards.reset(); syncGatePassed = false; contentFlush.reset(); editorQuitSave.reset(); return }
       isQuitting = true
       // Stop before relaunch/quitAndInstall so before-quit cannot bypass either with app.exit.
       try {
@@ -4090,6 +4108,7 @@ app.whenReady().then(async () => {
       } catch (error) {
         isQuitting = false
         quitGuards.reset()
+        syncGatePassed = false
         contentFlush.reset()
         editorQuitSave.reset()
         throw error
@@ -5406,9 +5425,10 @@ app.whenReady().then(async () => {
     },
     needsElevation: () => process.platform === 'win32' && !installDirWritable(),
     prepare: () => prepareInstall(),
-    flush: async () => (await contentFlush.quit()) !== 'timeout',
+    // 无人值守:冲刷没超时、新同步也不是「还在同步」才装(同步门禁不弹卡,syncQuitGate.unattended)
+    flush: async () => (await contentFlush.quit()) !== 'timeout' && await syncQuitGate.unattended(),
     resetFlush: () => contentFlush.reset(),
-    beginQuit: () => { appQuitStarted = false; isQuitting = true; quitGuards.pass(); deferredEngineRestart.cancel() },
+    beginQuit: () => { appQuitStarted = false; isQuitting = true; quitGuards.pass(); syncGatePassed = true; deferredEngineRestart.cancel() },
     stopEngine: () => backend.stop('app_update'),
     install: (v) => installPinned(v),
     quitStarted: (ms) => new Promise<boolean>((resolve) => {
@@ -5420,6 +5440,7 @@ app.whenReady().then(async () => {
     abortQuit: () => {
       isQuitting = false
       quitGuards.reset()
+      syncGatePassed = false
       contentFlush.reset()
       void ensureBackend('engine_restart').catch((err) => console.error('[idle-install] engine restart failed:', err))
     },
@@ -6672,6 +6693,29 @@ app.on('before-quit', (e) => {
   // 第一件事:有插件说还没做完就拦下问(别先做下面那些收尾 —— 取消的话应用还要接着用)。
   // 托盘「退出」在 app.quit() 之前就把 isQuitting 置了 true:拦下时还原,否则取消后关窗就真关了
   if (quitGuards.intercept()) { e.preventDefault(); isQuitting = false; return }
+  // 同步门禁(新 Extend 登记了退出检查才有;没有 = 下面照旧):在任何不可逆清理之前。先存编辑器、冲刷,再问引擎;
+  // 「取消退出」= 宿主原样留着、什么都没清理;门禁自己出错不困住用户,照常退
+  if (!syncGatePassed && syncQuitGate.has()) {
+    e.preventDefault()
+    if (syncGateChain) return
+    syncGateChain = (async () => {
+      await Promise.all([editorQuitSave.quit(), contentFlush.quit()])
+      return syncQuitGate.run()
+    })().then((go) => {
+      syncGateChain = null
+      if (go) { syncGatePassed = true; app.quit(); return }
+      isQuitting = false
+      quitGuards.reset()
+      contentFlush.reset()
+      editorQuitSave.reset()
+    }, (err) => {
+      syncGateChain = null
+      console.warn('[quit-gate] failed, quitting as before:', (err as Error)?.message || err)
+      syncGatePassed = true
+      app.quit()
+    })
+    return
+  }
   isQuitting = true // 放行 window close 拦截(否则 hide 会吞掉退出)
   pluginDesktop?.persistNow() // 插件桌面小窗的位置(去抖里还没写的)
   for (const state of persistedDetached) {

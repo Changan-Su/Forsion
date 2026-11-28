@@ -1,0 +1,104 @@
+import { describe, expect, it, vi } from 'vitest'
+import { createRendererQuitGateUi, createSyncQuitGate, mergeQuitChecks, type QuitCheckResult, type QuitGateAnswer, type QuitGateUi } from './syncQuitGate'
+
+const synced: QuitCheckResult = { state: 'synced', pending: 0, failed: [] }
+const pending = (n: number): QuitCheckResult => ({ state: 'pending', pending: n, failed: [] })
+
+function fakeUi(available = true) {
+  let answer!: (a: QuitGateAnswer) => void
+  const shown: QuitCheckResult[] = []
+  const ui: QuitGateUi & { shown: QuitCheckResult[]; hidden: number; click(a: QuitGateAnswer): void } = {
+    shown, hidden: 0,
+    available: () => available,
+    show: (r) => { shown.push(r) },
+    answer: () => new Promise((r) => { answer = r }),
+    hide: () => { ui.hidden++ },
+    click: (a) => answer(a),
+  }
+  return ui
+}
+
+describe('sync quit gate', () => {
+  it('no registered check = the old quit path: nothing asked, nothing shown', async () => {
+    const ui = fakeUi()
+    const gate = createSyncQuitGate({ ui })
+    expect(gate.has()).toBe(false)
+    expect(await gate.run()).toBe(true)
+    expect(ui.shown).toEqual([])
+    expect(await gate.unattended()).toBe(true)
+  })
+
+  it('synced quits at once; pending with no window to ask quits as before (pending work stays queued)', async () => {
+    const ui = fakeUi(false)
+    const gate = createSyncQuitGate({ ui })
+    gate.add(async () => synced)
+    expect(await gate.run()).toBe(true)
+    const off = gate.add(async () => pending(3))
+    expect(await gate.run()).toBe(true)
+    expect(ui.shown).toEqual([])
+    off()
+  })
+
+  it('pending: shows the card, re-checks, and quits by itself once synced', async () => {
+    const ui = fakeUi()
+    let left = 2
+    const gate = createSyncQuitGate({ ui, pollMs: 5 })
+    gate.add(async () => (left-- > 0 ? pending(left + 1) : synced))
+    expect(await gate.run()).toBe(true)
+    expect(ui.shown.map((r) => r.pending)).toEqual([2, 1])
+    expect(ui.hidden).toBe(1)
+  })
+
+  it('"cancel" keeps the app running; "quit" leaves with work still pending', async () => {
+    const ui = fakeUi()
+    const gate = createSyncQuitGate({ ui, pollMs: 5 })
+    gate.add(async () => pending(4))
+    const run = gate.run()
+    await vi.waitFor(() => expect(ui.shown.length).toBeGreaterThan(0))
+    expect(gate.run()).toBe(run) // 再按一次退出:同一份
+    ui.click('cancel')
+    expect(await run).toBe(false)
+    const seen = ui.shown.length
+    const again = gate.run()
+    await vi.waitFor(() => expect(ui.shown.length).toBeGreaterThan(seen))
+    ui.click('quit')
+    expect(await again).toBe(true)
+  })
+
+  it('a throwing check reads as failed (never as synced); a slow one as still pending; unattended installs skip only pending', async () => {
+    const ui = fakeUi()
+    const gate = createSyncQuitGate({ ui, pollMs: 5, checkTimeoutMs: 10 })
+    const off = gate.add(async () => { throw new Error('engine gone') })
+    expect(await gate.check()).toEqual({ state: 'failed', pending: 0, failed: [{ path: '', reason: 'engine gone' }] })
+    expect(await gate.unattended()).toBe(true)
+    off()
+    gate.add(() => new Promise(() => {}))
+    expect((await gate.check())?.state).toBe('pending')
+    expect(await gate.unattended()).toBe(false)
+  })
+
+  it('merges several checks: failed beats pending beats synced', () => {
+    expect(mergeQuitChecks([synced, pending(2), { state: 'failed', pending: 1, failed: [{ path: 'a.md', reason: 'too large' }] }]))
+      .toEqual({ state: 'failed', pending: 3, failed: [{ path: 'a.md', reason: 'too large' }] })
+    expect(mergeQuitChecks([synced, synced]).state).toBe('synced')
+  })
+
+  it('renderer bridge: only subscribed, trusted windows are asked and may answer', async () => {
+    const handlers = new Map<string, (e: any, ...a: unknown[]) => unknown>()
+    const sent: unknown[] = []
+    const sender = { id: 7, isDestroyed: () => false, send: (_c: string, p: unknown) => { sent.push(p) } }
+    const ui = createRendererQuitGateUi({ events: { handle: (c, fn) => { handlers.set(c, fn) } }, isTrusted: (e) => e.sender.id === 7 })
+    expect(ui.available()).toBe(false)
+    expect(() => handlers.get('remotesync:quitGate:subscribe')!({ sender: { ...sender, id: 8 } }, true)).toThrow('forbidden')
+    handlers.get('remotesync:quitGate:subscribe')!({ sender }, true)
+    expect(ui.available()).toBe(true)
+    ui.show(pending(1))
+    const a = ui.answer()
+    handlers.get('remotesync:quitGate:answer')!({ sender }, 'cancel')
+    expect(await a).toBe('cancel')
+    ui.hide()
+    expect(sent).toEqual([{ open: true, result: pending(1) }, { open: false }])
+    handlers.get('remotesync:quitGate:subscribe')!({ sender }, false)
+    expect(ui.available()).toBe(false)
+  })
+})

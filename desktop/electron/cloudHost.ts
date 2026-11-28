@@ -121,6 +121,9 @@ export interface CloudHost {
   // ── 2.13.8 起(新同步频率 F2):切走窗口 1 秒后 / 合盖前 / 退出前叫一次,让还在静默期里的改动立刻推。见 electron/contentSyncFlush.ts ──
   /** 返回 promise = 有东西在推,宿主退出前最多等 5 秒;不返回 = 没有要推的。返回退订。 */
   addFlushHook(fn: FlushHook): () => void
+  // ── 智库同步第 2 步起(可选):退出门禁(契约 §3.10、实现期修订 H-1 第 6 条;electron/syncQuitGate.ts)──
+  /** 登记一个退出检查:叫引擎扫一遍,回 synced / pending / failed。宿主在不可逆清理之前问;没人登记 = 退出链照旧。返回退订。 */
+  addQuitCheck?(fn: import('./syncQuitGate').QuitCheckFn): () => void
   // ── 2.13.8 起(帮助改进 Forsion:契约 docs/ToBeImproved/默认数据采集方案_2026-10-28/contract.md §3;实现在 telemetryHost.ts)──
   /** 匿名遥测的宿主那一半(2.13.8 起)。宿主只采集、转发,自己不存、不发;发不发、开没开由 Extend 定。 */
   /** 智库同步第 1 步起(可选):每轮同步交一行记录(形状 = shared/vaultSync.ts 的 SyncRoundRecord;同一 id 再交 = 覆盖那一行)。
