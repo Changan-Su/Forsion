@@ -26,6 +26,9 @@ export function syncErrorText(err: string, t: T, name = '', inUseBy?: { name: st
   if (code === 'nothing_to_revert') return t('ssync.err.nothingToRevert')
   if (code === 'legacy_config_unreadable') return t('ssync.err.legacyConfigUnreadable')
   if (code === 'legacy_root_unavailable') return t('ssync.err.legacyRootUnavailable')
+  // 点退回时接手刚好做完:新同步已停用(不替用户开回去),这一行的开关就是重新开启的入口
+  if (code === 'takeover_finished') return t('ssync.err.takeoverFinished')
+  if (code === 'legacy_config_changed') return t('ssync.err.legacyConfigChanged')
   if (code === 'binding_not_found') return t('ssync.err.bindingGone')
   if (code === 'deletes_changed') return t('ssync.err.deletesChanged')
   if (code === 'binding_not_running') return t('ssync.err.notRunning')

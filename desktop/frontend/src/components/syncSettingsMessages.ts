@@ -277,6 +277,8 @@ registerMessages({
   'ssync.err.nothingToRevert': { zh: '这一次已经接手完了，没有可以退回的。', en: 'The takeover has already finished, so there’s nothing to revert.' },
   'ssync.err.legacyConfigUnreadable': { zh: '读不到原来网盘同步的设置，先不退回，免得两边同时写。稍后再试。', en: 'Couldn’t read the settings of your earlier drive sync, so nothing was reverted, to avoid both writing at once. Try again later.' },
   'ssync.err.legacyRootUnavailable': { zh: '原来的网盘同步开着，但它的库文件夹现在找不到，先不退回。把文件夹放回原处，或在下面「同步到网盘（原来的方式）」里改一下再试。', en: 'Your earlier drive sync is on, but its vault folder can’t be found right now, so nothing was reverted. Put the folder back, or change it under “Sync to a network drive (old setup)” below, then try again.' },
+  'ssync.err.takeoverFinished': { zh: '接手刚刚完成，新同步已暂停，可以用这一行的开关重新开启。', en: 'The takeover just finished. The new sync is paused; turn it back on with the switch on this row.' },
+  'ssync.err.legacyConfigChanged': { zh: '原来的网盘同步刚被改过，这次没有退回，请再试一次。', en: 'Your earlier drive sync was just changed, so nothing was reverted. Try again.' },
   'ssync.err.takeoverRoundRunning': { zh: '接手正在进行，等这一轮跑完再退回。', en: 'The takeover is running. Revert after this round finishes.' },
   'ssync.reason.remote_dir_in_use_legacy': { zh: '原来的网盘同步还在用这个去处，这一条先不跑，没有删任何文件。', en: 'Your earlier drive sync still uses this destination, so this one won’t run. Nothing was deleted.' },
   'ssync.reason.remote_dir_in_use_takeover': { zh: '「{name}」接手原来的网盘同步时用上了这个目录或和它套在一起的目录，这一条先不跑，没有删任何文件。', en: '“{name}” took over this folder or one nested with it from your earlier drive sync, so this one won’t run. Nothing was deleted.' },

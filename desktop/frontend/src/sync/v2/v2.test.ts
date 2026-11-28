@@ -216,7 +216,7 @@ describe('Codex 评审返修(第 2 步 U)', () => {
     expect(tk).toBe(t('ssync.err.remoteDirInUseTakeover', { name: '归档' }))
     expect(tk).not.toContain('停止同步')
     // 退回的拒绝码(契约 H-14)
-    for (const [code, key] of [['takeover_round_running', 'ssync.err.takeoverRoundRunning'], ['nothing_to_revert', 'ssync.err.nothingToRevert'], ['legacy_config_unreadable', 'ssync.err.legacyConfigUnreadable'], ['legacy_root_unavailable', 'ssync.err.legacyRootUnavailable']] as const) {
+    for (const [code, key] of [['takeover_round_running', 'ssync.err.takeoverRoundRunning'], ['nothing_to_revert', 'ssync.err.nothingToRevert'], ['legacy_config_unreadable', 'ssync.err.legacyConfigUnreadable'], ['legacy_root_unavailable', 'ssync.err.legacyRootUnavailable'], ['takeover_finished', 'ssync.err.takeoverFinished'], ['legacy_config_changed', 'ssync.err.legacyConfigChanged']] as const) {
       expect(syncErrorText(`Error invoking remote method 'vaultsync:takeoverRevert': Error: ${code}`, t)).toBe(t(key))
       expect(t(key)).not.toBe(key)
     }
