@@ -1,5 +1,5 @@
 /** 内置通知事件接线(仅主窗 Root 装一次):把现有系统事件流翻成右上角通知。
- *  - 云同步(镜像/按条目引擎):进 error/auth-required 弹 error(按引擎 dedupe);syncing→idle 弹完成(事件默认关)
+ *  - 智库同步(读状态源,syncNotices.ts):进出错 / 一轮多了没传上的文件 / 有了等你定才弹,说清哪个库、哪个文件;一轮跑完弹完成(事件默认关)
  *  - remotesync:一轮结束按报告弹完成/失败/冲突
  *  - agent 会话:runningBySession 键消失 = run 结束;当前正看的会话不打扰,后台会话才提醒
  *  - 笔记正文 `@remind:2026-09-01T09:00`:到点弹一条,点「查看」跳回那篇笔记
@@ -12,7 +12,13 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { openNoteAtHeading } from '../amadeusNav'
 import { toLocalDate } from '../views/calendar/dateUtils'
 import type { MdMark } from '@amadeus-shared/mdMarks'
-import type { AmadeusSyncStatus } from '../types'
+import type { SyncFeedReport } from '../../../shared/vaultSync'
+import { translate } from '../i18n'
+import { ensureVaultSyncSubscribed, feedsOf, useVaultSyncRaw } from '../sync/vaultSyncStore'
+import { takeSyncNotices, type FeedMemo } from '../sync/syncNotices'
+import { requestVaultSyncPanel } from '../sync/panelBus'
+import { openSyncSettings } from '../sync/vaultSyncActions'
+import { failureText } from '../sync/vaultSyncText'
 import { openPenzorSync, penzorSyncReady } from '../services/syncSetup'
 import { checkQuotaAlerts } from './quotaAlerts'
 
@@ -69,23 +75,37 @@ export function installNotificationWiring(): void {
   if (installed) return
   installed = true
 
-  // A. Amadeus 云同步(镜像引擎无 binding;按条目引擎带 binding=vault 根)。状态机转移才弹,持平不弹。
-  const prevSyncState: Record<string, string> = {}
-  window.amadeusSync?.onStatus?.((raw) => {
-    const s = raw as AmadeusSyncStatus
-    const key = s.binding ? `entry:${s.binding}` : `mirror:${s.side ?? 'own'}`
-    const prev = prevSyncState[key]
-    prevSyncState[key] = s.state
-    if (!s.enabled || prev === s.state) return
-    if (s.state === 'error' || s.state === 'auth-required') {
-      notifyApp({
-        event: 'sync.error', level: 'error',
-        text: tr('ntf.syncError', { e: s.error ? ipcErrorText(s.error) : s.state }),
-        dedupeKey: `sync.error:${key}`,
-      })
-    } else if (prev === 'syncing' && s.state === 'idle') {
-      notifyApp({ event: 'sync.doneOnline', level: 'success', text: tr('ntf.syncDone'), dedupeKey: 'sync.done' })
+  // A. 智库同步(旧的文件夹 / 条目同步 + 整库镜像 + 新同步):读状态源,状态转移才弹、启动时读到的不弹(syncNotices.ts)。
+  //    远程服务按它的报告在 B 里弹。
+  ensureVaultSyncSubscribed()
+  let syncMemo: Map<string, FeedMemo> | null = null
+  const vaultName = (v: SyncFeedReport['vault']): string =>
+    v.side === 'cloud' || !v.root ? translate('vsync.rec.mirror') : (v.root.split(/[\\/]/).filter(Boolean).pop() ?? v.root)
+  const viewAction = { label: tr('ntf.syncView'), run: () => { if (!requestVaultSyncPanel()) openSyncSettings() } }
+  const onFeeds = (): void => {
+    const { notices, memo } = takeSyncNotices(syncMemo, feedsOf(useVaultSyncRaw.getState()))
+    syncMemo = memo
+    for (const n of notices) {
+      if (n.kind === 'error') {
+        notifyApp({ event: 'sync.error', level: 'error', text: translate('vsync.ntf.error', { name: vaultName(n.vault), e: n.error ? ipcErrorText(n.error) : translate('vsync.error') }), dedupeKey: `sync.error:${n.feed}`, action: viewAction })
+      } else if (n.kind === 'failed') {
+        const first = n.failures[0]
+        const reason = failureText(first, n.target)
+        notifyApp({
+          event: 'sync.error', level: 'error',
+          text: n.failures.length > 1 ? translate('vsync.ntf.failedMore', { path: first.path, more: n.failures.length - 1, reason }) : translate('vsync.ntf.failed', { path: first.path, reason }),
+          dedupeKey: `sync.failed:${n.feed}`, action: viewAction,
+        })
+      } else if (n.kind === 'review') {
+        notifyApp({ event: 'sync.error', level: 'warning', text: translate('vsync.ntf.review', { name: vaultName(n.vault), n: n.n }), dedupeKey: `sync.review:${n.feed}`, action: viewAction })
+      } else {
+        notifyApp({ event: 'sync.doneOnline', level: 'success', text: tr('ntf.syncDone'), dedupeKey: 'sync.done' })
+      }
     }
+  }
+  useVaultSyncRaw.subscribe((st, prev) => {
+    if (st.legacy === prev.legacy && st.entryVaults === prev.entryVaults && st.content === prev.content && st.pinnedRoot === prev.pinnedRoot) return
+    onFeeds()
   })
 
   // B. remotesync:running true→false 收一份报告。

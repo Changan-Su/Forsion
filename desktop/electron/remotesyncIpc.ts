@@ -31,6 +31,8 @@ import { createWebdavRemote, type WebdavConfig } from './remotesync/fsWebdav'
 import type { RemoteFs, SyncReport } from './remotesync/types'
 import { contentSyncOwned } from './contentSyncHost'
 import { currentCloudAccountId } from './amadeus/settings'
+import { remoteReportProblems, SYNC_RECORD_MAX_FAILED, type SyncTarget } from '../shared/vaultSync'
+import { appendSyncRecord } from './syncRecordsIpc'
 
 export interface RemoteSyncConfig {
   /** penzor = Forsion 云端:实现住在 Forsion Extend(remotesync/backends.ts 注册点),这里只保留配置形状。 */
@@ -198,6 +200,7 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
   // 锁必须在任何 await 之前拿:定时器与手动点击并发穿过 config/root 解析会双跑同一基线
   if (running) return fail('already-running')
   running = true
+  const recordAccount = currentCloudAccountId() // 这一轮记在开始时的账号名下(跑到一半换了账号,也不记到新账号里)
   progress = null
   broadcast()
   let lastProgressAt = 0
@@ -243,6 +246,7 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
     if (!opts?.dryRun) {
       lastReport = report
       confirmScope = report.pendingDeletions > 0 ? scope : null
+      recordRemoteRound(report, cfg.backend, rooted.root, recordAccount)
     }
     return report
   } finally {
@@ -250,6 +254,34 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
     progress = null
     broadcast()
   }
+}
+
+const RECORD_TARGET: Record<string, SyncTarget> = { penzor: 'penzor', dropbox: 'dropbox', webdav: 'webdav', s3: 's3', folder: 'folder', gdrive: 'gdrive' }
+
+/** 上一行记录:连着几轮都没变化只留最新一行(和 Extend 的 RoundRecorder 同一口径,定时 5 分钟一轮不会挤掉别的记录)。 */
+let lastRemoteRecord: { id: string; idle: boolean; startedAt: number; pending: number; account: string | null; scope: string } | null = null
+
+/** 一轮跑完记一行同步记录(只观测,记不上也不影响同步)。 */
+function recordRemoteRound(report: SyncReport, backend: string, root: string, account: string | null): void {
+  try {
+    const { failures } = remoteReportProblems(report)
+    // 换了账号 / 去处 / 库:上一行不再是「同一路」,不并、删除闸也重新算
+    const scope = `${backend}|${root}`
+    const same = !!lastRemoteRecord && lastRemoteRecord.account === account && lastRemoteRecord.scope === scope
+    // held = 这一轮新拦下等用户定的;删除闸每轮都会重报同一批,不算新的
+    const held = report.pendingDeletions > 0 && !(same && lastRemoteRecord!.pending > 0) ? report.pendingDeletions : 0
+    const idle = report.ok && !report.pushed && !report.pulled && !report.deletedLocal && !report.deletedRemote && !report.conflicts && !held && !failures.length
+    const join = idle && same && lastRemoteRecord!.idle
+    const id = join ? lastRemoteRecord!.id : `remote#${report.startedAt.toString(36)}`
+    lastRemoteRecord = { id, idle, startedAt: report.startedAt, pending: report.pendingDeletions, account, scope }
+    appendSyncRecord({
+      id, feed: 'remote', engine: 'remote', vault: root, target: RECORD_TARGET[backend] ?? 'other',
+      startedAt: report.startedAt, finishedAt: report.finishedAt, completed: report.ok,
+      uploaded: report.pushed, downloaded: report.pulled, merged: 0, renamed: 0,
+      deletedCloud: report.deletedRemote, deletedLocal: report.deletedLocal, held,
+      failed: failures.slice(0, SYNC_RECORD_MAX_FAILED), failedCount: failures.length,
+    }, account)
+  } catch { /* 记录绝不影响同步 */ }
 }
 
 function resetTimer(cfg: RemoteSyncConfig): void {

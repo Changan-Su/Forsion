@@ -92,6 +92,7 @@ import { foreignVaultOwner, refreshAfterLeave, useSharedVault } from './stores/s
 import { byExpiry, daysUntil } from './amadeus/lib/shareState'
 import type { AmadeusPageShare, AmadeusSharedItem } from './types'
 import { openCloudSyncDialog, HeldSyncNotice } from './components/CloudSyncDialog'
+import { VaultSyncChip } from './sync/VaultSyncChip'
 import { track } from './achievements/store'
 import { act } from './activity/log'
 import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 side-effect 导入则块显示「未知块类型」
@@ -815,6 +816,21 @@ function PinnedSection({ row, dragPath }: { row: (path: string) => ReactNode; dr
     >
       {items.map((p) => row(p))}
     </SideSection>
+  )
+}
+
+/** 桌面云端侧(账号的云端笔记库镜像)那一行:名字开云端库面板,状态小字开同步面板(镜像引擎那一路)。 */
+function CloudVaultRow({ onOpen }: { onOpen: () => void }) {
+  const { t } = useI18n()
+  const rowRef = useRef<HTMLDivElement>(null)
+  return (
+    <div className="t2s-special amx-vault-row" ref={rowRef}>
+      <button type="button" className="amx-vault-name" onClick={onOpen} title={t('amxv.cloudVaultTip')}>
+        <span className="t2s-special-ic"><FolderOpen /></span>
+        <span className="t2s-special-title">{t('amxv.cloudVault')}</span>
+      </button>
+      <VaultSyncChip vault={{ root: null, side: 'cloud' }} name={t('amxv.cloudVault')} rowRef={rowRef} />
+    </div>
   )
 }
 
@@ -1856,7 +1872,9 @@ export function AmadeusPagesView() {
         </button>
       )}
       <TrashSection />
-      {!cloudLib && amadeus?.listVaults ? <LocalVaultButton vaultRoot={vaultRoot} /> : <button
+      {!cloudLib && amadeus?.listVaults ? <LocalVaultButton vaultRoot={vaultRoot} />
+        : cloudLib && vaultSide === 'cloud' && window.amadeusSync && !foreignLabel ? <CloudVaultRow onOpen={() => setCloudPanel(true)} />
+          : <button
         className="t2s-special"
         onClick={() => (cloudLib ? setCloudPanel(true) : void ps().openVault())}
         title={cloudLib ? t('amxv.cloudVaultTip') : vaultRoot || undefined}

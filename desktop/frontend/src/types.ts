@@ -1179,6 +1179,9 @@ declare global {
     /** Amadeus 云同步(桌面专属;web/mobile 下为 undefined,设置页/滑块据此隐藏)。 */
     amadeusSync?: {
       get(): Promise<AmadeusSyncStatus>
+      /** 全部引擎(镜像 + 与我共享 + 按条目)的状态,只读(Forsion Extend 带 amadeus:sync:get-all 的版本起;旧的缺位)。
+       *  get() 只回镜像:空闲的条目引擎不会再发事件,状态源启动时要先拉它。 */
+      getAll?(): Promise<{ engines: AmadeusSyncStatus[]; pendingDeletionsTotal: number }>
       setEnabled(on: boolean): Promise<AmadeusSyncStatus>
       syncNow(): Promise<AmadeusSyncStatus>
       /** 放行被删除保护拦下的批量删除(可选:旧 preload 构建下缺位)。 */
@@ -1208,6 +1211,12 @@ declare global {
       onEntrySyncChange?(cb: () => void): () => void
       /** 非活动侧(Local↔Cloud 另一侧)的 .db 只读快照,供 Calendar 汇总两侧日历。null = 无另一侧。 */
       otherSideCalDbs?(): Promise<AmadeusOtherSideDbs | null>
+    }
+    /** 同步记录(一轮一行,按账号存本机,留 30 天;桌面专属,web/mobile 下 undefined)。形状见 shared/vaultSync.ts SyncRoundRecord。 */
+    syncRecords?: {
+      /** feeds / vault:只要这个库的那几路(先筛后截 limit)。 */
+      list(opts?: { since?: number; feeds?: string[]; vault?: string | null; limit?: number }): Promise<import('../../shared/vaultSync').SyncRoundRecord[]>
+      onChanged(cb: () => void): () => void
     }
     /** 本地库远程同步(remotely-save 式,S3/WebDAV/文件夹;桌面专属,web/mobile 下 undefined)。 */
     remoteSync?: {
@@ -1394,6 +1403,14 @@ export interface AmadeusSyncStatus {
   side?: 'local' | 'cloud'
   /** 按条目同步绑定的状态事件携带:该绑定的本地 vault 根(区分多引擎,防互相覆盖)。 */
   binding?: string
+  /** 服务器限速,等到这个时刻(ms);限速不算出错(Forsion Extend 0.10.13+)。 */
+  rateLimitedUntil?: number | null
+  /** 这个引擎自己的待确认删除数(pendingDeletions 是全引擎合计;智库同步统一方案第 1 步起的 Extend 才有)。 */
+  ownPendingDeletions?: number
+  /** 这一轮的进度 / 上一轮做了什么 / 按类归好的失败(同上,旧的没有)。 */
+  round?: import('../../shared/vaultSync').SyncProgress | null
+  lastRound?: { startedAt: number; finishedAt: number; completed: boolean; counts: Record<string, number>; failedCount: number } | null
+  failures?: import('../../shared/vaultSync').SyncFailure[]
 }
 
 /** 市场卡片(浏览列表)。 */
