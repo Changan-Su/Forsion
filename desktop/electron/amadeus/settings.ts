@@ -501,26 +501,58 @@ async function writeStored(out: StoredConfig): Promise<void> {
 }
 
 /** 停止落盘前释放指定的旧钉子。先拿旧远程同步的封口锁,再进配置队列:在途同步也会读配置。 */
-export async function moveSyncVaultPin(expectedRoot: string): Promise<'moved' | 'unchanged' | 'local-vault-unavailable' | 'legacy-remotesync-not-paused'> {
+export async function moveSyncVaultPin(expectedRoot: string, check?: import('../../shared/amadeus/vaultCreate').VaultPinCheck): Promise<'moved' | 'unchanged' | 'local-vault-unavailable' | 'legacy-remotesync-not-paused'> {
   const { withUnusedLegacyRemoteSync } = await import('../remotesyncIpc')
   return withUnusedLegacyRemoteSync(() => {
     const work = writes.then(async () => {
       const disk = await storedConfigStrict()
-      const pinned = disk.syncVault
+      // A first switch away from the implicit pin makes it explicit.
+      const pinned = disk.syncVault === undefined && check?.nextRoot && samePath(disk.localVault, expectedRoot)
+        ? disk.localVault : disk.syncVault
       if (pinned === undefined) return 'unchanged' as const
-      const local = disk.localVault
+      const local = check?.nextRoot ?? disk.localVault
       if (typeof pinned !== 'string' || !path.isAbsolute(pinned)) throw new Error('amadeus-config-malformed')
       if (!samePath(pinned, expectedRoot)) return 'unchanged' as const
       if (typeof local !== 'string' || !path.isAbsolute(local)) return 'local-vault-unavailable' as const
       const out = { ...disk }
       if (samePath(pinned, local)) delete out.syncVault
       else out.syncVault = local
-      await writeStored(out)
+      if (!check?.checkOnly) await writeStored(out)
       return 'moved' as const
     })
     writes = work.then(() => {}, () => {})
     return work
   })
+}
+
+/** Registry operations use the latest disk config and preserve all other fields. */
+export function withVaultRegistry<T>(work: (config: Readonly<StoredConfig>, save: (vaults: NonNullable<StoredConfig['vaults']>) => Promise<void>) => Promise<T>): Promise<T> {
+  const result = writes.then(async () => {
+    await settleLoading()
+    const stored = await storedConfigStrict()
+    if (!validVaultRegistry(stored)) throw new Error('amadeus-config-malformed')
+    return work(stored, (vaults) => writeStored({ ...stored, vaults }))
+  })
+  writes = result.then(() => {}, () => {})
+  return result
+}
+
+const validVaultEntry = (entry: unknown): entry is NonNullable<StoredConfig['vaults']>[number] => {
+  const root = (entry as { root?: unknown } | null)?.root
+  return typeof root === 'string' && path.isAbsolute(root) && !root.includes('\0')
+}
+function validVaultRegistry(stored: StoredConfig): boolean {
+  return stored.vaults === undefined || (Array.isArray(stored.vaults) && stored.vaults.every(validVaultEntry))
+}
+
+/** A filtered snapshot is exclusively for the menu and never enters a write transaction. */
+export async function readVaultMenuRegistry(): Promise<{ config: StoredConfig; degraded: boolean }> {
+  await writes
+  try {
+    const stored = await storedConfigStrict()
+    return validVaultRegistry(stored) ? { config: stored, degraded: false }
+      : { config: { ...stored, vaults: Array.isArray(stored.vaults) ? stored.vaults.filter(validVaultEntry) : [] }, degraded: true }
+  } catch { return { config: {}, degraded: true } }
 }
 
 /** 当前打开的在线库(只认形状,不核账号:账号由调用方比)。没有 = null;配置读不了、或这一项形状不对 → 抛(读失败 ≠ 本机库)。 */
@@ -580,6 +612,7 @@ export function updateLocalVaultConfig(update: (config: AmadeusConfig) => void, 
   const work = writes.then(async () => {
     await settleLoading()
     const disk = await storedConfigStrict() // 读不了就抛、不换库:不拿空底稿盖掉清单和账号配置
+    if (!validVaultRegistry(disk)) throw new Error('amadeus-config-malformed')
     const config = configFrom(disk, accountId)
     update(config)
     return persistConfig(config, accountId, 'drop', disk) // 广播由调用方在换完根以后发

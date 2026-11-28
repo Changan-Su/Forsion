@@ -96,6 +96,7 @@ const SKIP = {
   UnitWindowRoot: '设备的 Unit 窗:主进程开的独立窗(一台设备一扇),手机 / 网页没有多窗口',
   unitWindowId: '同上:判这扇独立窗是不是 Unit 窗(?unit=)',
   MiniRoot: '同上:悬浮 mini 卡片',
+  SyncFocusCapability: '桌面主窗为 Extend 声明设置浮窗的智库定位能力；手机没有设置浮窗和本机落盘 IPC',
   FloatingRoot: '第六种 Panel 的 Electron 原生子窗口根;移动端按产品约定继续使用全屏二级页面,不模拟桌面窗口',
   PipRoot: 'Computer Use 悬浮小画面(?window=pip)的根:一扇置顶的 Electron 系统小窗,只有桌面主进程开得出来;手机没有 window.tangu.computerUsePip,插件就不画「移到悬浮窗」',
   installComputerUsePipHost: '同上:非 pip 窗口替 pip 回答停止 / 状态的应答方,靠主进程的 pipAgent 转发桥;手机只有一个 WebView、没有这座桥,实现本身缺 window.tangu.pipAgentHost 即 no-op',

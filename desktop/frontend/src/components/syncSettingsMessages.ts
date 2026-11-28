@@ -114,7 +114,7 @@ registerMessages({
   'ssync.reason.remote_same_root': { zh: '这个库也配着同步到网盘', en: 'This vault is also set to sync to a network drive' },
   // 只在云端
   'ssync.cloudOnly': { zh: '只在云端', en: 'Cloud only' },
-  'ssync.cloudOnlyHint': { zh: '在网页和手机上能打开；落盘到这台要等下一版', en: 'Opens on the web and phone. Downloading to this computer comes later' },
+  'ssync.cloudOnlyHint': { zh: '选择「落盘到这台…」把智库下载到本机。在线打开要等新版 Forsion。', en: 'Choose Download to this computer… to get a local copy. Opening online needs a newer Forsion.' },
   'ssync.cloudNotes': { zh: '云端笔记', en: 'Cloud notes' },
   'ssync.cloudDevices': { zh: '{names} 落盘', en: 'On {names}' },
   'ssync.cloudDeviceCount': { zh: '{n} 台设备落盘', en: 'On {n} devices' },

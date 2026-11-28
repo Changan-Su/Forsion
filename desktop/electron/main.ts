@@ -6503,7 +6503,8 @@ app.whenReady().then(async () => {
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
   // 第三个参数:同步门禁拦着这次退出时(syncGateChain 在跑),旧引擎的 before-quit 钩子不停同步(取消退出后照常在跑)
-  const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, devPluginRoots, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory, () => syncGateChain !== null)
+  const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, devPluginRoots, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory, () => syncGateChain !== null, () =>
+    floatingTargets.get('settings')?.builtin === 'settings' ? floatingWindows.get('settings') ?? null : null)
   amadeusReadPlugins = readExternalPlugins
   amadeusDevPluginRoots = devPluginRoots
   amadeusVaultFace = vaultFace

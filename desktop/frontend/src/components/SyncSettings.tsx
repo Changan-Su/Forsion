@@ -25,6 +25,9 @@ import { modeFrom, setSyncMode } from '../sync/v2/mode'
 import { K4_CODES, syncErrorText } from '../sync/v2/errors'
 import { formatDate } from '../format/time'
 import { addedItems, closureItems, isExcluded, mergeScope, rebaseScope, removeItem, scopeCovers, topLevelEntries } from '../sync/v2/scope'
+import { downloadPreviewHandoff, type DownloadLibrary } from '../sync/v2/download'
+import { cloudOnlyRows, folderHost, type CloudRow } from '../sync/v2/vaultSurfaces'
+import { DownloadVaultDialog } from './DownloadVaultDialog'
 import type { SyncFocus } from '../sync/v2/openSyncSettings'
 import type { StatusBindingExtras } from '../sync/v2/feed'
 import { PENZOR_SPACE_ID } from '../services/syncSetup'
@@ -34,7 +37,7 @@ import { addFolderTarget, canAuth, cancelAuth, currentTargetKey, finishAuth, has
 import type { SyncTargetSummary } from '../types'
 import type {
   BindingScope, BindingView, Cadence, PreviewTarget, ResolveCandidate, ResolveNameResult, ScopeItem, VaultSyncCompatReason,
-  VaultSyncGet, VaultSyncPreview,
+  VaultSyncGet, VaultSyncPreview, LibrariesValue,
 } from '../sync/v2/types'
 import { ExtendOffNotice, HandoverCard, HeldReview, RecordsBlock, RecoveryList, SummaryCard } from './SyncSettingsParts'
 import './syncSettingsMessages'
@@ -183,7 +186,7 @@ export function SyncSettings({ focus, legacy, drive }: { focus?: SyncFocus; lega
   return <SyncSettingsFull data={gate.data} reload={load} focus={focus} legacy={drive ?? legacy} />
 }
 
-interface Pending {
+export interface Pending {
   root: string
   name: string
   kind: 'cloud' | 'new' | 'scope' | 'target'
@@ -196,6 +199,7 @@ interface Pending {
   preview: VaultSyncPreview | null
   candidates?: ResolveCandidate[]
   note?: string
+  downloadCompare?: boolean
   /** 预演那一刻引擎里这个绑定的范围与去处:过期重来时把「这次改了什么」套到引擎此刻的范围上(scope.ts rebaseScope) */
   base?: BindingScope
   baseTarget?: string
@@ -228,6 +232,19 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   const [names, setNames] = useState<Record<string, ResolveNameResult | { error: string }>>({})
   const [msg, setMsg] = useState<Record<string, string>>({})
   const [pending, setPending] = useState<Pending | null>(null)
+  const [libraries, setLibraries] = useState<{ data: VaultSyncGet; value: LibrariesValue } | null>(null)
+  const [download, setDownload] = useState<DownloadLibrary | null>(null)
+  const canDownload = !!amadeus?.vaultSyncActions?.().download && !!folderHost(amadeus)
+  useEffect(() => {
+    if (!canDownload) return
+    let active = true
+    void vaultSync.libraries().then((r) => { if (active) setLibraries(r.ok ? { data, value: r.value } : null) })
+    return () => { active = false }
+  }, [data, canDownload])
+  const currentLibraries = libraries?.data === data ? libraries.value : null
+  const cloudOnly = useMemo(() => cloudOnlyRows(data, currentLibraries?.list.libraries ?? null), [data, currentLibraries])
+  const canDownloadRow = (row: CloudRow): boolean => canDownload && !!currentLibraries && !currentLibraries.stale && !!row.libraryId && row.kind !== 'default'
+
   const [busy, setBusy] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
   // 范围清单按库根记:切库后旧库的清单不拿来用;读失败 = 不知道(failed),范围不许写(Codex P1-3)
@@ -255,7 +272,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   const deviceLabel = data.device?.name || device
   useEffect(() => {
     let alive = true
-    void (amadeus?.listVaults?.() ?? Promise.resolve(null)).then((rows: LocalVaultRow[] | null) => { if (alive) setVaults(rows ?? []) }).catch(() => { if (alive) setVaults([]) })
+    void (amadeus?.listVaults?.() ?? Promise.resolve(null)).then((rows: LocalVaultRow[] | null) => { if (alive) setVaults(rows) }).catch(() => { if (alive) setVaults(null) })
     return () => { alive = false }
   }, [data])
 
@@ -438,18 +455,35 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   }
   useEffect(() => onAuth((ev) => handleAuth.current(ev)), [])
 
+  const applyInFlight = useRef(false)
+  const cancelSummary = (different = false) => {
+    if (busy || applyInFlight.current || !pending) return
+    ++reqRef.current
+    setPending(null)
+    if (different) say(pending.root, t('landing.renameFirst'))
+  }
   const apply = async (onDiffer: 'newer' | 'hold'): Promise<void> => {
-    if (!pending?.preview) return
+    if (!pending?.preview || applyInFlight.current) return
+    applyInFlight.current = true
+    try {
+      await applyPending(pending, pending.preview, onDiffer)
+    } finally {
+      applyInFlight.current = false
+      setBusy(false)
+    }
+  }
+
+  const applyPending = async (pending: Pending, preview: VaultSyncPreview, onDiffer: 'newer' | 'hold') => {
     setBusy(true)
     // 换去处:卡上带的是出卡那一刻的整份范围。点「开始同步」前再核一次引擎此刻的范围,变了(别处刚排除了什么)就按新的重比,
     // 不把刚排除的带到新去处(Codex P1)
     if (pending.bindingId && pending.base && pending.kind !== 'scope') {
       const g = await vaultSync.get()
       const fresh = g.ok ? g.value?.bindings.find((b) => b.id === pending.bindingId) : undefined
-      if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setBusy(false); setPending(null); say(pending.root, staleCardText(pending, g, fresh, t)); await reload(); return }
-      if (JSON.stringify(fresh.scope) !== JSON.stringify(pending.base)) { setBusy(false); await runPreview({ ...pending, scope: fresh.scope, base: fresh.scope, note: t('ssync.stale') }); return }
+      if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setPending(null); say(pending.root, staleCardText(pending, g, fresh, t)); await reload(); return }
+      if (JSON.stringify(fresh.scope) !== JSON.stringify(pending.base)) { await runPreview({ ...pending, scope: fresh.scope, base: fresh.scope, note: t('ssync.stale') }); return }
     }
-    const r = await vaultSync.apply({ token: pending.preview.token, generation: pending.preview.generation, onDiffer })
+    const r = await vaultSync.apply({ token: preview.token, generation: preview.generation, onDiffer })
     // 跨种类换去处在新那本账写入那一刻被准入拦下(E-16 附 K4):原来那条留在原来的去处、停着。只对准入码回读,回读完之前这一行还算忙
     // (不让人在旧回包落地前又点了别的,Codex P1-2);出卡时开着、现在同一个去处上停着 = 走到了这一步
     let k4 = false
@@ -458,7 +492,6 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       const now = g.ok ? g.value?.bindings.find((x) => x.id === pending.bindingId) : undefined
       k4 = !!now && !now.enabled && targetIdentity(now.target) === pending.baseTarget
     }
-    setBusy(false)
     if (!r.ok && /stale/.test(r.error)) {
       // 过期:改范围的卡按引擎此刻的绑定重算(别人期间去掉 / 加上的不被这张旧卡盖掉);去处变了 / 绑定没了 → 这张卡作废(Codex P1-1)
       if (pending.bindingId && pending.base) {
@@ -487,13 +520,30 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
 
   // 从右键 / 首登卡片带来的落点:滚到那一行,算关联闭包、勾好,出汇总卡
   useEffect(() => {
-    if (!focus?.root || !vaults || consumedFocus.has(focus)) return
+    if (!focus || consumedFocus.has(focus)) return
+    if (focus.libraryId && focus.intent !== 'preview') {
+      if (!currentLibraries) return
+      const row = cloudOnly.find((v) => v.libraryId === focus.libraryId)
+      if (!row) return
+      const el = Array.from(document.querySelectorAll<HTMLElement>('[data-ssync-library]')).find((node) => node.dataset.ssyncLibrary === focus.libraryId)
+      if (!el) return
+      consumedFocus.add(focus)
+      el.scrollIntoView?.({ block: 'center' })
+      if (focus.intent === 'download' && canDownloadRow(row)) setDownload(row)
+      else el.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
+      return
+    }
+    if (!focus.root || !vaults) return
     const row = rows.find((r) => r.root === focus.root)
-    if (!row) return // 库行还没出来(清单在路上):等 rows 变了再来,先别记成处理过
+    if (!row) return
     consumedFocus.add(focus)
     requestAnimationFrame(() => document.querySelector(`[data-ssync-root="${CSS.escape(focus.root!)}"]`)?.scrollIntoView({ block: 'center' }))
     const b = bindingOf(focus.root)
     void (async () => {
+      if (focus.intent === 'preview' && focus.preview && focus.preview.root === row.root) {
+        if (vaults.some((item) => item.root === row.root && item.exists)) await runPreview(downloadPreviewHandoff(focus.preview, row.name))
+        return
+      }
       if (!focus.path) {
         if (focus.intent === 'start' && !b) await startOpen(row.root, row.name, { mode: 'all' }, [])
         return
@@ -511,12 +561,10 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       if (b) await widen(b, mergeScope(b.scope, items, exclude), items)
       else await startOpen(row.root, row.name, mergeScope(null, items, exclude), items)
     })()
-  }, [focus, vaults, rows]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [focus, vaults, rows, cloudOnly, currentLibraries, canDownload]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { if (pending) sumRef.current?.scrollIntoView({ block: 'nearest' }) }, [pending?.preview, pending?.candidates]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const bound = new Set(data.bindings.filter((b) => b.target.kind === 'penzor').map((b) => (b.target as { vaultId: string }).vaultId))
-  const cloudOnly = (data.cloudVaults ?? []).filter((v) => !bound.has(v.id) && !rows.some((r) => r.name === v.name))
   const cadenceValue = data.cadence.kind === 'manual' ? 'manual' : String(data.cadence.minutes)
 
   const groups: HostSettingsGroup[] = [
@@ -567,17 +615,25 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       })),
     },
     ...(cloudOnly.length ? [{
-      id: 'ssync-cloud', anchor: 'ssync-cloud', title: t('ssync.cloudOnly'), desc: t('ssync.cloudOnlyHint'),
+      id: 'ssync-cloud', anchor: 'ssync-cloud', title: t('ssync.cloudOnly'), desc: t(canDownload ? 'ssync.cloudOnlyHint' : 'landing.onlineUnavailable'),
       items: [{ type: 'block' as const, id: 'cloud-only', node: (
         <div className="ssync-block">
           {cloudOnly.map((v) => (
-            <div key={v.id} className="ssync-cloud-row">
+            <div key={v.id} className="ssync-cloud-row" data-ssync-library={v.libraryId}>
               <Cloud size={14} aria-hidden="true" />
               <b>{v.kind === 'default' ? t('ssync.cloudNotes') : v.name}</b>
               <span className="ssync-faint">
                 {v.deviceNames?.length ? t('ssync.cloudDevices', { names: v.deviceNames.join(t('ssync.listSep')) }) : v.devices ? t('ssync.cloudDeviceCount', { n: v.devices }) : t('ssync.cloudNoDevice')}
                 {typeof v.files === 'number' ? ` · ${t('ssync.cloudFiles', { n: v.files })}` : ''}
               </span>
+              {canDownload && <div className="vault-cloud-actions">
+                <button type="button" className="btn ghost sm" disabled={!canDownloadRow(v)}
+                  title={t('landing.onlineUnavailable')} onClick={() => setDownload(v)}>{t('landing.openOnline')}</button>
+                <button type="button" className="btn sm" disabled={!canDownloadRow(v)}
+                  title={v.kind === 'default' ? t('landing.err.default_unsupported') : undefined}
+                  onClick={() => setDownload(v)}>{t('landing.download')}</button>
+              </div>}
+
             </div>
           ))}
         </div>
@@ -636,8 +692,12 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   return (
     <div className="ssync-page" data-ssync-mode="full">
       <SettingsPage host schema={{ groups }} />
+      {download && <DownloadVaultDialog key={download.id} library={download} onClose={() => setDownload(null)}
+        onStarted={() => void reload()} onPreview={(preview, name) => { void runPreview(downloadPreviewHandoff(preview, name)); void reload() }} />}
       {pending && (
         <div className="ssync-sum-dock" ref={sumRef}>
+          {pending.downloadCompare && pending.preview && <button type="button" className="btn ghost sm"
+            disabled={busy} onClick={() => cancelSummary(true)}>{t('landing.different')}</button>}
           {pending.note && <div className="ssync-faint ssync-sum-note" role="status">{pending.note}</div>}
           {pending.candidates ? (
             <section className="ssync-sum" data-ssync-summary="pick">
@@ -654,7 +714,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
             </section>
           ) : (
             <SummaryCard name={pending.name} preview={pending.preview} busy={busy} kind={pending.kind} added={pending.added} remote={pending.target.kind === 'remote'}
-              dest={destOf(pending, data, t)} onApply={(d) => void apply(d)} onCancel={() => { ++reqRef.current; setPending(null) }} />
+              dest={destOf(pending, data, t)} onApply={(d) => void apply(d)} onCancel={() => cancelSummary()} />
           )}
         </div>
       )}

@@ -19,6 +19,7 @@ import { unitWindowId, windowKind } from './windowKind'
 import { DetachedRoot } from './DetachedRoot'
 import { UnitWindowRoot } from './UnitWindowRoot'
 import { MiniRoot } from './MiniRoot'
+import { SyncFocusCapability } from './sync/v2/SyncFocusCapability'
 import { FloatingRoot } from './FloatingRoot'
 import { PipRoot } from './PipRoot'
 import { installComputerUsePipHost } from './computerUsePipHost'
@@ -121,6 +122,7 @@ function boot(activateTangu: Parameters<typeof installEngine>[0]): void {
     <LocaleProvider>
       <HostMotionConfig>
         <ErrorBoundary>
+          {!isPreview && kind === 'main' && <SyncFocusCapability />}
           {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'pip' ? <PipRoot /> : kind === 'detached' ? (unitWindowId() ? <UnitWindowRoot /> : <DetachedRoot />) : <Root />}
         </ErrorBoundary>
       </HostMotionConfig>
