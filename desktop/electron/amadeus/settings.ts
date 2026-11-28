@@ -1,6 +1,6 @@
 // Local vault preferences belong to this device. Cloud bindings belong to one
 // stable Forsion account at one cloud origin, independent of token renewal.
-import { promises as fs, realpathSync } from 'node:fs'
+import { promises as fs, realpathSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
@@ -32,7 +32,7 @@ export interface EntrySyncVault {
 interface CloudAccountConfig {
   cloudSync?: AmadeusCloudSyncConfig
   entrySync?: EntrySyncVault[]
-  /** 智库同步第 2 步(契约 §3.7):按库根的认领。只经 readSyncOwnershipV2 / writeSyncOwnershipV2 读写,readConfig 不带它。 */
+  /** 智库同步第 2 步(契约 §3.7):按库根的认领。readConfig 不带它。 */
   syncOwnershipV2?: SyncOwnershipV2
 }
 
@@ -44,6 +44,12 @@ export interface SyncOwnershipV2 {
   /** 第 3 步(H3 定稿第 1 节,宿主声明 contentSync.mirrorRetire 才认):true = 只停镜像(mirror 仍是 'keep')。盘上只存 true;
    *  set 不给 = 沿用盘上的值,false = 撤销(删键)。 */
   mirrorRetired?: boolean
+}
+
+export interface MirrorRetirementPatch {
+  vaultId: string
+  from: boolean
+  to: boolean
 }
 
 export interface AmadeusConfig extends CloudAccountConfig {
@@ -161,7 +167,7 @@ async function writeBase(): Promise<StoredConfig> {
 
 /** 严格读盘:没有文件 = {};读不了 / 不是 JSON 对象就抛。认领(syncOwnershipV2)只走这条:读失败 ≠ 没认领。
  *  抛固定错误码(会经 ownership 接缝到 Extend 的日志):JSON.parse 的原始报错带一截文件原文(库路径、库名),不往外带。 */
-async function storedConfigStrict(): Promise<StoredConfig> {
+async function storedConfigStrict(normalize = true): Promise<StoredConfig> {
   let raw: string
   try { raw = await fs.readFile(configFile(), 'utf8') } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return {}
@@ -170,7 +176,8 @@ async function storedConfigStrict(): Promise<StoredConfig> {
   let parsed: unknown
   try { parsed = JSON.parse(raw) } catch { throw new Error('amadeus-config-unparseable') }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('amadeus-config-malformed')
-  return normalizeStored(parsed as StoredConfig)
+  const stored = parsed as StoredConfig
+  return normalize ? normalizeStored(stored) : stored
 }
 
 const isOwnership = (v: unknown): v is SyncOwnershipV2 => {
@@ -210,6 +217,65 @@ export function writeSyncOwnershipV2(accountId: string, next: SyncOwnershipV2 | 
     commitCache(out) // 以严格读为底
   })
   writes = work.catch(() => {})
+  return work
+}
+
+/** P-15: CAS 只改当前账号的退役位。严格读盘，保留未归一化的其他字段。 */
+export function patchSyncOwnershipMirrorRetired(
+  accountId: string,
+  { vaultId, from, to }: MirrorRetirementPatch,
+  canCommit: () => boolean,
+  mirrorDir: (account: string) => string,
+  legacyOwned: (account: string) => boolean,
+): Promise<boolean> {
+  const work = writes.then(async () => {
+    if (!accountId || currentCloudAccountId() !== accountId || from === to) return false
+    const disk = await storedConfigStrict(false)
+    const key = cloudAccountNamespace(accountId)
+    const account = disk.cloudAccounts?.[key]
+    if (!account || account.syncOwnershipV2 === undefined) return false
+    const ownership = account.syncOwnershipV2
+    if (!isOwnership(ownership)) throw new Error('syncOwnershipV2 is malformed')
+    const cloud = account.cloudSync
+    const entries = account.entrySync
+    if (cloud !== undefined && (!cloud || typeof cloud !== 'object' || Array.isArray(cloud)
+      || (cloud.enabled !== undefined && typeof cloud.enabled !== 'boolean'))) throw new Error('amadeus-config-malformed')
+    if (entries !== undefined && (!Array.isArray(entries) || !entries.every((entry) =>
+      entry && typeof entry.vaultRoot === 'string' && Array.isArray(entry.entries)))) throw new Error('amadeus-config-malformed')
+    if (ownership.mirror !== 'keep' || typeof vaultId !== 'string' || !vaultId || cloud?.vaultId !== vaultId
+      || (ownership.mirrorRetired === true) !== from || (to && cloud.enabled === false)) return false
+
+    const mirror = mirrorDir(accountId)
+    const pointsToMirror = (root: string, base: string): boolean => {
+      const relative = path.relative(base, root)
+      return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative))
+    }
+    const canonical = (root: string): string => {
+      try { return realpathSync.native(root) } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return path.resolve(root)
+        throw error
+      }
+    }
+    try {
+      const physicalMirror = canonical(mirror)
+      for (const root of [disk.lastVault, disk.localVault, disk.syncVault, ...ownership.entryRoots, ...(entries ?? []).map((entry) => entry.vaultRoot)]) {
+        if (root === undefined) continue
+        if (typeof root !== 'string' || !path.isAbsolute(root) || root.includes('\0')) return false
+        if (pointsToMirror(root, mirror) || pointsToMirror(canonical(root), physicalMirror)) return false
+      }
+    } catch { return false }
+
+    const next = { ...ownership }
+    if (to) next.mirrorRetired = true
+    else delete next.mirrorRetired
+    const out: StoredConfig = { ...disk, cloudAccounts: { ...disk.cloudAccounts, [key]: { ...account, syncOwnershipV2: next } } }
+    return replaceStored(out, () => {
+      if (currentCloudAccountId() !== accountId) return false
+      try { if (legacyOwned(accountId)) return false } catch { return false }
+      return canCommit()
+    })
+  })
+  writes = work.then(() => {}, () => {})
   return work
 }
 
@@ -492,12 +558,30 @@ async function settleLoading(): Promise<void> {
 }
 
 async function writeStored(out: StoredConfig): Promise<void> {
+  await replaceStored(out)
+}
+
+async function replaceStored(out: StoredConfig, canCommit?: () => boolean): Promise<boolean> {
+  const cached = canCommit ? normalizeStored({ ...out }) : out
   const file = configFile()
   await fs.mkdir(path.dirname(file), { recursive: true })
   const tmp = `${file}.tmp-${process.pid}`
-  await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
-  await fs.rename(tmp, file)
-  commitCache(out)
+  let committed = false
+  try {
+    await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
+    if (canCommit) {
+      // No event-loop gap between the final check and the guarded commit.
+      if (!canCommit()) return false
+      renameSync(tmp, file)
+    } else {
+      await fs.rename(tmp, file)
+    }
+    committed = true
+    commitCache(cached)
+    return true
+  } finally {
+    if (!committed) await fs.rm(tmp, { force: true }).catch(() => {})
+  }
 }
 
 /** 停止落盘前释放指定的旧钉子。先拿旧远程同步的封口锁,再进配置队列:在途同步也会读配置。 */

@@ -53,6 +53,9 @@ export interface CloudHost {
       get(account:string): Promise<SyncOwnership>
       /** 先撤后给、读回核对、失败回滚再抛;human 没变不碰引擎;最后让旧引擎按新遮罩重建。 */
       set(o:SyncOwnership,account:string): Promise<void>
+      /** 在账号配置写队列里严格复核退役前提，落盘前检查 canCommit，只改退役位，出队后重启旧引擎。
+       *  前提不满足回 false，配置读失败抛错。 */
+      patchMirrorRetired?(account: string, patch: import('./amadeus/settings').MirrorRetirementPatch, canCommit: () => boolean): Promise<boolean>
       /** 只通知「新同步动过盘」,不写 owner(替代老 changed())。 */
       touched(account:string): Promise<void>
     }

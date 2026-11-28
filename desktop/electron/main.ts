@@ -150,7 +150,8 @@ import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { gatePluginManifest } from '@amadeus-shared/ipc'
-import { currentCloudAccountId as currentAmadeusAccountId, readConfig as readAmadeusConfig, readSyncOwnershipV2, writeSyncOwnershipV2 } from './amadeus/settings'
+import { currentCloudAccountId as currentAmadeusAccountId, patchSyncOwnershipMirrorRetired, readConfig as readAmadeusConfig, readSyncOwnershipV2, writeSyncOwnershipV2 } from './amadeus/settings'
+import { cloudVaultDir } from './amadeus/cloudPaths'
 import { createActiveVaultHost, migrateOnStartup } from './amadeus/activeVault'
 import { syncVaultRoot } from './amadeus/vaultList'
 import { legacyRemoteSync, registerRemoteSync } from './remotesyncIpc'
@@ -4034,6 +4035,7 @@ app.whenReady().then(async () => {
           dataDir: tanguDataDir, stopSync: () => stopAmadeusSync?.(), restartSync: () => restartAmadeusSync?.(),
           readV2: (account) => readSyncOwnershipV2(account),
           writeV2: (account, next) => writeSyncOwnershipV2(account, next),
+          patchMirrorRetired: (account, patch, canCommit) => patchSyncOwnershipMirrorRetired(account, patch, canCommit, cloudVaultDir, contentSyncOwnedStrict),
           entryRoots: async (account) => (await readAmadeusConfig(account)).entrySync?.map((v) => v.vaultRoot) ?? [],
           legacyOwned: (account) => contentSyncOwnedStrict(account),
           log: (m) => console.warn(m),

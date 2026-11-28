@@ -9,7 +9,7 @@ import { mergeDbFile } from '../../tangu-agent/src/contracts/dbRowMerge'
 import { mergeText3With,splitLogBlocks,mergeBlocks,mergeLogHeaders } from '../../tangu-agent/src/contracts/contentMerge'
 import { isMemoryDetailPath } from '../../tangu-agent/src/contracts/memoryLayers'
 import { contentOwnsOf,withContentOwns,withLegacyContentOwner,type ContentOwns } from '../../tangu-agent/src/contracts/contentSyncOwner'
-import type { SyncOwnershipV2 } from './amadeus/settings'
+import type { MirrorRetirementPatch, SyncOwnershipV2 } from './amadeus/settings'
 import { agentSlugLocalOnly,dropForgottenFacts,mergeAgentSyncContent,mergeTombstoneLists,parseAgentContentPath,parseTombstones,sameTombstones,serializeTombstones,validAgentSyncSlug,MEMORY_TOMBSTONES,type WireTombstone } from '../../tangu-agent/src/contracts/agentSyncRules'
 const mergeText3=(ours:string,base:string,theirs:string)=>mergeText3With(ours,base,theirs,diff3Merge)
 const sha256=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex')
@@ -219,6 +219,7 @@ export function contentSyncOwnership(host: ContentSyncOwnershipHost) {
 export interface SyncOwnershipHost extends ContentSyncOwnershipHost {
   readV2(account:string):Promise<SyncOwnershipV2|null>
   writeV2(account:string,next:SyncOwnershipV2|null):Promise<void>
+  patchMirrorRetired?(account:string,patch:MirrorRetirementPatch,canCommit:()=>boolean):Promise<boolean>
   /** 这个账号磁盘上的条目同步根(不遮罩)。 */
   entryRoots(account:string):Promise<string[]>
   /** 老的全局认领(新同步状态文件的 .owned),严格读。 */
@@ -303,8 +304,19 @@ export function contentSyncOwnershipV2(host:SyncOwnershipHost){
     return {entryRoots:[],mirror:'keep',human:'engine'}
   }
 
+  const patch = host.patchMirrorRetired
   return {
     get,
+    ...(patch && {
+      async patchMirrorRetired(account: string, change: MirrorRetirementPatch, canCommit: () => boolean): Promise<boolean> {
+        // Order the disk transaction with set(), which reads before entering the config write queue.
+        const snapshot = { ...change }
+        const changed = await serialized(account, () => patch(account, snapshot, canCommit))
+        // Restart may read or update config through either queue.
+        if (changed) await host.restartSync()
+        return changed
+      },
+    }),
     /** 先撤掉失去所有权的一方,再给得到的一方;中途失败回滚已做的那半再抛,不留半截(契约 §3.7、实现期修订 H-1 第 5 条)。
      *  human 没变就不碰引擎(条目同步接手发生在启动那一刻,不能依赖引擎已经起来)。最后让旧引擎按新遮罩重建。
      *  同一个账号的 set 排队一个接一个;任何时候 human 最多一个写者:拿不准引擎那一位时宁可两边都停。 */
