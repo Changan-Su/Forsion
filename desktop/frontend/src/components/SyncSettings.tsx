@@ -8,7 +8,7 @@
  * 数据与动作一律经 sync/v2/client.ts(两层回复:外层 {ok,value|error},内层软失败 {error})。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Check, ChevronDown, ChevronRight, Cloud, Lock, RefreshCw } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Cloud, Folder, Lock, RefreshCw } from 'lucide-react'
 import { OverlayAt } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
 import type { LocalVaultRow } from '@amadeus-shared/ipc'
@@ -216,7 +216,8 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     if (!r.ok && /stale/.test(r.error)) { await runPreview({ ...pending, note: t('ssync.stale') }); return }
     const p = pending
     setPending(null)
-    say(p.root, r.ok ? t('ssync.started', { name: p.name }) : syncErrorText(r.error, t, p.name))
+    // 成功不另起一行提示:行里的状态就会变成「同步中…」,提示留着反倒在同步完以后还挂着
+    say(p.root, r.ok ? null : syncErrorText(r.error, t, p.name))
     refreshVaultSync()
     await reload()
   }
@@ -242,7 +243,9 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
         ? await window.amadeusSync?.entrySyncClosure?.(focus.path, kind === 'folder' ? 'folder' : 'page').catch(() => null) ?? null
         : null
       const ex = b?.scope.mode === 'some' ? b.scope.exclude ?? [] : []
-      const { items, exclude } = closureItems(focus.path, kind, closure, (p) => ex.includes(p))
+      const { items: all, exclude } = closureItems(focus.path, kind, closure, (p) => ex.includes(p))
+      // 已经被范围盖住的关联项(比如整个 Work 文件夹已在同步)不再单列、不标「刚勾上」
+      const items = b ? all.filter((it) => !scopeCovers(b.scope, it.path)) : all
       if (b) await widen(b, mergeScope(b.scope, items, exclude), items)
       else await startOpen(row.root, row.name, mergeScope(null, items, exclude), items)
     })()
@@ -425,17 +428,31 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
   return (
     <div className="ssync-vault" data-ssync-root={row.root} data-state={b?.state ?? 'none'} data-on={on || undefined}>
       <div className="ssync-vault-main">
+        <Folder size={15} aria-hidden="true" className="ssync-vault-icon" />
         <div className="ssync-vault-id">
-          <b className="ssync-vault-name">{row.name}</b>
-          <span className="ssync-faint ssync-vault-path" title={row.root}>{row.exists ? row.display : t('ssync.missing')}</span>
+          <div className="ssync-vault-line">
+            <b className="ssync-vault-name">{row.name}</b>
+            <span className="ssync-faint ssync-vault-path" title={row.root}>{row.exists ? row.display : t('ssync.missing')}</span>
+          </div>
+          {/* 第二行照 V6:同步到 X ⌄ · 范围 ⌄ · 状态;没绑定的库只写「只在这台」(打开开关再走汇总卡) */}
+          <div className="ssync-vault-line ssync-vault-meta">
+            {b ? (
+              <>
+                <TargetPicker binding={b} />
+                <span className="ssync-dot" aria-hidden="true">·</span>
+                <button type="button" className="ssync-scope-btn" aria-expanded={expanded} onClick={onExpand}>
+                  {scopeLabel}<ChevronDown size={12} aria-hidden="true" />
+                </button>
+                {on && (
+                  <>
+                    <span className="ssync-dot" aria-hidden="true">·</span>
+                    <span className={`ssync-vault-status tone-${words.tone}`} title={words.text}><Mark short={words.short} /><span>{words.text}</span></span>
+                  </>
+                )}
+              </>
+            ) : <span>{t('ssync.thisOnly')}</span>}
+          </div>
         </div>
-        {b && on && (
-          <span className={`ssync-vault-status tone-${words.tone}`} title={words.text}><Mark short={words.short} /><span>{words.text}</span></span>
-        )}
-        <TargetPicker binding={b} />
-        <button type="button" className="ssync-scope-btn" aria-expanded={expanded} disabled={!b} onClick={onExpand}>
-          {scopeLabel}{b && <ChevronDown size={12} aria-hidden="true" />}
-        </button>
         <SettingsSwitch checked={on} disabled={busy || toggling || (!on && !!blocked) || !row.exists} label={t('ssync.switch', { name: row.name })}
           onChange={(next) => { setToggling(true); void onToggle(next).finally(() => setToggling(false)) }} />
       </div>
@@ -574,7 +591,7 @@ function TargetPicker({ binding: b }: { binding: BindingView | undefined }) {
     <>
       <button ref={btn} type="button" className="ssync-target-btn" aria-haspopup="menu" aria-expanded={!!at} title={t('ssync.syncTo')}
         onClick={() => { const r = btn.current!.getBoundingClientRect(); setAt((v) => (v ? null : { x: r.left, y: r.bottom + 4, top: r.top })) }}>
-        <span className="ssync-faint">{t('ssync.syncTo')}</span> {label} <ChevronDown size={12} aria-hidden="true" />
+        <span className="ssync-faint">{t('ssync.syncTo')}</span> <b>{label}</b> <ChevronDown size={12} aria-hidden="true" />
       </button>
       {at && (
         <OverlayAt className="ctx-menu ssync-target-menu" role="menu" x={at.x} y={at.y} anchorTop={at.top} innerRef={(el: HTMLDivElement | null) => { menu.current = el }}>

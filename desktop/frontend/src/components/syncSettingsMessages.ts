@@ -45,7 +45,6 @@ registerMessages({
   'ssync.pickCandidate': { zh: '云端有几个同名的位置，选一个：', en: 'The cloud has more than one place with this name. Pick one:' },
   'ssync.cand.own': { zh: '云端的库「{name}」', en: 'Cloud vault “{name}”' },
   'ssync.cand.legacy': { zh: '「云端笔记」里的「{name}」文件夹', en: 'The “{name}” folder in Cloud notes' },
-  'ssync.started': { zh: '开始同步「{name}」', en: 'Syncing “{name}”' },
   'ssync.stale': { zh: '两边刚有变化，重新比了一下', en: 'Something changed on one side, so this was compared again' },
   // 汇总卡(3B / 2B)
   'ssync.sum.titleCloud': { zh: '云端已经有一份笔记，和这台比了一下', en: 'The cloud already has notes here, compared with this computer' },

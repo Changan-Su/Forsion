@@ -21,23 +21,29 @@
 /* ── 智库行 ── */
 .ssync-vault { padding: 10px 14px; border-top: var(--border-width) solid var(--border); }
 .ssync-vault:first-child { border-top: 0; }
-.ssync-vault-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.ssync-vault-id { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-.ssync-vault-name { color: var(--text); font-size: var(--ui-font-body); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ssync-vault-path { font-size: var(--ui-font-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssync-vault-main { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.ssync-vault-icon { flex: none; margin-top: 3px; color: var(--text-faint); }
+.ssync-vault-id { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.ssync-vault-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ssync-vault-name { flex: none; max-width: 60%; color: var(--text); font-size: var(--ui-font-body); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssync-vault-path { min-width: 0; font-family: var(--font-mono); font-size: var(--ui-font-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssync-vault-meta { align-items: center; flex-wrap: wrap; gap: 2px 4px; font-size: var(--ui-font-meta); color: var(--text-faint); }
+.ssync-dot { color: var(--text-faint); }
 .ssync-vault-status {
-  display: inline-flex; align-items: center; gap: 5px; flex: none; max-width: 30%;
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0;
   font-size: var(--ui-font-meta); color: var(--text-faint); white-space: nowrap; overflow: hidden;
 }
 .ssync-vault-status > span { overflow: hidden; text-overflow: ellipsis; }
 .ssync-vault-status.tone-accent { color: var(--text-light); }
 .ssync-vault-status.tone-warning { color: var(--warning); }
 .ssync-vault-status.tone-danger { color: var(--danger); }
+/* 「同步到 X ⌄」「范围 ⌄」:行内文字按钮(V6),不再是描边小按钮 */
 .ssync-target-btn, .ssync-scope-btn {
-  display: inline-flex; align-items: center; gap: 4px; flex: none; height: 26px; padding: 0 8px;
-  border: var(--border-width) solid var(--border); border-radius: var(--radius-sm);
+  display: inline-flex; align-items: center; gap: 3px; flex: none; padding: 1px 4px; margin: 0 -2px;
+  border: 0; border-radius: var(--radius-xs);
   background: transparent; color: var(--text-light); font: inherit; font-size: var(--ui-font-meta); cursor: pointer;
 }
+.ssync-target-btn > b, .ssync-scope-btn { font-weight: 600; }
 .ssync-target-btn:hover:not(:disabled), .ssync-scope-btn:hover:not(:disabled),
 .ssync-target-btn[aria-expanded='true'], .ssync-scope-btn[aria-expanded='true'] { background: var(--overlay-medium); color: var(--text); }
 .ssync-target-btn:disabled, .ssync-scope-btn:disabled { opacity: 0.55; cursor: default; }
@@ -141,7 +147,8 @@
 .ssync-cand:hover { background: var(--overlay-medium); }
 
 /* 窄窗(设置浮窗缩窄 / 手机):库行换两行 */
-.ssync-page[data-narrow] .ssync-vault-main { flex-wrap: wrap; }
+.ssync-page[data-narrow] .ssync-vault-line:first-child { flex-wrap: wrap; }
+.ssync-page[data-narrow] .ssync-vault-name { max-width: 100%; }
 
 /* ── 退出卡(5C)── */
 .ssync-quit { width: min(420px, calc(100vw - 32px)); }
