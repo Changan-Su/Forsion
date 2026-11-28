@@ -146,6 +146,33 @@ describe('the old engines stop when a read the mask depends on fails (H3 list it
     expect(legacyEngines(await (await hostDeps()).readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultA, vaultB] })
   })
 
+  it('an account config the old engines cannot read (cloudSync not an object, entrySync not a list of roots) gives them the stopped config, keeping the local fields; never a rejection', async () => {
+    const bad: Array<Record<string, unknown>> = [
+      { cloudSync: 'on' }, { cloudSync: ['on'] }, { cloudSync: { enabled: 'false' } },
+      { entrySync: 'x' }, { entrySync: [{ vaultRoot: 1, entries: [] }] }, { entrySync: [{ vaultRoot: vaultA, entries: 'a.md' }] }, { entrySync: [null] },
+    ]
+    for (const over of bad) {
+      vi.resetModules()
+      const cfg = accountConfig()
+      Object.assign(cfg.cloudAccounts[NS], over)
+      await fs.writeFile(cfgFile(), JSON.stringify(cfg))
+      const masked = await (await hostDeps()).readConfig()
+      expect(legacyEngines(masked), JSON.stringify(over)).toEqual(STOPPED)
+      expect(masked.cloudSync, JSON.stringify(over)).toEqual({ enabled: false })
+      expect(masked.lastVault, JSON.stringify(over)).toBe(vaultA)
+      expect(masked.localVault).toBe(vaultA)
+    }
+  })
+
+  it('a config whose top level is null, a list or a string gives the old engines the stopped config, not a rejection', async () => {
+    for (const text of ['null', '[]', '"x"', '7']) {
+      vi.resetModules()
+      await fs.writeFile(cfgFile(), text)
+      expect(legacyEngines(await (await hostDeps()).readConfig()), text).toEqual(STOPPED)
+      expect(await fs.readFile(cfgFile(), 'utf8')).toBe(text)
+    }
+  })
+
   it('the old global claim (owned:true) still masks everything; owned:false does not', async () => {
     await fs.writeFile(cfgFile(), JSON.stringify(accountConfig()))
     await fs.mkdir(path.dirname(stateFile()), { recursive: true })

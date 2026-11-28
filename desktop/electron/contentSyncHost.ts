@@ -68,10 +68,19 @@ export interface MaskedConfigReads<T> {
   /** 老的全局认领(新同步状态文件的 .owned)严格读:没有文件 = false,读不了 / 坏了就抛。 */
   legacyOwned(account:string|null):boolean
 }
+const isRecord=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v)
+/** 旧引擎读得动的账号配置:cloudSync 是对象(enabled 在的话是 boolean),entrySync 是一列带字符串 vaultRoot 和 entries 数组的根。 */
+const maskableShape=(c:{cloudSync?:unknown;entrySync?:unknown}):boolean=>
+  (c.cloudSync===undefined||isRecord(c.cloudSync)&&(c.cloudSync.enabled===undefined||typeof c.cloudSync.enabled==='boolean'))
+  &&(c.entrySync===undefined||Array.isArray(c.entrySync)&&c.entrySync.every(v=>isRecord(v)&&typeof v.vaultRoot==='string'&&Array.isArray(v.entries)))
 /** 旧引擎看到的配置(H3 清单第 6 件):遮罩依赖的读任何一样读不出 = unknown = 整份遮掉,旧引擎按「不知道」停着,
- *  不拿一份看着像「没认领 / 什么都没配」的读数照跑。这份读数只读,不写回。 */
+ *  不拿一份看着像「没认领 / 什么都没配」的读数照跑。这份读数只读,不写回。
+ *  配置本身读不出(读抛错)或账号那几项形状不对,也给停机配置、不 reject(Codex 12b 一轮第 4 条):enabled:false 下旧引擎
+ *  三种引擎都不起,engine.ts 里拿这份读数写回 deviceId / vaultId 的两处走不到;形状不对时本机那几项(lastVault / localVault)照带上。 */
 export async function readMaskedAmadeusConfig<T extends {cloudAccountId?:string|null;cloudSync?:{enabled?:boolean};entrySync?:Array<{vaultRoot:string}>}>(reads:MaskedConfigReads<T>):Promise<T>{
-  const cfg=await reads.readConfig()
+  let cfg:T
+  try{cfg=await reads.readConfig()}catch{return {cloudSync:{enabled:false},entrySync:[]} as unknown as T}
+  if(!maskableShape(cfg))return {...cfg,cloudSync:{enabled:false},entrySync:[]}
   const account=cfg.cloudAccountId??null
   let own:OwnershipRead,legacy=false
   try{

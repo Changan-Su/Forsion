@@ -17,7 +17,7 @@ vi.mock('./forsionAuth', () => ({ loadTanguCreds: () => ({ cloudUrl: 'https://cl
 vi.mock('../shared/forsionAccount', () => ({ forsionAccountId: () => env.account }))
 vi.mock('./amadeus/fs/vaultHandlers', () => ({ withTextWriteLock: async (_p: string, fn: () => Promise<void>) => fn() }))
 
-import { canonRoot, contentSyncOwnedStrict, contentSyncOwnership, contentSyncOwnershipV2, maskAmadeusConfig, readOfflineContentOwns, setOfflineContentOwner, type OwnershipRead } from './contentSyncHost'
+import { canonRoot, contentSyncOwnedStrict, contentSyncOwnership, contentSyncOwnershipV2, maskAmadeusConfig, readMaskedAmadeusConfig, readOfflineContentOwns, setOfflineContentOwner, type OwnershipRead } from './contentSyncHost'
 import { readConfig, readSyncOwnershipV2, writeConfig, writeSyncOwnershipV2, type SyncOwnershipV2 } from './amadeus/settings'
 
 let dir = ''
@@ -341,5 +341,27 @@ describe('contentSyncOwnedStrict: the old global claim, read strictly (Codex 12b
       expect(() => contentSyncOwnedStrict(A), text).toThrow()
       try { contentSyncOwnedStrict(A) } catch (e) { expect(String((e as Error).message), text).not.toMatch(/owned|\/x\/V/) }
     }
+  })
+})
+
+describe('readMaskedAmadeusConfig: every read the mask depends on, with fakes (H3 list item 6, Codex 12b round 1 #4)', () => {
+  const cfg = { lastVault: '/x/VaultA', cloudAccountId: 'https://cloud.test/api::alice', cloudSync: { enabled: true, vaultId: 'v1' }, entrySync: [entry('/x/VaultA')] }
+  const reads = (over: Partial<Parameters<typeof readMaskedAmadeusConfig>[0]> = {}) => ({
+    readConfig: async () => structuredClone(cfg), looseReadFailed: () => false, readV2: async () => null, legacyOwned: () => false, ...over,
+  })
+  const STOPPED_KEEPING_LOCAL = { ...cfg, cloudSync: { enabled: false, vaultId: 'v1' }, entrySync: [] }
+
+  it('nothing failed and nothing claimed: the config goes through', async () => {
+    expect(await readMaskedAmadeusConfig(reads())).toEqual(cfg)
+  })
+  it('a config read that throws gives the stopped config instead of a rejection', async () => {
+    await expect(readMaskedAmadeusConfig(reads({ readConfig: async () => { throw new Error('boom') } }))).resolves.toEqual({ cloudSync: { enabled: false }, entrySync: [] })
+  })
+  it('a loose read marked as failed masks everything even when the strict reads succeed', async () => {
+    expect(await readMaskedAmadeusConfig(reads({ looseReadFailed: () => true }))).toEqual(STOPPED_KEEPING_LOCAL)
+  })
+  it('a v2 read or a legacy-claim read that throws masks everything', async () => {
+    expect(await readMaskedAmadeusConfig(reads({ readV2: async () => { throw new Error('x') } }))).toEqual(STOPPED_KEEPING_LOCAL)
+    expect(await readMaskedAmadeusConfig(reads({ legacyOwned: () => { throw new Error('x') } }))).toEqual(STOPPED_KEEPING_LOCAL)
   })
 })

@@ -201,7 +201,7 @@ export async function readConfig(accountId = currentCloudAccountId()): Promise<A
 
 /** cloudSync.mirror 只属于遮罩读数(见 AmadeusCloudSyncConfig):读盘不带、写盘剔掉。 */
 function withoutMirror(cs: AmadeusCloudSyncConfig | undefined): AmadeusCloudSyncConfig | undefined {
-  if (!cs || !('mirror' in cs)) return cs
+  if (!cs || typeof cs !== 'object' || !('mirror' in cs)) return cs // 盘上坏了的(不是对象)原样给,形状由读的一方判
   const { mirror: _mirror, ...rest } = cs
   return rest
 }
