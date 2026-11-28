@@ -6,7 +6,8 @@
 //   盘上的 activeVault 还在、lastVault 是真目录;window.amadeus 是转发壳(本机桥在 amadeusLocal);插件数据的库那一层
 //   经主窗能写、hostPath 给本机路径 —— 宿主判「在线」只认渲染层的报告,不看盘(负对照:宿主改成看盘 → 这几步红);
 //   之后切走再切回:activeVault 被清掉(切本机库同一次落盘清)。
-//   段 B(坏配置 → 开 lastVault、配置逐字节不变)今天的行为不成立,没加:宽松读把坏配置当 {},走首启建默认库并改写文件。
+//   段 B(坏配置)先不加:main 上宽松读把坏配置当 {},走首启建默认库并改写文件;H3 12b(#954)改了 restoreVault
+//   (内容坏 → 原样挪成 .corrupt-*、从空配置起;I/O 读不了 → 拒绝),等它进 main 再按那套语义补。
 // 截图(菜单亮 / 暗、两行)落 SHOT_DIR,缺省临时目录。跑:node .claude/hooks/devlock.cjs run --vehicle=e2e -- node scripts/check-vault-menu.cjs
 const fs = require('fs'); const os = require('os'); const path = require('path')
 const electron = require('./lib/launch-electron.cjs')
