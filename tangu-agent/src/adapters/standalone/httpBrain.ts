@@ -37,7 +37,7 @@ import { assertToolDefinitions } from '../../tools/toolDefinitionValidation.js';
 import { stringifyWellFormed } from '../../llm/wellFormedJson.js';
 import { hostOriginHeaders } from '../../core/hostOrigin.js';
 import { hostedImages } from './hostedImages.js';
-import { forsionAccountNamespace } from '../../contracts/forsionAccount.js';
+import { forsionAccountNamespace } from '../../core/forsionAccountNamespace.js';
 
 export interface HttpBrainConfig {
   cloudUrl: string; // 形如 https://host(无尾斜杠)

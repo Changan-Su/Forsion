@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-
 /** Stable account identity for local cloud state. JWT decoding is identification only;
  * the server remains responsible for verifying the token before granting access. */
 export function forsionAccountId(cloudUrl: string, token: string): string | null {
@@ -17,10 +15,4 @@ export function forsionAccountId(cloudUrl: string, token: string): string | null
   } catch {
     return null
   }
-}
-
-/** Match cloudAccountNamespace in the desktop host. */
-export function forsionAccountNamespace(cloudUrl: string, token: string): string | null {
-  const accountId = forsionAccountId(cloudUrl, token)
-  return accountId ? createHash('sha256').update(accountId).digest('hex') : null
 }

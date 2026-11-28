@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
-import { forsionAccountNamespace } from '../../dist/contracts/forsionAccount.js';
+import { forsionAccountNamespace } from '../../dist/core/forsionAccountNamespace.js';
 
 export function onlineVaultToken() {
   const payload = Buffer.from(JSON.stringify({ userId: 'online-vault-fixture', jti: randomUUID() })).toString('base64url');
