@@ -69,6 +69,8 @@ export interface MobilePluginStorageDeps {
 
 export interface MobilePluginStorage {
   handle(req: PluginStorageRequest): Promise<unknown>
+  /** Move the vault layer of every plugin after a confirmed cloud library move. */
+  migrateVaultRoot(from: string, to: string): Promise<void>
   /** ctx.storage.url 的地址(同步);rootRel 相对插件数据根(库那一层已带 `vaults/<key>/`)。给不出 → null。 */
   url(pluginId: string, rootRel: string): string | null
 }
@@ -135,6 +137,55 @@ export function createMobilePluginStorage(deps: MobilePluginStorageDeps): Mobile
   }
 
   const tempOf = (abs: string): string => `${abs}.tmp-${nonce}-${++seq}`
+
+  async function migrateVaultRoot(from: string, to: string): Promise<void> {
+    const oldKey = storageVaultKey(from)
+    const newKey = storageVaultKey(to)
+    if (!from.startsWith('cloud://') || !to.startsWith('cloud://') || oldKey === newKey) return
+    const plugins = await fs.list(PLUGIN_STORAGE_DIR)
+    await Promise.all((plugins ?? []).filter((entry) => entry.type === 'directory' && isSafeSlug(entry.name)).map(async (entry) => {
+      const root = pluginRoot(entry.name)
+      const vaults = `${root}/${STORAGE_VAULTS_DIR}`
+      await serial(root, () => migrateVaultLayer(`${vaults}/${oldKey}`, `${vaults}/${newKey}`)).catch(() => {})
+    }))
+  }
+
+  async function migrateVaultLayer(from: string, to: string): Promise<void> {
+    const entries = await fs.list(from)
+    if (entries === null || (await fs.stat(to))?.type === 'file') return
+    await fs.mkdir(to)
+    for (const entry of entries) {
+      if (TEMP_FILE.test(entry.name)) continue // A failed write may have left a backup under this name.
+      const source = `${from}/${entry.name}`
+      const dest = `${to}/${entry.name}`
+      try {
+        if (entry.type === 'directory') {
+          await migrateVaultLayer(source, dest)
+        } else if ((await fs.stat(dest)) === null) {
+          const bytes = await fs.readBytes(source)
+          if (bytes !== null && await copyNewFile(dest, bytes, entry.name)) {
+            const copied = await fs.readBytes(dest)
+            if (!copied || !sameBytes(copied, bytes)) continue
+            await fs.remove(source)
+          }
+        }
+      } catch { /* Keep the source and continue with other entries. */ }
+    }
+  }
+
+  async function copyNewFile(dest: string, bytes: Uint8Array, sourceName: string): Promise<boolean> {
+    const tmp = tempOf(dest)
+    try {
+      await fs.writeBytes(tmp, bytes)
+      const back = await fs.readBytes(tmp)
+      if (!back || !sameBytes(back, bytes)) throw new Error(`Copy of ${sourceName} does not match its source`)
+      if ((await fs.stat(dest)) !== null) return false
+      await fs.rename(tmp, dest)
+      return true
+    } finally {
+      await fs.remove(tmp).catch(() => {})
+    }
+  }
 
   /**
    * 临时文件 + 换名,旧文件「先挪开、换不过去就挪回来」:
@@ -272,17 +323,8 @@ export function createMobilePluginStorage(deps: MobilePluginStorageDeps): Mobile
         continue
       }
       await fs.mkdir(parentOf(dest))
-      const tmp = tempOf(dest)
-      try {
-        await fs.writeBytes(tmp, src)
-        const back = await fs.readBytes(tmp)
-        if (!back || !sameBytes(back, src)) throw new Error(`Copy of ${f.rel || from} does not match its source`)
-        await fs.rename(tmp, dest)
-      } catch (e) {
-        await fs.remove(tmp).catch(() => {})
-        throw e
-      }
-      copied++
+      if (await copyNewFile(dest, src, f.rel || from)) copied++
+      else skipped.push(destRel)
     }
     const log = { status: 'complete', migration: a.migration, from, to: target.rel, into: a.into, copied, skipped, at: new Date().toISOString() }
     await atomicWrite(logFile, utf8Encode(`${JSON.stringify(log, null, 2)}\n`))
@@ -399,5 +441,5 @@ export function createMobilePluginStorage(deps: MobilePluginStorageDeps): Mobile
     return `${base}/${pluginId}/${rel.split('/').map(encodeURIComponent).join('/')}`
   }
 
-  return { handle, url }
+  return { handle, migrateVaultRoot, url }
 }

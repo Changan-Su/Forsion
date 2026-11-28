@@ -87,6 +87,7 @@ void installMobileShim().then(async (ok) => {
             void (window as unknown as { tangu?: { forsionLogout?: () => Promise<void> } }).tangu?.forsionLogout?.()
           },
           pluginExts: () => pluginExts,
+          migratePluginStorage: storage.migrateVaultRoot,
         }) as unknown as Bridge)
       : // 本地 Capacitor vault;cfg 供 fetchLinkMeta(书签卡 server 代理)/searchImages。
         (createMobileAmadeusBridge({ apiBase: () => cloudApi, getToken, pluginExts: () => pluginExts }) as unknown as Bridge)

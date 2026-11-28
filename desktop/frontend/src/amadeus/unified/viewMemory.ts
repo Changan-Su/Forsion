@@ -5,12 +5,14 @@
  * 存在模块 Map；模式、文档滚动与光标(C-23)要跨重启恢复，落 localStorage。
  */
 
-import { forgetViewport, recallViewport, rememberViewport } from './canvasKit/viewport'
+import { forgetViewport, migrateViewportKeys, recallViewport, rememberViewport } from './canvasKit/viewport'
 import { legacyWinRel } from '../lib/vaultFiles'
+import { localStorageKeys, moveLocalStorageEntry } from '../lib/localStorageMigration'
 
 export type NoteSurfaceMode = 'doc' | 'canvas'
 
 const MODE_PREFIX = 'amx.noteSurfaceMode:'
+export const FOLD_PREFIX = 'amx.noteFold:'
 const docScroll = new Map<string, number>()
 
 /** vault 必须进键：两个库都很常见 `untitled.md`，只按相对 path 会串记忆。 */
@@ -67,16 +69,19 @@ const VIEW_CAP = 300
 let viewCache: Record<string, NoteView> | null = null
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 
-function loadViews(): Record<string, NoteView> {
+function parseViews(raw: string | null): Record<string, NoteView> | null {
+  const v: unknown = JSON.parse(raw ?? '{}')
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, NoteView>) : null
+}
+function loadViews(): Record<string, NoteView> | null {
   try {
-    const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}') as unknown
-    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, NoteView>) : {}
+    return parseViews(localStorage.getItem(VIEW_KEY))
   } catch {
-    return {}
+    return null
   }
 }
 function views(): Record<string, NoteView> {
-  if (!viewCache) viewCache = loadViews()
+  if (!viewCache) viewCache = loadViews() ?? {}
   return viewCache
 }
 /** 删除标记当「没有」读。 */
@@ -84,12 +89,13 @@ const live = (v: NoteView | undefined): NoteView | undefined => (v && !v.d ? v :
 /** 把盘上更新的条目(含别的窗口留下的删除标记)并进本窗缓存;本窗更新的留着等防抖落盘。 */
 function syncViews(): void {
   const mine = views()
-  for (const [id, v] of Object.entries(loadViews())) if (!mine[id] || (mine[id].u ?? 0) < (v.u ?? 0)) mine[id] = v
+  for (const [id, v] of Object.entries(loadViews() ?? {})) if (!mine[id] || (mine[id].u ?? 0) < (v.u ?? 0)) mine[id] = v
 }
 function persistViews(): void {
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null }
   const mine = views()
-  const merged: Record<string, NoteView> = loadViews()
+  const merged = loadViews()
+  if (!merged) return
   for (const [id, v] of Object.entries(mine)) if (!merged[id] || (merged[id].u ?? 0) <= v.u) merged[id] = v
   const ids = Object.keys(merged)
   if (ids.length > VIEW_CAP) {
@@ -289,6 +295,87 @@ export function remapNotePageStylePrefix(vaultRoot: string | null | undefined, o
 }
 
 const PROPS_OPEN_PREFIX = 'amx.propsOpen:'
+
+function isStoredPageStyle(raw: string): boolean {
+  const value: unknown = JSON.parse(raw)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  return Object.entries(value).every(([key, v]) => (key === 'w' || key === 's' || key === 'c') ? v === 1 : key === 'f' && (v === 'serif' || v === 'mono'))
+}
+
+function isStoredNoteView(v: NoteView | undefined): boolean {
+  if (!v || v.d || !Number.isFinite(v.u)) return false
+  return Object.entries(v).every(([key, value]) => {
+    if (key === 'u') return true
+    if (key === 's') return Number.isFinite(value)
+    return key === 'c' && !!value && Number.isInteger(value.a) && Number.isInteger(value.h) && typeof value.t === 'string'
+  })
+}
+
+/** Move per-note memory before an editor mounts on the new library root. */
+export function migrateNoteMemoryRoot(from: string, to: string): void {
+  if (from === to) return
+  const remap = (id: string): string | null => {
+    try {
+      const pair: unknown = JSON.parse(id)
+      return Array.isArray(pair) && pair.length === 2 && pair[0] === from && typeof pair[1] === 'string'
+        ? noteMemoryId(to, pair[1]) : null
+    } catch { return null }
+  }
+  const stores: Array<[string, (raw: string) => boolean]> = [
+    [MODE_PREFIX, (raw) => raw === 'doc' || raw === 'canvas'],
+    [LOCK_PREFIX, (raw) => raw === '1'],
+    [PAGE_PREFIX, isStoredPageStyle],
+    [FOLD_PREFIX, (raw) => { const value: unknown = JSON.parse(raw); return Array.isArray(value) && value.every((x) => typeof x === 'string') }],
+  ]
+  for (const key of localStorageKeys()) {
+    const store = stores.find(([prefix]) => key.startsWith(prefix))
+    if (!store) continue
+    const [prefix, isValid] = store
+    const id = remap(key.slice(prefix.length))
+    if (id) moveLocalStorageEntry(key, prefix + id, isValid)
+  }
+  migrateViewportKeys(remap)
+  migrateNoteViews(remap)
+}
+
+function migrateNoteViews(remap: (id: string) => string | null): void {
+  let raw: string | null
+  let disk: Record<string, NoteView> | null
+  try {
+    raw = localStorage.getItem(VIEW_KEY)
+    disk = parseViews(raw)
+  } catch { return }
+  if (!disk) return
+  const sources = { ...disk }
+  for (const [id, value] of Object.entries(viewCache ?? {})) {
+    if (!(id in sources) || ((isStoredNoteView(sources[id]) || sources[id]?.d === 1) && value.u > sources[id].u)) sources[id] = value
+  }
+  const moved: Array<[string, string]> = []
+  for (const [id, value] of Object.entries(sources)) {
+    const next = remap(id)
+    if (!next || next in sources || docScroll.has(next) || !isStoredNoteView(value)) continue
+    disk[next] = value
+    // A stale window may still hold the original view in memory. Keep the same tombstone used by path moves.
+    disk[id] = { d: 1, u: Math.max(Date.now(), value.u + 1) }
+    moved.push([id, next])
+  }
+  if (!moved.length) return
+  try {
+    if (localStorage.getItem(VIEW_KEY) !== raw) return
+    localStorage.setItem(VIEW_KEY, JSON.stringify(disk))
+  } catch { return }
+  for (const [id, next] of moved) {
+    if (viewCache) {
+      viewCache[next] = disk[next]
+      viewCache[id] = disk[id]
+    }
+    const scroll = docScroll.get(id)
+    if (scroll !== undefined) {
+      docScroll.set(next, scroll)
+      docScroll.delete(id)
+    }
+  }
+}
 
 /** 属性区展开 / 折叠(评审 C-19):按**库**记(全库一个偏好,同 Obsidian 的全局开关),不写 md。未记过 = null。 */
 export function readPropsOpen(vaultRoot: string | null | undefined): boolean | null {

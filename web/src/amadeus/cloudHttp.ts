@@ -48,6 +48,7 @@ export interface CloudHttpCfg {
 
 export interface CloudHttp {
   get<T>(path: string, query?: Record<string, string>): Promise<T>
+  checkEventStream(path: string): Promise<void>
   post<T>(path: string, json?: unknown): Promise<T>
   /** onProgress 有值时走 XMLHttpRequest(fetch 无上传进度事件),否则照旧 fetch。 */
   postForm<T>(path: string, form: FormData, onProgress?: (sent: number, total: number) => void): Promise<T>
@@ -75,11 +76,12 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
   const request = async <T>(
     method: string,
     path: string,
-    opts?: { query?: Record<string, string>; json?: unknown; form?: FormData },
+    opts?: { query?: Record<string, string>; json?: unknown; form?: FormData; headersOnly?: boolean },
   ): Promise<T> => {
     const qs = opts?.query ? `?${new URLSearchParams(opts.query).toString()}` : ''
     const headers: Record<string, string> = { Authorization: `Bearer ${assertAccount()}` }
     if (cfg.caps) headers['X-Content-Caps'] = cfg.caps
+    if (opts?.headersOnly) headers.Accept = 'text/event-stream'
     if (method !== 'GET') headers['X-Amadeus-Client'] = cfg.clientId
     let body: BodyInit | undefined
     if (opts?.form) {
@@ -97,6 +99,11 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
     const timer = setTimeout(() => ctrl.abort(), timeoutMs)
     try {
       const res = await (cfg.request ?? fetch)(`${cfg.apiBase}${path}${qs}`, { method, headers, body, signal: ctrl.signal })
+      if (opts?.headersOnly && res.ok) {
+        void res.body?.cancel().catch(() => {})
+        assertAccount()
+        return undefined as T
+      }
       assertAccount()
       if (res.status === 401) {
         cfg.onUnauthorized()
@@ -155,6 +162,7 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
 
   return {
     get: (path, query) => request('GET', path, { query }),
+    checkEventStream: (path) => request('GET', path, { headersOnly: true, query: cfg.caps ? { caps: cfg.caps } : undefined }),
     post: (path, json) => request('POST', path, { json: json ?? {} }),
     postForm: (path, form, onProgress) => (onProgress ? postFormXhr(path, form, onProgress) : request('POST', path, { form })),
     put: (path, json) => request('PUT', path, { json }),

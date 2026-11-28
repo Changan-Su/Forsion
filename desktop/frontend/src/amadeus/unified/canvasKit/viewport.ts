@@ -26,6 +26,15 @@ export const recallViewport = (key: string): Viewport | undefined => viewports.g
 /** 改名 / 移动搬走后清掉旧键:旧路径日后新建的笔记不该继承这一篇的视口。 */
 export const forgetViewport = (key: string): void => { viewports.delete(key) }
 
+export function migrateViewportKeys(remap: (key: string) => string | null): void {
+  for (const [key, viewport] of [...viewports]) {
+    const next = remap(key)
+    if (!next || viewports.has(next)) continue
+    viewports.set(next, viewport)
+    viewports.delete(key)
+  }
+}
+
 export const clampZ = (z: number): number => Math.max(MIN_Z, Math.min(MAX_Z, z))
 
 /** 以 `cx,cy`(宿主局部坐标,已除过页面 zoom)为锚缩放到 nz。 */

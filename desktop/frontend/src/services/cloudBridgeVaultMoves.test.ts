@@ -10,10 +10,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { activeCloudViewPath, activeCloudWirePath, createCloudAmadeusBridge, setCloudNotify } from '../../../../web/src/amadeus/cloudBridge'
+import { activeCloudViewPath, activeCloudWirePath, createCloudAmadeusBridge, setCloudNotify, type CloudBridgeCfg } from '../../../../web/src/amadeus/cloudBridge'
 import { installCloudCollab } from '../../../../web/src/amadeus/cloudCollab'
 import { cloudLibraryState, onCloudLibraryState, readCloudLibrary, rememberCloudLibrary, setPendingOpenNote, type CloudLibraryState } from '../../../../web/src/amadeus/cloudScope'
 import { cloudLibraryRoot } from '../amadeus/lib/cloudLibraryRoot'
+import { readDraft, stashDraft } from '../amadeus/unified/draftStorage'
+import { readNoteSurfaceMode, writeNoteSurfaceMode } from '../amadeus/unified/viewMemory'
 import { clearCloudAccountCache } from './cloudAccountCache'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { emptyDb } from '@amadeus-shared/db/schema'
@@ -216,15 +218,15 @@ const ac = new Set<AbortController>()
 afterEach(() => { for (const c of ac) c.abort(); ac.clear() })
 
 /** 按 library 开桥(默认 = 原位置库 Notes,以 Notes/ 为根)。 */
-async function boot(library: string | null = LEGACY) {
+async function boot(library: string | null = LEGACY, options: Pick<CloudBridgeCfg, 'migratePluginStorage' | 'library' | 'rootPrefix'> = {}) {
   if (library) rememberCloudLibrary(library)
   const ctrl = new AbortController()
   ac.add(ctrl)
-  const bridge = createCloudAmadeusBridge({ apiBase: 'https://cloud.test/api', getToken: () => jwt, onAuthError: vi.fn(), signal: ctrl.signal })
+  const bridge = createCloudAmadeusBridge({ apiBase: 'https://cloud.test/api', getToken: () => jwt, onAuthError: vi.fn(), signal: ctrl.signal, ...options })
   const external: string[] = []
   bridge.onExternalChange((p) => { external.push(p) })
   const info = (await bridge.restoreVault())!
-  return { bridge, info, external, es: () => FakeES.last() }
+  return { bridge, info, external, stop: () => ctrl.abort(), es: () => FakeES.last() }
 }
 
 const writesTo = (v: string) => srv.reqs.filter((r) => r.vault === v && r.method !== 'GET')
@@ -316,9 +318,11 @@ describe('E1 / E2: library list and choice', () => {
     store.removeItem('amadeus.cloudLibrary')
     expect(readCloudLibrary()).toBe(T) // 读不到新键退回老键
     rememberCloudLibrary(LEGACY)
+    store.setItem('amadeus_cloud_moved_from:cloud://split', 'cloud://vault/vault:Amadeus/Notes/')
     clearCloudAccountCache()
     expect(store.getItem('amadeus.cloudLibrary')).toBeNull()
     expect(store.getItem('amadeus.cloudVaultId')).toBeNull()
+    expect(store.getItem('amadeus_cloud_moved_from:cloud://split')).toBeNull()
   })
 
   it('deep link (?vault=&note=) into a legacy folder opens that legacy library and maps the note to the view path', async () => {
@@ -337,9 +341,123 @@ describe('E1 / E2: library list and choice', () => {
   it('a stored legacy library that was split follows splitFrom to the new vault instead of falling back to cloud notes', async () => {
     srv.put(V, 'Notes/a.md', '# a')
     srv.split('Notes/', T)
+    const oldRoot = cloudLibraryRoot(V, LEGACY)
+    stashDraft(oldRoot, 'a.md', 'unsaved changes', '# a', 'leaf-a')
     const { info } = await boot(LEGACY)
     expect(info.root).toBe(cloudLibraryRoot(T, T))
     expect(info.pages).toEqual(['a.md'])
+    expect(readDraft(info.root, 'a.md', 'leaf-a')?.text).toBe('unsaved changes')
+    expect(readDraft(oldRoot, 'a.md', 'leaf-a')).toBeNull()
+  })
+
+  it('keeps drafts previously saved under the whole-vault root on upgrade', async () => {
+    srv.put(V, 'top.md', '# top')
+    stashDraft(`cloud://${V}`, 'top.md', 'saved before upgrade', '# top')
+    store.setItem('amadeus.cloudVaultId', V)
+    const { info } = await boot(null)
+    expect(info.root).toBe(`cloud://${V}`)
+    expect(readDraft(info.root, 'top.md')?.text).toBe('saved before upgrade')
+  })
+
+  it('moves the last draft and note memory when an SSE move is followed by a cached reopen', async () => {
+    srv.put(V, 'Notes/a.md', '# a')
+    const old = await boot()
+    const oldRoot = old.info.root
+    const newRoot = cloudLibraryRoot(T, T)
+    stashDraft(oldRoot, 'a.md', 'before move', '# a')
+    srv.split('Notes/', T)
+    old.es().emit('vault-moved', { prefix: 'Notes/', vaultId: T })
+    expect(readCloudLibrary()).toBe(T)
+    await old.bridge.listPages() // Save the new tree snapshot before the old editor unloads.
+    stashDraft(oldRoot, 'a.md', 'last edit on unload', '# a')
+    writeNoteSurfaceMode(oldRoot, 'a.md', 'canvas')
+    old.stop()
+
+    const migrateStorage = vi.fn(async () => {})
+    const next = await boot(null, { migratePluginStorage: migrateStorage })
+    expect(next.info.root).toBe(newRoot)
+    expect(migrateStorage).toHaveBeenCalledExactlyOnceWith(oldRoot, newRoot)
+    expect(readDraft(newRoot, 'a.md')?.text).toBe('last edit on unload')
+    expect(readDraft(oldRoot, 'a.md')).toBeNull()
+    expect(readNoteSurfaceMode(newRoot, 'a.md')).toBe('canvas')
+    expect(readNoteSurfaceMode(oldRoot, 'a.md')).toBeNull()
+  })
+
+  it('uses the confirmed new root when reopening from the old legacy tree snapshot', async () => {
+    srv.put(V, 'Notes/a.md', '# a')
+    const old = await boot()
+    stashDraft(old.info.root, 'a.md', 'on the old root', '# a')
+    old.stop()
+    srv.split('Notes/', T)
+    const next = await boot(null)
+    expect(next.info.root).toBe(`cloud://${T}`)
+    expect(readDraft(next.info.root, 'a.md')?.text).toBe('on the old root')
+  })
+
+  it('asks the host to reopen if the split is confirmed after the legacy snapshot was published', async () => {
+    srv.put(V, 'Notes/a.md', '# a')
+    const first = await boot()
+    first.stop()
+    srv.split('Notes/', T)
+    let release!: () => void
+    const delayed = new Promise<void>((resolve) => { release = resolve })
+    vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+      if (new URL(input).pathname.endsWith('/libraries')) await delayed
+      return srv.handle(input, init)
+    }))
+    vi.useFakeTimers()
+    try {
+      const booting = boot(null)
+      await vi.advanceTimersByTimeAsync(3_000)
+      const stale = await booting
+      expect(stale.info.root).toBe(first.info.root)
+      release()
+      await vi.waitFor(() => expect(cloudLibraryState()).toMatchObject({ kind: 'moved', reopen: true, prefix: 'Notes/' }))
+      expect(readCloudLibrary()).toBe(T)
+      stashDraft(stale.info.root, 'a.md', 'typed before the delayed reopen', '# a')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(cloudLibraryState()).toMatchObject({ kind: 'moved', reopen: true })
+      stale.stop()
+      const next = await boot(null)
+      expect(readDraft(next.info.root, 'a.md')?.text).toBe('typed before the delayed reopen')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each(['unverified', 'reverted'])('keeps source drafts when a cached target is %s', async (scenario) => {
+    srv.put(V, 'Notes/a.md', '# a')
+    const first = await boot()
+    srv.split('Notes/', T)
+    first.es().emit('vault-moved', { prefix: 'Notes/', vaultId: T })
+    await first.bridge.listPages()
+    first.stop()
+    stashDraft(first.info.root, 'a.md', 'keep at the old root', '# a')
+    if (scenario === 'unverified') srv.state.librariesStatus = 503
+    else {
+      srv.splits.length = 0
+      srv.state.deleted.add(T)
+    }
+    const migrateStorage = vi.fn(async () => {})
+    const next = await boot(null, { migratePluginStorage: migrateStorage })
+    expect(next.info.root).toBe(`cloud://${T}`)
+    expect(readDraft(first.info.root, 'a.md')?.text).toBe('keep at the old root')
+    expect(readDraft(next.info.root, 'a.md')).toBeNull()
+    expect(migrateStorage).not.toHaveBeenCalled()
+  })
+
+  it('moves drafts on explicit reopen before the destination tree has ever been cached', async () => {
+    srv.put(V, 'Notes/a.md', '# a')
+    const old = await boot()
+    srv.split('Notes/', T)
+    old.es().emit('vault-moved', { prefix: 'Notes/', vaultId: T })
+    stashDraft(old.info.root, 'a.md', 'before host reopen', '# a')
+    old.stop()
+    srv.reqs.length = 0
+    const next = await boot(null, { library: { vaultId: T, libraryId: T } })
+    expect(srv.reqs.some((request) => request.route === '/libraries')).toBe(false)
+    expect(next.info.root).toBe(`cloud://${T}`)
+    expect(readDraft(next.info.root, 'a.md')?.text).toBe('before host reopen')
   })
 })
 
@@ -585,6 +703,18 @@ describe('B11: the first sign of a split can be a 404 (no shadow for vault-moves
     expect(putsTo(V)).toHaveLength(0)
   })
 
+  it('treats an Amadeus folder name as a relative split prefix on the wire', async () => {
+    srv.put(V, 'Amadeus/a.md', '# a')
+    const first = await boot(null, { library: { vaultId: V, libraryId: `${V}:Amadeus/Amadeus/` }, rootPrefix: 'Amadeus/Amadeus/' })
+    srv.split('Amadeus/', T)
+    first.es().emit('vault-moved', { prefix: 'Amadeus/', vaultId: T })
+    expect(cloudLibraryState()).toMatchObject({ kind: 'moved', reopen: true, to: { vaultId: T } })
+    stashDraft(first.info.root, 'a.md', 'draft from the folder', '# a')
+    first.stop()
+    const next = await boot(null, { library: { vaultId: T, libraryId: T } })
+    expect(readDraft(next.info.root, 'a.md')?.text).toBe('draft from the folder')
+  })
+
   it('cloud notes view: a stale editor on an excluded/moved prefix writes into the new vault, the prefix disappears from the tree', async () => {
     srv.put(V, 'top.md', '# top')
     srv.put(V, 'Notes/a.md', '# a\n')
@@ -601,6 +731,28 @@ describe('B11: the first sign of a split can be a 404 (no shadow for vault-moves
 })
 
 describe('B12 / E4: deleted vault', () => {
+  it('reads the handshake 410 obscured by EventSource and closes the write gate', async () => {
+    srv.put(V, 'a.md', '# a')
+    const { bridge, es } = await boot(V)
+    srv.state.deleted.add(V)
+    es().onerror?.()
+    await vi.waitFor(() => expect(cloudLibraryState()).toMatchObject({ kind: 'deleted', vaultId: V, purgeAt: '2030-01-01T00:00:00.000Z' }))
+    expect(srv.reqs.filter((r) => r.route === '/events').map((r) => r.caps)).toEqual(['vaults,vault-moves'])
+    const before = srv.reqs.length
+    await expect(bridge.writeTextFile('a.md', 'pending')).rejects.toMatchObject({ status: 410 })
+    expect(srv.reqs).toHaveLength(before)
+  })
+
+  it('keeps a generic handshake failure out of the deleted state', async () => {
+    srv.put(V, 'a.md', '# a')
+    const { bridge, es } = await boot(V)
+    es().onerror?.() // The fake server replies 404 to the handshake probe for a live vault.
+    await flush()
+    expect(cloudLibraryState()).toMatchObject({ kind: 'open', vaultId: V })
+    await bridge.writeTextFile('a.md', 'still live')
+    expect(srv.files(V).get('a.md')?.content).toBe('still live')
+  })
+
   it('410 VAULT_DELETED: stop writing, nothing deleted locally, state handed up; later writes send no request', async () => {
     srv.put(V, 'Notes/a.md', '# a\n')
     const b = await boot(LEGACY)

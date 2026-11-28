@@ -2,6 +2,7 @@ import { setContentStorageScope } from '@lcl/engine/contentStorageScope'
 import { forsionAccountId } from '../../../shared/forsionAccount'
 
 const OWNER_KEY = 'forsion.cloudCacheAccount'
+export const CLOUD_ROOT_MOVE_KEY = 'amadeus_cloud_moved_from'
 
 // layoutPersist and singleColumnStore serialize tab titles, note paths, session IDs,
 // and arbitrary view params. Named layouts also hold the inactive Space snapshots.
@@ -18,6 +19,7 @@ export function clearCloudAccountCache(): void {
       if (key.includes(':account:')) continue // Keep owned snapshots for returning to that account.
       // amadeus.cloudLibrary(智库同步第 3 步切库新键)与老键同样按账号清:否则换号会把上一个账号选的库带过去
       if (key === 'amadeus_tree_snap' || key === 'amadeus.cloudVaultId' || key === 'amadeus.cloudLibrary' ||
+          key.startsWith(`${CLOUD_ROOT_MOVE_KEY}:`) ||
           key.startsWith('amadeus_last_page:') || key === 'forsion.deskBySession' ||
           key === 'forsion_tangu_unread_sessions' || isContentLayoutKey(key)) localStorage.removeItem(key)
     }

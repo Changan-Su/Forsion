@@ -1,14 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_PAGE_STYLE,
+  FOLD_PREFIX,
+  flushNoteViews,
+  migrateNoteMemoryRoot,
   noteMemoryId,
   readDocumentScroll,
+  readNoteCaret,
   readNoteLocked,
   readNotePageStyle,
   readNoteSurfaceMode,
   remapNotePageStylePrefix,
   remapNoteViewMemory,
   writeDocumentScroll,
+  writeNoteCaret,
   writeNoteLocked,
   writeNotePageStyle,
   writeNoteSurfaceMode,
@@ -91,6 +96,71 @@ describe('Amadeus note view memory', () => {
     expect(readNotePageStyle('/a', 'dir/sub/n.md')).toEqual(DEFAULT_PAGE_STYLE)
     expect(readNotePageStyle('/a', 'dirx/n.md').small).toBe(true)
     expect(readNotePageStyle('/b', 'dir/sub/n.md').wide).toBe(true)
+  })
+
+  it('moves note memory, including unflushed positions, while preserving destination entries', () => {
+    const from = 'cloud://vault/vault:Amadeus/Notes/'
+    const to = 'cloud://split'
+    const rel = 'sub/n.md'
+    const caret = { a: 3, h: 5, t: 'abc' }
+    const vp = { x: 1, y: 2, z: 3 }
+    writeDocumentScroll(from, rel, 240)
+    writeNoteCaret(from, rel, caret)
+    writeNoteSurfaceMode(from, rel, 'canvas')
+    writeNoteLocked(from, rel, true)
+    writeNotePageStyle(from, rel, { wide: true })
+    rememberViewport(noteMemoryId(from, rel), vp)
+    data.set(FOLD_PREFIX + noteMemoryId(from, rel), '["h1:Title#0"]')
+    writeNoteSurfaceMode(from, 'conflict.md', 'canvas')
+    writeNoteSurfaceMode(to, 'conflict.md', 'doc')
+    writeDocumentScroll(to, 'conflict.md', 130)
+    writeDocumentScroll(from, 'conflict.md', 500)
+
+    migrateNoteMemoryRoot(from, to)
+    const result = [...data]
+    migrateNoteMemoryRoot(from, to)
+    expect([...data]).toEqual(result)
+    expect(readDocumentScroll(to, rel)).toBe(240)
+    expect(readNoteCaret(to, rel)).toEqual(caret)
+    expect(readNoteSurfaceMode(to, rel)).toBe('canvas')
+    expect(readNoteLocked(to, rel)).toBe(true)
+    expect(readNotePageStyle(to, rel).wide).toBe(true)
+    expect(recallViewport(noteMemoryId(to, rel))).toEqual(vp)
+    expect(data.get(FOLD_PREFIX + noteMemoryId(to, rel))).toBe('["h1:Title#0"]')
+    expect(readNoteCaret(from, rel)).toBeNull()
+    expect(recallViewport(noteMemoryId(from, rel))).toBeUndefined()
+    expect(readNoteSurfaceMode(from, 'conflict.md')).toBe('canvas')
+    expect(readNoteSurfaceMode(to, 'conflict.md')).toBe('doc')
+    expect(readDocumentScroll(from, 'conflict.md')).toBe(500)
+    expect(readDocumentScroll(to, 'conflict.md')).toBe(130)
+    flushNoteViews()
+  })
+
+  it('keeps invalid note records and a corrupt view table in place', () => {
+    const from = 'cloud://vault/vault:Amadeus/Work/'
+    const to = 'cloud://other-split'
+    const key = 'amx.notePage:' + noteMemoryId(from, 'n.md')
+    data.set(key, '{broken')
+    data.set('amx.noteView.v1', 'truncated')
+    writeDocumentScroll(from, 'n.md', 90)
+    migrateNoteMemoryRoot(from, to)
+    flushNoteViews()
+    expect(data.get(key)).toBe('{broken')
+    expect(data.get('amx.noteView.v1')).toBe('truncated')
+    expect(readDocumentScroll(from, 'n.md')).toBe(90)
+    expect(readDocumentScroll(to, 'n.md')).toBe(0)
+  })
+
+  it('keeps parseable entries with unknown note memory fields at the source', () => {
+    const from = 'cloud://vault/vault:Amadeus/Unknown/'
+    const to = 'cloud://unknown-split'
+    const id = noteMemoryId(from, 'unknown.md')
+    const views = JSON.stringify({ [id]: { u: 1, c: 'invalid' } })
+    data.set('amx.notePage:' + id, '{"f":"decorative"}')
+    data.set('amx.noteView.v1', views)
+    migrateNoteMemoryRoot(from, to)
+    expect(data.get('amx.notePage:' + id)).toBe('{"f":"decorative"}')
+    expect(data.get('amx.noteView.v1')).toBe(views)
   })
 
   // Codex 复核 P1:改名搬走的滚动 / 光标不许复活 —— 旧键在盘上换成删除标记(不留原数据),另一个窗口(另一份模块缓存)

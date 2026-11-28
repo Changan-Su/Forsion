@@ -50,6 +50,7 @@ export interface CloudEventsCfg {
   onVaultMoved?(e: { prefix: string; vaultId: string }): void
   /** 第 3 步 S3a:库被删进回收站,主人的流收到 `vault-deleted {purgeAt}` 再断开。收到以后这条循环就停了(重连只会拿 410)。 */
   onVaultDeleted?(e: { purgeAt: string | null }): void
+  onHandshakeFailure?(): void
 }
 
 interface ChangeRecord {
@@ -144,7 +145,8 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
       return
     }
     es = src
-    src.onopen = () => { if (!stopped) backoff = 1000 }
+    let opened = false
+    src.onopen = () => { if (!stopped) { opened = true; backoff = 1000 } }
     src.addEventListener('hello', (e) => {
       if (stopped) return
       let seq: number | null = null
@@ -195,7 +197,9 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
     })
     src.onerror = () => {
       src.close()
-      if (es === src) es = null
+      if (stopped || es !== src) return
+      es = null
+      if (!opened) cfg.onHandshakeFailure?.()
       scheduleRetry()
     }
   }

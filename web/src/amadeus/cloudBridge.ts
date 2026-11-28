@@ -32,6 +32,7 @@ import {
 } from '@amadeus-shared/compiler'
 import { joinRel } from '@amadeus-shared/assets'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
+import { CLOUD_ROOT_MOVE_KEY } from '@/services/cloudAccountCache'
 import { cloudVaultMarkerPath, cloudVaultNamesFrom, parseCloudVaultMarker, type CloudVaultDevice } from '@amadeus-shared/entrySync'
 import { dbFileSchema, parseDb, serializeDb, type DbFile } from '@amadeus-shared/db/schema'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
@@ -72,9 +73,11 @@ import {
   underPrefix,
   vaultIdOfLibrary,
   type CloudLibraryScope,
+  type CloudLibraryState,
   type LibraryDto,
 } from './cloudScope'
 import { cloudLibraryRoot } from '@/amadeus/lib/cloudLibraryRoot'
+import { migrateDraftRoot } from '@/amadeus/unified/draftStorage'
 import { unifiedPaths } from '@/amadeus/unified/lifecycle'
 import { pushPresence, setRoster } from './cloudPresence'
 import { buildAssetUrl, installCloudAssetUrls } from './cloudAssets'
@@ -122,6 +125,8 @@ export interface CloudBridgeCfg {
    *  给了就把它们从页面列表挪进文件列表(树上还在,不进笔记管线)。服务端不知道这台设备装了哪些插件,所以在这里分。
    *  今天只有 Android App 传(mobile/src/main.tsx,名单来自 pluginHost.fileExtensions);不传 = 行为不变。 */
   pluginExts?(): string[]
+  /** Mobile's vault-layer plugin files must be ready before the new root is published. */
+  migratePluginStorage?(from: string, to: string): Promise<void>
   /** 直接指定要开的库(桌面在线打开给 OnlineVaultRef 的 vaultId / libraryId)。不给 = 网页 / 手机按 localStorage 选库(cloudScope)。 */
   library?: { vaultId: string; libraryId: string }
   /** 原位置库以 `<X>/` 为根打开(契约 §3.3):'Amadeus/X/'、'X/'、'X' 都认。只在给了 library 时用;不给 library 时从 /libraries 推。 */
@@ -178,6 +183,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   const libraryKeys = cloudLibraryKeys()
   const TREE_SNAP_KEY = contentStorageKey('amadeus_tree_snap')
   const LAST_PAGE_KEY = contentStorageKey('amadeus_last_page')
+  const rootMoveKey = contentStorageKey(CLOUD_ROOT_MOVE_KEY)
   // randomUUID 需要 secure context(https/localhost);http 内网部署兜底随机串,别让工厂抛挂白屏。
   const clientId =
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -202,8 +208,11 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   let deleted: { purgeAt: string | null } | null = null
   /** 这个桥实例上屏时报给 pageStore 的根(换库以后照旧用它,直到上层按新库重开)。 */
   let openedRoot: string | null = null
+  let rootMove: { from: string; to: string } | null = null
+  let verifiedRoot: string | null = null
+  let lateRestoreMove: Extract<CloudLibraryState, { kind: 'moved' }> | null = null
   const vid = (): string => scope?.vaultId ?? 'default' // 契约:字面量 'default' 可用
-  const rootId = (): string => openedRoot ?? (scope ? cloudLibraryRoot(scope.vaultId, scope.libraryId) : 'cloud://default')
+  const rootId = (): string => openedRoot ?? cloudLibraryRoot(vid(), scope?.libraryId ?? vid())
   const vbase = (v: string): string => `/amadeus/vaults/${encodeURIComponent(v)}`
 
   /** 服务端路径。via = 整库视图里经分走的前缀改投到新库时的那个前缀(回包里的路径要拼回去)。 */
@@ -244,6 +253,23 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   const viewPaths = (ps: string[]): string[] => ps.map(fromWire).filter((x): x is string => x !== null)
   const viewItems = <T extends { path: string }>(xs: T[]): T[] =>
     xs.flatMap((x) => { const p = fromWire(x.path); return p === null ? [] : [{ ...x, path: p }] })
+
+  function rememberRootMove(from: string, to: string): void {
+    rootMove = { from, to }
+    if (!isActive() || cfg.signal?.aborted) return
+    // Record confirmed lineage before the selection changes. The old editor may stash on unload.
+    const key = `${rootMoveKey}:${to}`
+    try {
+      if (localStorage.getItem(key) === null) localStorage.setItem(key, from)
+    } catch { /* An online reopen can still resolve splitFrom. */ }
+  }
+
+  function readRootMoveFrom(to: string): string | null {
+    try {
+      const from = localStorage.getItem(`${rootMoveKey}:${to}`)
+      return from && /^cloud:\/\/([^/]+)\/\1:Amadeus\/.+\/$/.test(from) ? from : null
+    } catch { return null }
+  }
 
   /** 打开哪个库:给了 cfg.library 就是它;否则 /libraries(老服务端 404 → GET /vaults)+ localStorage 选的那个。 */
   async function resolveScope(): Promise<CloudLibraryScope> {
@@ -294,7 +320,20 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         } catch { /* 验证失败 → 回落自有 */ }
       }
       hit ??= live.find((l) => l.kind === 'default') ?? live[0]
-      if (hit) return pick(hit)
+      if (hit) {
+        const from = hit.splitFrom
+        const prefix = httpPrefix(from?.prefix)
+        if (hit.kind === 'own' && hit.id === hit.vaultId && from?.vaultId && from.vaultId !== hit.vaultId &&
+            prefix && from.prefix === `Amadeus/${prefix}`) {
+          const oldLibrary = { vaultId: from.vaultId, libraryId: `${from.vaultId}:${from.prefix}` }
+          const oldRoot = cloudLibraryRoot(oldLibrary.vaultId, oldLibrary.libraryId)
+          rememberRootMove(oldRoot, cloudLibraryRoot(hit.vaultId, hit.id))
+          if (openedRoot === oldRoot) {
+            lateRestoreMove = { kind: 'moved', from: oldLibrary, to: { vaultId: hit.vaultId, libraryId: hit.id }, prefix, reopen: true }
+          }
+        }
+        return pick(hit)
+      }
     }
     // 老服务端(或清单是空的):照旧 GET /vaults(服务端自动建 default + 种子 Calendar.db)
     const r = await http.get<{ vaults: VaultDto[] }>('/amadeus/vaults')
@@ -321,6 +360,13 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     const p = (async () => {
       const s = await resolveScope()
       scope ??= s
+      if (lateRestoreMove && isActive()) {
+        const move = lateRestoreMove
+        lateRestoreMove = null
+        // A cold start already published the legacy snapshot. Keep that editor's root until the host reopens.
+        if (readCloudLibrary(libraryKeys) === move.from.libraryId) rememberCloudLibrary(move.to.libraryId, libraryKeys)
+        emitState(move)
+      }
       return scope
     })()
     scopePromise = p
@@ -351,6 +397,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   }
   const http = {
     get: guard(rawHttp.get),
+    checkEventStream: guard(rawHttp.checkEventStream),
     post: guard(rawHttp.post),
     postForm: guard(rawHttp.postForm),
     put: guard(rawHttp.put),
@@ -383,7 +430,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
   /** 分库了(写回的 409、SSE vault-moved、树的 moved[] 三个来源同一个口子)。prefix 是这个库里的服务端前缀。 */
   function noteMoved(prefixRaw: string, toVaultId: string, source: 'write' | 'event' | 'tree'): boolean {
-    const prefix = httpPrefix(prefixRaw)
+    const prefix = httpPrefix(`Amadeus/${prefixRaw}`) // The event prefix is already relative to Amadeus.
     const s = scope
     if (!prefix || !s || !toVaultId || toVaultId === s.vaultId || deleted) return false
     const from = { vaultId: s.vaultId, libraryId: s.libraryId }
@@ -392,6 +439,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       if (!underPrefix(s.rootPrefix.slice(0, -1), prefix)) return false
       const rest = s.rootPrefix.slice(prefix.length)
       scope = { vaultId: toVaultId, libraryId: rest ? `${toVaultId}:Amadeus/${rest}` : toVaultId, rootPrefix: rest, exclude: [], movesPossible: !!rest }
+      if (s.libraryId === `${s.vaultId}:Amadeus/${s.rootPrefix}`) {
+        rememberRootMove(cloudLibraryRoot(s.vaultId, s.libraryId), cloudLibraryRoot(scope.vaultId, scope.libraryId))
+      }
       if (!cfg.library) rememberCloudLibrary(scope.libraryId, libraryKeys) // 刷新页面就开新库;桌面由宿主定(cfg.library)
       invalidateTree()
       pageCache.clear()
@@ -588,7 +638,10 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const s = await ensureScope()
       const raw = await http.get<TreeDto>(`${vbase(s.vaultId)}/tree`)
       if (scope === s) for (const m of raw.moved ?? []) if (typeof m?.prefix === 'string' && typeof m.vaultId === 'string') noteMoved(m.prefix, m.vaultId, 'tree')
-      if (scope === s) return viewTree(raw)
+      if (scope === s) {
+        verifiedRoot = cloudLibraryRoot(s.vaultId, s.libraryId)
+        return viewTree(raw)
+      }
       // 拉的时候换了库(以 X/ 为根打开的原位置库正好分走了):这棵树是旧位置的,X/ 已经不在里面,到新库重拉
       if (attempt >= 2) throw new Error(translate('amxbridge.connectFailed'))
     }
@@ -702,6 +755,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const r = await http.post<{ token: string; ttlSec: number }>(`${vbase(v)}/asset-token`)
       if (cfg.signal?.aborted || v !== vid()) return // 拿的时候换了库(分库):那边自己会再拿
       assetToken = r.token
+      if (scope && assetToken) verifiedRoot = cloudLibraryRoot(scope.vaultId, scope.libraryId)
       const ttl = Math.max(60, r.ttlSec || 600)
       assetTimer = setTimeout(() => { void refreshAssetToken() }, (ttl / 2) * 1000)
     } catch {
@@ -756,6 +810,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   function startEvents(v: string): void {
     eventsWanted = true
     if (stopEvents || cfg.signal?.aborted || deleted) return
+    let checkingHandshake = false
     stopEvents = startCloudEvents({
       signal: cfg.signal,
       // 能力走 ?caps=(EventSource 设不了头):声明了 vault-moves 才收得到 vault-moved
@@ -790,6 +845,12 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       onPresenceRoster: setRoster,
       onVaultMoved: (e) => { if (v === vid()) noteMoved(e.prefix, e.vaultId, 'event') },
       onVaultDeleted: (e) => { if (v === vid()) noteDeleted(e.purgeAt) },
+      onHandshakeFailure: () => {
+        if (checkingHandshake || v !== vid() || !isActive()) return
+        // EventSource hides the HTTP status. Probe the same handshake and close a successful stream at headers.
+        checkingHandshake = true
+        void http.checkEventStream(`${vbase(v)}/events`).catch(() => {}).finally(() => { checkingHandshake = false })
+      },
     })
     window.addEventListener('beforeunload', () => { stopEvents?.() })
   }
@@ -1133,7 +1194,25 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     document.addEventListener('visibilitychange', onVisible)
     if (cfg.signal?.aborted) done()
   })
+  async function publishRoot(root: string): Promise<string> {
+    const from = rootMove?.to === root ? rootMove.from : readRootMoveFrom(root)
+    const canMigrate = (): boolean => !deleted && isActive() && !cfg.signal?.aborted && !!scope &&
+      cloudLibraryRoot(scope.vaultId, scope.libraryId) === root && verifiedRoot === root
+    // Until a new root is actually opened, the old editor can still stash a draft at the old root on unload.
+    if (from && from !== root && canMigrate()) {
+      const { migrateNoteMemoryRoot } = await import('@/amadeus/unified/viewMemory')
+      if (canMigrate()) await cfg.migratePluginStorage?.(from, root).catch(() => {}) // A later open can retry.
+      if (canMigrate()) {
+        migrateDraftRoot(from, root)
+        migrateNoteMemoryRoot(from, root)
+      }
+    }
+    openedRoot = root
+    return root
+  }
+
   const openCloud = async (): Promise<VaultInfo> => {
+    verifiedRoot = null
     // 冷启动 SWR:有上次的树快照就立即上屏(高 RTT 下工作区秒开,「加载半天」的正解),
     // 真启动(vault 解析/强刷树/asset token/SSE)后台原序照跑,fireStructure 把新树推给
     // pageStore.refreshStructure 刷新。天花板:ACTIVE_VAULT_KEY 指向的共享库被吊销时,
@@ -1147,6 +1226,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       // 记住的是没带 ?at= 的地址、之后不会自愈(Codex 评审 P2)。下面的重连在拉树前也会先补拿 token。
       const token = refreshAssetToken()
       await Promise.race([token, new Promise<void>((r) => setTimeout(r, 3000)).then(() => (scope ? token : undefined))])
+      const snapRoot = cloudLibraryRoot(snap.v, snap.lib)
+      const root = await publishRoot(rootMove?.from === snapRoot ? rootMove.to : snapRoot)
       void (async () => {
         // startEvents 全会话只有这一次机会(restoreVault 被 amadeusBooted 门闩住)→ 失败必须一直重试到连上:
         // 断网冷启动走的就是这条(快照照常上屏),此前三次退避后就放弃,网络回来也不再拉树、实时同步整会话失联。
@@ -1158,7 +1239,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
             if (!assetToken) await refreshAssetToken()
             await fetchTree(true)
             startEvents(vid()) // 拉树时可能认到了分库、换了库:按现在的库起流
-            if (scope && !deleted) emitState({ kind: 'open', vaultId: scope.vaultId, libraryId: scope.libraryId })
+            if (scope && !deleted && rootMove?.from !== openedRoot) {
+              emitState({ kind: 'open', vaultId: scope.vaultId, libraryId: scope.libraryId })
+            }
             fireStructure()
             return
           } catch {
@@ -1171,9 +1254,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       let lp: string | undefined
       try { lp = localStorage.getItem(lastPageKey(snap.lib)) || undefined } catch { /* ignore */ }
       const pages = snap.tree.pages.filter(visiblePage)
-      openedRoot = cloudLibraryRoot(snap.v, snap.lib)
       return {
-        root: openedRoot,
+        root,
         pages,
         folders: snap.tree.folders.filter(visiblePath),
         lastPage: lp && pages.includes(lp) ? lp : undefined,
@@ -1188,10 +1270,10 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     // 与 listPages/listFolders 同一把 visiblePath 尺子:首屏这份载荷直接进 pageStore.pages,
     // 不滤的话 .trash/ 里的笔记与库标记会当成真笔记出现在树里(桌面主进程那侧本就滤)。
     const pages = tree.pages.filter(visiblePage)
-    openedRoot = scope ? cloudLibraryRoot(scope.vaultId, scope.libraryId) : rootId()
+    const root = await publishRoot(scope ? cloudLibraryRoot(scope.vaultId, scope.libraryId) : rootId())
     if (scope && !deleted) emitState({ kind: 'open', vaultId: scope.vaultId, libraryId: scope.libraryId })
     return {
-      root: openedRoot,
+      root,
       pages,
       folders: tree.folders.filter(visiblePath),
       lastPage: lp && pages.includes(lp) ? lp : undefined,

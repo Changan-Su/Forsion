@@ -13,7 +13,7 @@ import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { foldableHeadings, headingFoldKey, hiddenRanges } from './headingFold'
 import { foldableListItems, listFoldKey, listHiddenRangesOf } from './listFold'
-import { noteMemoryId } from './viewMemory'
+import { FOLD_PREFIX, noteMemoryId } from './viewMemory'
 import { effectiveHotkey, eventToHotkey } from '@lcl/engine'
 import { FOLD_BINDINGS } from './foldCommands'
 
@@ -150,7 +150,6 @@ export function runFoldCommand(kind: FoldCommandKind): void {
 
 // ── 本机记忆:内容指纹 ⇄ 文档坐标。────────────────────────────────────────────────
 
-const FOLD_PREFIX = 'amx.noteFold:'
 const MAX_KEYS = 500
 const foldKey = (vaultRoot: string | null | undefined, path: string): string => `${FOLD_PREFIX}${noteMemoryId(vaultRoot, path)}`
 
