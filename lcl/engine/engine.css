@@ -497,6 +497,26 @@ html[lang^='en'] .rb { --rb-w-expanded: 168px; } /* 写在 .rb 上(不只展开�
   border-bottom: var(--border-width, 1px) solid var(--border);
 }
 .cmd-list { overflow-y: auto; padding: 6px; }
+.cmd-command-row { display: flex; align-items: center; gap: 4px; }
+.cmd-command-row > .cmd-item { flex: 1; min-width: 0; }
+.cmd-command-row .cmd-hotkey { flex-shrink: 0; white-space: nowrap; }
+.cmd-title-text { overflow: hidden; text-overflow: ellipsis; }
+.cmd-pin {
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  height: 24px;
+  margin-inline-end: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.cmd-pin:not([aria-disabled]):hover { background: var(--menu-hover); color: var(--text); }
+.cmd-pin[aria-disabled] { cursor: default; }
+.cmd-pin:focus-visible { outline: var(--focus-ring) solid var(--signal-line); }
 .cmd-item {
   width: 100%;
   display: flex;

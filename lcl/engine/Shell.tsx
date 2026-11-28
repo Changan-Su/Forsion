@@ -46,7 +46,7 @@ export const Shell: React.FC<{
           {footer}
         </div>
       </div>
-      <CommandPalette />
+      <CommandPalette hasRibbon={!noRibbon} />
     </div>
   )
 }
