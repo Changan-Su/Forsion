@@ -27,7 +27,7 @@ export const sandboxSelf = () => window.tangu?.sandbox?.self ?? null
 let loads = 0
 let settled = false
 
-type HostFields = 'windowVisible' | 'vault' | 'dialog' | 'filesArmed'
+type HostFields = 'windowVisible' | 'vault' | 'dialog' | 'filesArmed' | 'installed'
 /** 一份状态(形状 = SandboxStatus,主进程补 HostFields,父进程再过一道 parseSandboxStatus)。 */
 function status(pluginId: string): Omit<SandboxStatus, HostFields> {
   const self = sandboxSelf()!

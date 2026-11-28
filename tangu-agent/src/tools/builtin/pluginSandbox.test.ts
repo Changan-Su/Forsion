@@ -20,7 +20,7 @@ const status = (over: Partial<SandboxStatus> = {}): SandboxStatus => ({
   v: 1, state: 'running', pluginId: 'reading-log', name: 'Reading log', version: '0.1.0', dir: '/work/proj/reading-log',
   views: ['shelf'], spaces: [], hiddenSpaces: [], setupError: null, blocked: null, mountErrors: [],
   logs: [{ level: 'warn', text: 'workFolder() not granted' }], warnCount: 1, errorCount: 0, loads: 1, windowVisible: false,
-  vault: '/home/sandbox/reading-log/vault', activeSpace: null, notices: [], dialog: null, filesArmed: null, ...over,
+  vault: '/home/sandbox/reading-log/vault', activeSpace: null, notices: [], dialog: null, filesArmed: null, installed: null, ...over,
 });
 
 const call = (name: string, args: Record<string, unknown>, ctx: ToolContext) =>
@@ -140,6 +140,15 @@ describe('插件说的话圈成数据区', () => {
   });
   it('没报错也没视图:提示多半是注册代码没跑到', () => {
     expect(describeStatus(status({ views: [] }))).toMatch(/registration code never ran/);
+  });
+
+  it('tells the model whether the user already installed this copy (11-28)', () => {
+    expect(describeStatus(status())).not.toMatch(/own Forsion/);
+    expect(describeStatus(status({ installed: { state: 'none', version: '', changed: 0, folder: '' } }))).toMatch(/Not installed in the user's own Forsion/);
+    expect(describeStatus(status({ installed: { state: 'same', version: '0.1.0', changed: 0, folder: '' } }))).toMatch(/Already installed .* 0\.1\.0, with exactly these files. Do not ask them to install it again/);
+    expect(describeStatus(status({ installed: { state: 'older', version: '0.1.0', changed: 3, folder: '' } }))).toMatch(/older install 0\.1\.0; 3 file\(s\) differ/);
+    expect(describeStatus(status({ installed: { state: 'store', version: '0.0.9', changed: 0, folder: 'market-3f2a' } }))).toMatch(/plugins\/market-3f2a.*uninstalled first/);
+    expect(describeStatus(status({ installed: { state: 'unknown', version: '', changed: 0, folder: '' } }))).not.toMatch(/own Forsion/);
   });
 });
 
@@ -299,6 +308,10 @@ describe('契约', () => {
     expect(parseSandboxStatus(old)).toMatchObject({ vault: '', activeSpace: null, notices: [], dialog: null, filesArmed: null });
     expect(parseSandboxStatus({ ...old, dialog: { kind: 'evil' }, filesArmed: 'yes', notices: [{ text: 1 }, { text: 'ok' }] }))
       .toMatchObject({ dialog: null, filesArmed: null, notices: [{ level: 'info', text: 'ok' }] });
+    // installed:老桌面不报 = null;形状不对也是 null,folder 里有路径分隔符的丢掉
+    expect(parseSandboxStatus(old)?.installed).toBeNull();
+    expect(parseSandboxStatus({ ...old, installed: { state: 'nope' } })?.installed).toBeNull();
+    expect(parseSandboxStatus({ ...old, installed: { state: 'store', version: '1', changed: -2, folder: '../x' } })?.installed).toEqual({ state: 'store', version: '1', changed: 0, folder: '' });
     expect(parseSandboxAction({ outline: 'x' })).toBeNull();
     expect(parseSandboxAction({ did: 'clicked', newLogs: Array.from({ length: 60 }, (_, i) => ({ level: 'x', text: `${i}` })) })!.newLogs).toHaveLength(40);
   });

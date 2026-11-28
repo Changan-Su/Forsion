@@ -73,6 +73,7 @@ export function describeStatus(st: SandboxStatus): string {
     `Console: ${st.errorCount} error(s), ${st.warnCount} warning(s); loads so far: ${st.loads}. The user ${st.windowVisible ? 'can see' : 'cannot see'} the sandbox window right now.`,
     st.dialog ? `A native ${st.dialog.kind} dialog is open in the sandbox right now; it blocks the window and does not show in screenshots.` : '',
     st.filesArmed ? `The next file dialog will be answered automatically (${st.filesArmed === 'cancel' ? 'cancelled' : 'with the paths you armed'}).` : '',
+    installedLine(st),
   ].filter(Boolean);
   const data: string[] = [];
   if (st.blocked) data.push(`blocked: ${st.blocked}`);
@@ -82,6 +83,18 @@ export function describeStatus(st: SandboxStatus): string {
   if (st.dialog?.title) data.push(`open dialog title: ${st.dialog.title}`);
   for (const n of st.notices.slice(-5)) data.push(`toast (${n.level}): ${n.text}`);
   return lines.join('\n') + dataBlock(data.join('\n'));
+}
+
+/** 用户自己那份 Forsion 里装没装这一份(11-28 起桌面填;老桌面 = null,不说)。 */
+function installedLine(st: SandboxStatus): string {
+  const i = st.installed;
+  if (!i) return '';
+  const v = i.version ? ` ${fenceSafe(i.version)}` : '';
+  if (i.state === 'none') return 'Not installed in the user\'s own Forsion yet; the user installs it with Install in the sandbox window or on the chat card.';
+  if (i.state === 'same') return `Already installed in the user's own Forsion${v}, with exactly these files. Do not ask them to install it again.`;
+  if (i.state === 'older') return `The user's own Forsion has an older install${v}; ${i.changed} file(s) differ from this copy. They can update it with Update in the sandbox window or on the chat card.`;
+  if (i.state === 'store') return `The user's own Forsion already has this plugin installed separately${v} (plugins/${fenceSafe(i.folder)}, usually from the store); installing this copy needs that one uninstalled first in Settings > Plugins.`;
+  return '';
 }
 
 /** 插件目录里 spaces/<slug>/space.json 的 slug(读不到 = 没有):宿主连列都没列出来的那种,状态里分不出来,只能在这里数。 */

@@ -186,6 +186,7 @@
       "desktop/frontend/src/i18n.tsx",
       "desktop/frontend/src/modelPickerPreferences.ts",
       "desktop/frontend/src/recentViews.ts",
+      "desktop/frontend/src/sandbox/sandboxInstall.ts",
       "desktop/frontend/src/services/accountQuota.ts",
       "desktop/frontend/src/services/agentRunService.ts",
       "desktop/frontend/src/services/backendService.ts",

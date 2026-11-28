@@ -48,6 +48,7 @@
 .sbx-cbtn.primary:hover { filter: brightness(1.06); }
 .sbx-pop {
   width: 320px; /* 位置由 OverlayAt 按「反馈」按钮给出 */
+  z-index: var(--z-menu); /* .ui-popover 不带层级:不给的话被测插件 z-index 稍高的东西就盖在说明 / 回执 / 闲置提示上面 */
   padding: 10px;
   display: flex;
   flex-direction: column;
@@ -68,29 +69,21 @@
   outline: none;
 }
 .sbx-pop textarea:focus { border-color: var(--accent); }
-.sbx-pop-actions { display: flex; justify-content: flex-end; }
-.sbx-note {
-  position: fixed;
-  right: 16px;
-  bottom: 40px; /* 状态栏之上 */
-  z-index: var(--z-window-float, 60);
-  -webkit-app-region: no-drag;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 460px;
-  padding: 8px 8px 8px 12px;
-  border-radius: var(--radius-md);
-  /* 压在插件页面上的提示条 = 浮层档(DESIGN §3「浮层表面」):Genesis / Soft 落回原实色,Glass 给磨砂 */
-  background: var(--surface-float, var(--bg-card));
-  backdrop-filter: var(--surface-blur, none);
-  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
-  box-shadow: var(--card-shadow);
-  color: var(--text-muted);
-  font-size: var(--ui-font-meta);
-  line-height: 1.5;
-}
-.sbx-note > svg { color: var(--accent-ink, var(--accent)); flex: none; }
-.sbx-note-x { flex: none; display: inline-flex; padding: 3px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); cursor: pointer; }
-.sbx-note-x:hover { color: var(--text); background: var(--menu-hover, var(--bg-hover)); }
+.sbx-pop-actions { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+/* 安装回执 / 没装上(11-28):挂在「安装」按钮下,同「报告问题」那块弹层;字号跟顶条一致 */
+.sbx-rcpt { font-size: var(--ui-font-meta); }
+.sbx-rcpt-head { display: flex; align-items: center; gap: 7px; font-size: var(--ui-font-body); font-weight: 600; color: var(--text); }
+.sbx-rcpt-head > svg { flex: none; }
+.sbx-rcpt-head > svg.ok { color: var(--accent-ink, var(--accent)); }
+.sbx-rcpt-head > svg.bad { color: var(--danger); }
+.sbx-rcpt-body { color: var(--text-muted); line-height: 1.55; }
+.sbx-linkbtn { margin-right: auto; padding: 0 2px; border: none; background: none; color: var(--text-faint, var(--text-muted)); font: inherit; cursor: pointer; }
+.sbx-linkbtn:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+.sbx-cbtn.is-on { background: var(--menu-hover, var(--bg-hover)); }
+/* 胶囊下面垂的卡(11-28 细节页第 3、4 条):首次打开的说明、闲置自停前的提示。原来说明条压在插件主区右下角 */
+.sbx-under { width: 280px; }
+.sbx-note-row { display: flex; align-items: flex-start; gap: 8px; }
+.sbx-note-row > svg { flex: none; margin-top: 2px; color: var(--accent-ink, var(--accent)); }
+.sbx-pill.is-idle > svg { color: var(--accent-ink, var(--accent)); }
+.sbx-pill.is-idle > span { color: var(--text); max-width: 160px; }
 @media (prefers-reduced-motion: reduce) { .sbx-pop { animation: none; } }

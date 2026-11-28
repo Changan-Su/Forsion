@@ -136,6 +136,8 @@ export function startSandboxChild(self: SandboxSelf, opts: {
   getWindow(): BrowserWindow | null
   /** 设置窗口(独立的浮动面板,11-15 起 agent 能经 settings 动作打开它、按 window 选它动手);老接线不给 = 没有。 */
   getSettingsWindow?(): BrowserWindow | null
+  /** 安装确认框弹着时让开置顶的浮窗(钉住的浮动面板 / 插件桌面小窗),回放回去的函数(main.ts yieldPinnedWindows)。 */
+  yieldPinned?(): () => void
   quit(): void
   log(m: string): void
 }): void {
@@ -515,9 +517,57 @@ export function startSandboxChild(self: SandboxSelf, opts: {
     if (s) await hook('reloadPlugin()', 30_000, s)
   }
 
+  // ── 安装到用户那份 Forsion(11-28 方案 A):确认框挂在沙箱窗口上;装没装 / 装的结果给顶条 ──
+  /** 父进程最近一次说的「用户那份装没装这一份」(SandboxInstalled);渲染层起来时先要一次,之后跟着推。 */
+  let hostInstalled: unknown = null
+  /** 父进程说的「快自动停了」(on + stopAt + idleMinutes);收回 = null。 */
+  let idleWarn: Record<string, unknown> | null = null
+  let yielded: (() => void) | null = null
+  const toRenderer = (channel: string, payload: unknown): void => {
+    for (const w of [win(), settingsWin()]) if (w && !w.webContents.isDestroyed()) w.webContents.send(channel, payload)
+  }
+  const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
+  /** 父进程给的确认框(文案它按用户那份的语言写好):系统框挂在沙箱主窗上,插件的网页代码点不到。弹着的时候钉住的浮窗先让开。 */
+  async function confirmInstall(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const w = win()
+    if (!w) return { error: 'the sandbox window is closed' }
+    const buttons = Array.isArray(args.buttons) ? args.buttons.slice(0, 2).map((b) => text(b, 40)) : []
+    if (buttons.length !== 2 || buttons.some((b) => !b)) return { error: 'bad dialog' }
+    unsink()
+    if (w.isMinimized()) w.restore()
+    w.show(); w.focus()
+    // 台架(check:pluginsandbox)替用户点:只认开发构建,打包版里这个环境变量不起作用
+    const auto = !app.isPackaged ? process.env.FORSION_HARNESS_SANDBOX_CONFIRM : undefined
+    if (auto === '0' || auto === '1') return { response: Number(auto) }
+    const restore = opts.yieldPinned?.() ?? null
+    try {
+      // 走包过的 dialog.showMessageBox:弹着的时候状态里 dialog 有值,agent 的动作一律先拒(它会挡住窗口)
+      const r = await dialog.showMessageBox(w, {
+        type: 'question', title: text(args.title, 200), message: text(args.message, 600), detail: text(args.detail, 8000),
+        buttons, defaultId: 0, cancelId: 1, noLink: true,
+      })
+      return { response: r.response }
+    } finally { restore?.() }
+  }
+
   async function handle(msg: Record<string, unknown>): Promise<Record<string, unknown>> {
     const args = (msg.args && typeof msg.args === 'object' ? msg.args : {}) as Record<string, unknown>
     switch (msg.op) {
+      case 'confirmInstall': return stage ? { error: 'unknown op' } : confirmInstall(args)
+      case 'yieldPinned': {
+        // 用户那份的主窗上弹确认框期间(卡片上点的安装):这边钉住的浮窗先让开,不然盖在它上面
+        if (args.on === true && !yielded) yielded = opts.yieldPinned?.() ?? null
+        else if (args.on !== true && yielded) { yielded(); yielded = null }
+        return {}
+      }
+      case 'installed': hostInstalled = args.installed ?? null; toRenderer('pluginSandbox:installed', hostInstalled); return {}
+      case 'installResult': toRenderer('pluginSandbox:installResult', args); return {}
+      case 'idleWarn': {
+        idleWarn = args.on === true && typeof args.stopAt === 'number'
+          ? { stopAt: args.stopAt, idleMinutes: typeof args.idleMinutes === 'number' ? args.idleMinutes : 15 } : null
+        toRenderer('pluginSandbox:idleWarn', idleWarn)
+        return {}
+      }
       case 'status': return { status: await status() }
       case 'screenshot': {
         const p = pick(args)
@@ -613,10 +663,18 @@ export function startSandboxChild(self: SandboxSelf, opts: {
   // 沙箱条上的按钮:报告问题 / 安装到我的 Forsion / 重置 —— 只转给父进程,决定在那边做
   ipcMain.handle('pluginSandbox:childAction', (_e, action: unknown, note: unknown) => {
     if (action === 'report') send({ event: 'report', note: typeof note === 'string' ? note.slice(0, 2000) : '' })
-    else if (action === 'install' || action === 'reset') send({ event: action })
+    // 回执卡上的「重新安装」= install + force(装的就是这一份时父进程不再悄悄覆盖)
+    else if (action === 'install') send({ event: 'install', ...(note === 'force' ? { force: true } : {}) })
+    // openHost 带 note 'settings' = 直接开它的设置页(另装着一份、要先卸载的那种)
+    else if (action === 'openHost') send({ event: 'openHost', ...(note === 'settings' ? { settings: true } : {}) })
+    else if (action === 'reset' || action === 'close') send({ event: action })
+    // 闲置提示上的「继续用」:只认沙箱主窗有焦点的时候(人刚在这扇窗里点过);插件代码在后台自己调续不了命
+    else if (action === 'keepAlive') { if (!win()?.isFocused()) return false; send({ event: 'keepAlive' }) }
     else return false
     return true
   })
+  ipcMain.handle('pluginSandbox:installedNow', () => hostInstalled)
+  ipcMain.handle('pluginSandbox:idleWarnNow', () => idleWarn)
   // 渲染层装载落定 / 重载完会报一次,父进程那边的卡片跟着变;用户切进 / 切出沙箱窗口也报(父进程据此算闲置)
   ipcMain.on('pluginSandbox:changed', () => { void pushState() })
   app.on('browser-window-focus', () => { unsink(); void pushState() })

@@ -9,7 +9,9 @@
  *   4 在沙箱里跑插件命令;命令里调 window.tangu.sandbox.action('report') → 父进程把话放进对话输入框
  *   5 setup 抛错 → 状态 failed,带原文
  *   6 对话卡:工具结果里嵌的状态画成沙箱卡,「打开沙箱窗口」可点
- *   7 安装到我的 Forsion(确认框在台架里自动点「安装」)→ plugins/<id> 出现,不带 node_modules
+ *   7 安装到我的 Forsion(确认框在台架里自动点「安装」)→ plugins/<id> 出现,不带 node_modules;
+ *     (11-28 方案 A)装完状态 same、卡片变「已安装」;再点不弹框不重装(code same);从沙箱窗口点的安装,确认框在沙箱进程那边
+ *     (台架用 FORSION_HARNESS_SANDBOX_CONFIRM 替用户点,只认开发构建),用户那份主窗上不弹;改了插件 → older、按钮叫「更新」
  *   8 停止 → 子进程退出;再关父进程不留孤儿
  *   9 负对照:非插件文件夹 → invalid_args,不起进程
  *  11 (11-03)插件带的 Space 列得出来、启动就落在它上面;Ribbon 上没有内置 Space;沙箱 home 里没播种内置插件
@@ -84,13 +86,16 @@ ctx.registerCommand({ id: 'fixture-toast', title: 'Fixture toast', run() {
 } })
 // 一个按钮正好在右下角、压在首次说明条底下(11-23):插件自己报它此刻是不是真被说明条盖着,断言不会空过
 ctx.registerCommand({ id: 'fixture-corner', title: 'Fixture corner', run() {
-  const b = document.createElement('button'); b.textContent = 'Corner action'; b.style.cssText = 'position:fixed;right:24px;bottom:46px;width:110px;height:24px;z-index:50'
+  // 说明卡 11-28 起挂在「沙箱」胶囊下面:按钮摆在它正底下(插件顶部工具条那一带,原来是右下角)
+  const n = document.querySelector('[data-testid="sandbox-note"]'); const nr = n ? n.getBoundingClientRect() : { left: innerWidth - 300, top: innerHeight - 80, width: 280, height: 60 }
+  const b = document.createElement('button'); b.textContent = 'Corner action'; b.style.cssText = 'position:fixed;left:' + Math.round(nr.left + nr.width / 2 - 55) + 'px;top:' + Math.round(nr.top + nr.height / 2 - 12) + 'px;width:110px;height:24px;z-index:50'
   b.onclick = () => console.log('CORNER_CLICKED'); document.body.append(b)
   const r = b.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-  console.log('CORNER_COVERED ' + !!(top && top.closest('[data-testid="sandbox-note"]')))
+  console.log('CORNER_COVERED ' + !!(top && top.closest('[data-testid="sandbox-note"]')) + ' note=' + !!n + ' top=' + (top ? top.tagName + '.' + top.className : '-') + ' z=' + (n ? getComputedStyle(n).zIndex : '-'))
 } })
 ctx.registerCommand({ id: 'fixture-ping', title: 'Fixture ping', run(a) { console.log('FIXTURE_PING ' + JSON.stringify(a || {})) } })
 ctx.registerCommand({ id: 'fixture-report', title: 'Fixture report', run() { window.tangu.sandbox.action('report', 'FIXTURE_NOTE_FROM_SANDBOX') } })
+ctx.registerCommand({ id: 'fixture-install', title: 'Fixture install', run(a) { window.tangu.sandbox.action('install', a && a.force ? 'force' : undefined) } })
 return () => {}
 `
 function writePlugin(source) {
@@ -301,7 +306,7 @@ async function main() {
       args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT],
       cwd: ROOT,
       ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}),
-      env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, ELECTRON_DISABLE_SECURITY_WARNINGS: '1',
+      env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, ELECTRON_DISABLE_SECURITY_WARNINGS: '1', FORSION_HARNESS_SANDBOX_CONFIRM: '0',
         ...(WINDOWS_FOREGROUND ? { TANGU_HARNESS_QUIET: '0' } : {}) },
       timeout: 45_000,
     })
@@ -315,7 +320,9 @@ async function main() {
     for (const label of ['跳过引导', 'Skip']) { const b = win.locator(`text=${label}`).first(); if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break } }
     await win.waitForSelector('.dv-groupview', { timeout: 45_000 })
     // 确认框在台架里自动点「安装」(第 0 个按钮);别的对话框不受影响
-    await app.evaluate(({ dialog }) => { const orig = dialog.showMessageBox; dialog.showMessageBox = async (w, o) => ((o && o.title) === '安装插件' || (o && o.title) === 'Install plugin' ? { response: 0, checkboxChecked: false } : orig.call(dialog, w, o)) })
+    // 记下用户那份主窗上弹了几次安装确认框:从沙箱窗口点的安装不该弹在这里(11-28 方案 A)
+    await app.evaluate(({ dialog }) => { globalThis.__sbxInstallBoxes = 0; const orig = dialog.showMessageBox; dialog.showMessageBox = async (w, o) => ((o && o.title) === '安装插件' || (o && o.title) === 'Install plugin' ? (globalThis.__sbxInstallBoxes++, { response: 0, checkboxChecked: false }) : orig.call(dialog, w, o)) })
+    const hostBoxes = () => app.evaluate(() => globalThis.__sbxInstallBoxes)
 
     check('0 用户那份声明了 plugin.sandbox(桌面能力面装上了)',
       await win.evaluate(() => !!window.tangu?.pluginSandbox && !window.tangu?.sandbox))
@@ -495,8 +502,8 @@ async function main() {
     await exec('command', { command: 'fixture-corner' })
     const covered = await until(async () => (await status())?.logs?.find((l) => l.text.startsWith('CORNER_COVERED'))?.text, 5000)
     const cornerClick = await act('click', { target: 'Corner action' })
-    check('14e2 被测插件右下角的按钮压在「这是沙箱」说明条底下 → 说明条先收起,点到的是插件的按钮(11-23)',
-      covered === 'CORNER_COVERED true' && cornerClick.a?.newLogs?.some((l) => l.text === 'CORNER_CLICKED') && !/on top of it/.test(cornerClick.a?.target || ''),
+    check('14e2 被测插件的按钮压在「这是沙箱」说明卡(胶囊下面)底下 → 说明卡先收起,点到的是插件的按钮(11-23;11-28 挪到胶囊下)',
+      /^CORNER_COVERED true/.test(covered || '') && cornerClick.a?.newLogs?.some((l) => l.text === 'CORNER_CLICKED') && !/on top of it/.test(cornerClick.a?.target || ''),
       JSON.stringify({ covered, click: cornerClick.r.error || cornerClick.a }))
     const noSettings = await act('read', { window: 'settings' })
     const opened = await act('settings', {})
@@ -546,8 +553,27 @@ async function main() {
     await until(async () => (await status())?.state === 'running', 25_000)
 
     // ── 7 安装 ──
+    const live7 = () => win.evaluate(() => window.tangu.pluginSandbox.state())
+    const before7 = await until(async () => { const l = await live7(); return l?.installed?.state === 'none' && l }, 8_000)
+    check('7a 还没装:状态 installed = none,工具结果里也带着', !!before7 && (await status())?.installed?.state === 'none', JSON.stringify((await live7())?.installed))
     const inst = await win.evaluate(() => window.tangu.pluginSandbox.install())
     check('7 安装到我的 Forsion:plugins/<id> 出现,不带 node_modules', inst.ok && fs.existsSync(path.join(home, 'plugins', PLUGIN_ID, 'main.js')) && !fs.existsSync(path.join(home, 'plugins', PLUGIN_ID, 'node_modules')), JSON.stringify(inst))
+    check('7b 装完 → installed = same(实时状态);主窗上弹过一次确认框', inst.installed?.state === 'same' && (await live7())?.installed?.state === 'same' && await hostBoxes() === 1, JSON.stringify({ inst, boxes: await hostBoxes() }))
+    const cardDone = await until(async () => { const tx = await win.locator('[data-sandbox-card]').first().textContent().catch(() => ''); return /已安装/.test(tx) && /在我的 Forsion 打开/.test(tx) && !/安装到我的 Forsion/.test(tx) }, 8_000)
+    check('7c 对话卡变成「已安装」,按钮换成「在我的 Forsion 打开」,不再有「安装到我的 Forsion」', cardDone, await win.locator('[data-sandbox-card]').first().textContent().catch(() => 'no card'))
+    const again7 = await win.evaluate(() => window.tangu.pluginSandbox.install())
+    check('7d 装的就是这一份再点安装 → 不弹框、不重装(code same)', again7.ok === false && again7.code === 'same' && await hostBoxes() === 1, JSON.stringify({ again: again7, boxes: await hostBoxes() }))
+    // 从沙箱窗口点(插件命令替用户点顶条的按钮):带 force 才重装;确认框在沙箱进程那边弹(台架让它直接回 0 号按钮「安装」),主窗不弹
+    const mtime0 = fs.statSync(path.join(home, 'plugins', PLUGIN_ID, 'main.js')).mtimeMs
+    await exec('command', { command: 'fixture-install', args: { force: true } })
+    const reinstalled = await until(() => fs.statSync(path.join(home, 'plugins', PLUGIN_ID, 'main.js')).mtimeMs !== mtime0, 10_000)
+    check('7e 沙箱窗口里点的(重新)安装:确认在沙箱那边,用户那份主窗上没弹框,照样装上', reinstalled && await hostBoxes() === 1, JSON.stringify({ reinstalled, boxes: await hostBoxes() }))
+    if (SHOT_DIR) { await win.waitForTimeout(600); const sh = await exec('screenshot'); saveShot('sandbox-install-receipt.jpg', sh.image) }
+    writePlugin(mainJs('SBX_MARK_FOUR'))
+    const older7 = await until(async () => { const l = await live7(); return l?.installed?.state === 'older' && l }, 25_000)
+    const cardUpdate = older7 && await until(async () => /更新到我的 Forsion/.test(await win.locator('[data-sandbox-card]').first().textContent().catch(() => '')), 8_000)
+    check('7f 改了插件(保存即重载)→ installed = older,卡片的按钮叫「更新到我的 Forsion」', !!older7 && !!cardUpdate, JSON.stringify((await live7())?.installed))
+    if (SHOT_DIR && cardDone) await win.locator('[data-sandbox-card]').first().screenshot({ path: path.join(SHOT_DIR, 'sandbox-card-update.png') })
 
     // ── 9 负对照 ──
     const notPlugin = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-plugsbx-not-'))

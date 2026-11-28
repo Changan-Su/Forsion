@@ -60,6 +60,8 @@ describe('normalizeMainAction', () => {
     expect(normalizeMainAction('open-space', 'forsion-penzor')).toEqual({ action: 'open-space', payload: 'forsion-penzor' })
     expect(normalizeMainAction('open-space', '')).toBeUndefined()
     expect(normalizeMainAction('open-space', 'x'.repeat(65))).toBeUndefined()
+    expect(normalizeMainAction('open-plugin', '{"id":"reading-log"}')).toEqual({ action: 'open-plugin', payload: '{"id":"reading-log"}' })
+    expect(normalizeMainAction('open-plugin', '')).toBeUndefined()
     expect(normalizeMainAction('open-link', 'forsion://space/tangu')).toEqual({ action: 'open-link', payload: 'forsion://space/tangu' })
     expect(normalizeMainAction('open-link', 'x'.repeat(4097))).toBeUndefined()
     expect(normalizeMainAction('space-removed', '')).toBeUndefined()

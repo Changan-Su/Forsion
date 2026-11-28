@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { connect } from 'node:net'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
-import { createPluginSandbox, isSandboxRoot, readSandboxManifest, sandboxEnv, sandboxPaths, sandboxRequiredPlugins } from './pluginSandbox'
+import { createPluginSandbox, isSandboxRoot, pluginDigest, readSandboxManifest, sandboxEnv, sandboxInstalledState, sandboxPaths, sandboxRequiredPlugins } from './pluginSandbox'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'sbx-'))
 function pluginDir(id = 'reading-log'): string {
@@ -147,17 +147,33 @@ describe('控制通道', () => {
     expect(sbx.state().running).toBe(false)
   }, 60_000)
 
-  it('闲置:窗口不在前台、超过闲置时长 → 自动停;用户正在用(前台)→ 不停', async () => {
+  it('闲置:窗口不在前台、超过闲置时长 → 先提示一个间隔再停;提示期间有人用 → 收回提示、从头算', async () => {
     const { vi } = await import('vitest')
     vi.useFakeTimers({ toFake: ['setInterval', 'Date'] })
     try {
       const f = fakeSpawn({ states: ['running'] })
       const sbx = createPluginSandbox({
-        forsionHome: () => tmp(), spawn: f.spawn, appArgs: [], platform: process.platform, pid: process.pid, idleMs: 60_000,
+        forsionHome: () => tmp(), spawn: f.spawn, appArgs: [], platform: process.platform, pid: process.pid, idleMs: 180_000,
         ui: () => ({ locale: 'zh', storage: {} }), onChange: () => {}, onChildEvent: () => {}, log: () => {},
       })
       await sbx.exec('start', { dir: pluginDir() })
-      vi.advanceTimersByTime(61_000) // 61s 没人用、窗口不在前台(假子进程的状态 windowVisible:false)
+      const warns = () => f.reqs.filter((r) => r.op === 'idleWarn').map((r) => r.args.on)
+      // 闲置 3 分钟、检查间隔 1 分钟:2 分钟时先推「快自动停了」,不停
+      vi.advanceTimersByTime(121_000) // 窗口不在前台(假子进程的状态 windowVisible:false)
+      await vi.waitFor(() => expect(warns()).toEqual([true]), { timeout: 3_000 })
+      expect(f.reqs.find((r) => r.op === 'idleWarn')?.args).toMatchObject({ idleMinutes: 3 })
+      expect(f.ops).not.toContain('quit')
+      // 有人用了(agent 看了一眼状态)→ 提示收回,从头算
+      await sbx.exec('status', {})
+      expect(warns()).toEqual([true, false])
+      vi.advanceTimersByTime(60_000)
+      await new Promise((r) => setImmediate(r))
+      expect(warns()).toEqual([true, false])
+      // 又闲置下去(从 121s 那次用起再过 2 分钟):再提示一次,提示挂满一个间隔才停
+      vi.advanceTimersByTime(120_000)
+      await vi.waitFor(() => expect(warns()).toEqual([true, false, true]), { timeout: 3_000 })
+      expect(f.ops).not.toContain('quit')
+      vi.advanceTimersByTime(60_000)
       await vi.waitFor(() => expect(f.ops).toContain('quit'), { timeout: 5_000 })
       await vi.waitFor(() => expect(sbx.state()).toMatchObject({ running: false, last: { reason: 'idle' } }), { timeout: 5_000 })
     } finally { vi.useRealTimers() }
@@ -230,10 +246,88 @@ describe('控制通道', () => {
     await sbx.exec('start', { dir })
     // 确认框给用户看的是别的插件(等确认的工夫换了)→ 不拿这次同意去装
     expect((await sbx.install({ pluginId: 'other', dir })).ok).toBe(false)
-    expect(await sbx.install({ pluginId: 'reading-log', dir })).toEqual({ ok: true, pluginId: 'reading-log' })
+    expect(await sbx.install({ pluginId: 'reading-log', dir })).toMatchObject({ ok: true, pluginId: 'reading-log', installed: { state: 'same', version: '0.1.0' } })
     expect(existsSync(join(home, 'plugins/reading-log/main.js'))).toBe(true)
     expect(existsSync(join(home, 'plugins/reading-log/node_modules'))).toBe(false)
     await sbx.dispose()
+  })
+
+  it('装没装(11-28):none → 装完 same(状态 / 广播 / 推给子进程都带上)→ 再装不覆盖(code same),force 才装;改了文件 → older', async () => {
+    const home = tmp(); const dir = pluginDir()
+    const f = fakeSpawn({ states: ['running'] })
+    const seen: Array<unknown> = []
+    const sbx = createPluginSandbox({
+      forsionHome: () => home, spawn: f.spawn, appArgs: ['/app'], platform: process.platform, pid: process.pid,
+      ui: () => ({ locale: 'en', storage: {} }), onChange: (st) => seen.push(st.installed ?? null), onChildEvent: () => {}, log: () => {},
+    })
+    const started = await sbx.exec('start', { dir })
+    expect(JSON.parse(started.text!).installed).toMatchObject({ state: 'none' })
+    expect(sbx.state().installed).toMatchObject({ state: 'none' })
+    expect(f.reqs.find((r) => r.op === 'installed')?.args).toMatchObject({ installed: { state: 'none' } })
+    await sbx.install({ pluginId: 'reading-log', dir })
+    expect(sbx.state().installed).toMatchObject({ state: 'same', version: '0.1.0', changed: 0 })
+    expect(seen.some((v) => (v as { state?: string } | null)?.state === 'same')).toBe(true)
+    // 装的就是这一份:不悄悄覆盖,force 才装
+    expect(await sbx.install({ pluginId: 'reading-log', dir })).toMatchObject({ ok: false, code: 'same' })
+    expect(await sbx.install({ pluginId: 'reading-log', dir }, { force: true })).toMatchObject({ ok: true })
+    // 沙箱里改了一个、加了一个 → older,changed = 2(版本号没变也按内容算)
+    writeFileSync(join(dir, 'main.js'), 'module.exports = { v: 2 }'); writeFileSync(join(dir, 'extra.js'), '1')
+    expect(await sandboxInstalledState(home, dir, 'reading-log')).toMatchObject({ state: 'older', version: '0.1.0', changed: 2 })
+    await sbx.dispose()
+  })
+
+  it('装没装:同一个插件以别的目录名装着(商店 market-…)→ store,安装回 code store;临时目录 / 超上限 / node_modules 不算', async () => {
+    const home = tmp(); const dir = pluginDir()
+    mkdirSync(join(home, 'plugins', 'reading-log.installing-ab12'), { recursive: true })
+    writeFileSync(join(home, 'plugins', 'reading-log.installing-ab12', 'manifest.json'), JSON.stringify({ id: 'reading-log', version: '9' }))
+    expect(await sandboxInstalledState(home, dir, 'reading-log')).toMatchObject({ state: 'none' })
+    mkdirSync(join(home, 'plugins', 'market-3f2a'), { recursive: true })
+    writeFileSync(join(home, 'plugins', 'market-3f2a', 'manifest.json'), JSON.stringify({ id: 'reading-log', version: '0.0.9' }))
+    expect(await sandboxInstalledState(home, dir, 'reading-log')).toEqual({ state: 'store', version: '0.0.9', changed: 0, folder: 'market-3f2a' })
+    const sbx = sandbox(home, fakeSpawn({ states: ['running'] }))
+    await sbx.exec('start', { dir })
+    expect(await sbx.install({ pluginId: 'reading-log', dir })).toMatchObject({ ok: false, code: 'store' })
+    await sbx.dispose()
+    // node_modules 不进摘要;超过文件数上限 → null(unknown)
+    const d = await pluginDigest(dir)
+    expect([...d!.keys()].sort()).toEqual(['main.js', 'manifest.json'])
+    expect(await pluginDigest(dir, { files: 1, bytes: 1e9 })).toBeNull()
+  })
+
+  it('装没装(评审补):真商店目录 market-<uuid> 按目录名跑,同 manifest id 也算 store;目标清单写坏 = older 能修;读不了的子目录 = unknown;重置换了一个沙箱不拿旧同意装', async () => {
+    const home = tmp(); const dir = pluginDir()
+    const market = 'market-0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
+    mkdirSync(join(home, 'plugins', market), { recursive: true })
+    writeFileSync(join(home, 'plugins', market, 'manifest.json'), JSON.stringify({ id: 'reading-log', version: '1.0.0' }))
+    expect(await sandboxInstalledState(home, dir, 'reading-log')).toMatchObject({ state: 'store', folder: market })
+    rmSync(join(home, 'plugins', market), { recursive: true })
+    // 别的目录清单写坏:跳过,不让整个判断抛出去
+    mkdirSync(join(home, 'plugins', 'junk'), { recursive: true }); writeFileSync(join(home, 'plugins', 'junk', 'manifest.json'), '{ broken')
+    mkdirSync(join(home, 'plugins', 'reading-log'), { recursive: true }); writeFileSync(join(home, 'plugins', 'reading-log', 'manifest.json'), '{ broken')
+    expect(await sandboxInstalledState(home, dir, 'reading-log')).toMatchObject({ state: 'older', version: '' })
+    const sbx = sandbox(home, fakeSpawn({ states: ['running'] }))
+    await sbx.exec('start', { dir })
+    const gen = sbx.gen()!
+    expect(await sbx.install({ pluginId: 'reading-log', dir, gen: gen + 1 })).toMatchObject({ ok: false, code: 'changed' })
+    expect(await sbx.install({ pluginId: 'reading-log', dir, gen })).toMatchObject({ ok: true, installed: { state: 'same' } })
+    // 临时目录以点开头,装完不留
+    expect(readdirSync(join(home, 'plugins')).filter((n) => n.includes('installing') || n.includes('.old-'))).toEqual([])
+    await sbx.dispose()
+    if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+      mkdirSync(join(dir, 'locked')); writeFileSync(join(dir, 'locked', 'a.js'), '1'); chmodSync(join(dir, 'locked'), 0o000)
+      try { expect(await pluginDigest(dir)).toBeNull() } finally { chmodSync(join(dir, 'locked'), 0o755) }
+    }
+  })
+
+  it('沙箱窗口自己的「关闭 / 重置」带着发出它的那一个:排到时换成了别的就不动', async () => {
+    const sbx = sandbox(tmp(), fakeSpawn({ states: ['running'] }))
+    await sbx.exec('start', { dir: pluginDir() })
+    const gen = sbx.gen()!
+    expect(await sbx.reset(gen + 1)).toMatchObject({ ok: false, code: 'no_sandbox' })
+    await sbx.stop(gen + 1)
+    expect(sbx.state().running).toBe(true)
+    await sbx.stop(gen)
+    expect(sbx.state().running).toBe(false)
   })
 
   it('叫到前面:用户在界面上点的启动 / 重置起好后 show;agent 起的不叫', async () => {

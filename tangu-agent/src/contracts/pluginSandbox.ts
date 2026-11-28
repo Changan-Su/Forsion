@@ -66,6 +66,34 @@ export interface SandboxStatus {
   dialog: { kind: 'open' | 'save' | 'message'; title: string } | null
   /** 下一个文件对话框已经备好的答案(files 动作):paths = 备了路径,cancel = 会当用户点了取消。 */
   filesArmed: 'paths' | 'cancel' | null
+  // ── 11-28 起:父进程比对用户那份 Forsion 的插件文件夹后填上(子进程不报;老桌面 = null)──
+  /** 这份开发副本装没装进用户自己的 Forsion,装的是不是同一份。 */
+  installed: SandboxInstalled | null
+}
+
+/**
+ * 用户那份 Forsion 里这个插件的安装情况(按 `<forsionHome>/plugins/<id>` 与沙箱目录逐文件比内容,跳过 node_modules / .git):
+ * none = 没装;same = 装的就是这一份;older = 装过,之后沙箱里这份改过(changed = 不同的文件数);
+ * store = 同一个插件以别的目录名装着(多半是商店的 market-…),要先卸载那份才能装这份;unknown = 太大没比 / 读不了。
+ */
+export type SandboxInstalledState = 'none' | 'same' | 'older' | 'store' | 'unknown'
+export interface SandboxInstalled {
+  state: SandboxInstalledState
+  /** 装着的那份的版本号(none / unknown = '')。 */
+  version: string
+  /** older:和沙箱里这份不同的文件数(多出、少了、内容不同都算)。 */
+  changed: number
+  /** store:装着的那份在 plugins/ 下的目录名。 */
+  folder: string
+}
+const INSTALLED_STATES: readonly SandboxInstalledState[] = ['none', 'same', 'older', 'store', 'unknown']
+export function parseSandboxInstalled(v: unknown): SandboxInstalled | null {
+  const r = v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+  if (!r || !INSTALLED_STATES.includes(r.state as SandboxInstalledState)) return null
+  const version = typeof r.version === 'string' ? r.version.slice(0, 40) : ''
+  const changed = typeof r.changed === 'number' && Number.isFinite(r.changed) && r.changed >= 0 ? Math.floor(r.changed) : 0
+  const folder = typeof r.folder === 'string' && /^[^/\\]{1,120}$/.test(r.folder) ? r.folder : ''
+  return { state: r.state as SandboxInstalledState, version, changed, folder }
 }
 
 /** 动作做完的回执(read / click / type / press / scroll / space / files / settings),挂在桌面回来的 text 的 `action` 键上。
@@ -148,6 +176,7 @@ export function parseSandboxStatus(raw: unknown): SandboxStatus | null {
       : [],
     dialog: dialogOf(o.dialog),
     filesArmed: (ARMED as readonly string[]).includes(o.filesArmed as string) ? (o.filesArmed as SandboxStatus['filesArmed']) : null,
+    installed: parseSandboxInstalled(o.installed),
   })
 }
 

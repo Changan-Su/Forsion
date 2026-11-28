@@ -22,7 +22,7 @@ import { FeedbackModal, draftInMainChat } from './components/FeedbackModal'
 import { AchievementsModal } from './achievements/AchievementsModal'
 import { AchievementToast } from './achievements/AchievementToast'
 import { debugFireToast } from './achievements/store'
-import { forgetUserSpace } from './userSpaces'
+import { forgetUserSpace, pluginOfSpace } from './userSpaces'
 import { NotificationHost } from './components/NotificationHost'
 import { SandboxChrome } from './sandbox/SandboxChrome'
 import { WhatsNewHost } from './components/WhatsNewDialog'
@@ -99,6 +99,15 @@ export function Root() {
     if (action === 'unit-route' && payload) runUnitRoutePayload(payload)
     // 设置浮窗里「在蓬洲云中查看」:切到那个 Space(只认已注册的;选中哪个库由 Extend 自己接,见 RemoteSyncSection)
     if (action === 'open-space' && payload && useSpaceStore.getState().spaces.some((x) => x.id === payload)) setActiveSpace(payload)
+    // 插件沙箱「在我的 Forsion 打开」(沙箱窗口回执卡 / 对话卡,11-28):切到插件自己的 Space,没有 Space(或点名要设置)就开它的设置页
+    if (action === 'open-plugin' && payload) {
+      let req: { id?: unknown; settings?: unknown } = {}
+      try { req = JSON.parse(payload) } catch { /* 坏的不理 */ }
+      const id = typeof req.id === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(req.id) ? req.id : ''
+      const space = id && req.settings !== true ? useSpaceStore.getState().spaces.find((x) => pluginOfSpace(x.id) === id) : undefined
+      if (space) setActiveSpace(space.id)
+      else if (id) useApp.getState().openSettings(`fplugin:${id}`)
+    }
     // 插件浮窗(活动面板「去完成」)点的链接:deep link 只在主窗落地,经同一道解析和白名单
     if (action === 'open-link' && payload) {
       void Promise.all([import('./deepLinkPlan'), import('./deepLinkInstall')]).then(([{ parseDeepLink }, { resolveDeepLink }]) => {

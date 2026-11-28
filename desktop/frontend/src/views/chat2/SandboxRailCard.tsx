@@ -5,7 +5,8 @@
  * 插件说的话(名字、报错、视图名)一律当纯文本渲染。
  */
 import { useEffect, useState } from 'react'
-import { AppWindow, Camera, CircleAlert, CircleCheck, Download, FlaskConical, Loader2, Play, RotateCcw, TriangleAlert } from 'lucide-react'
+import { AppWindow, Camera, CircleAlert, CircleCheck, Download, FlaskConical, Loader2, PackageCheck, Play, RefreshCw, RotateCcw, Settings, TriangleAlert } from 'lucide-react'
+import { installButton, installErrorText } from '../../sandbox/sandboxInstall'
 import { registerMessages, useI18n } from '../../i18n'
 import { SummaryCard } from './TaskSummary'
 import type { PluginSandboxState } from '../../types'
@@ -95,9 +96,7 @@ export function SandboxRailCard({ live, sessionId, open, onToggle, bodyCap, sque
     setBusy(what); setNote('')
     try {
       if (what === 'install') {
-        const r = await api.install()
-        if (r.ok) setNote(t('sandbox.card.installed'))
-        else if (!r.cancelled && r.error) setNote(r.error)
+        setNote(installErrorText(await api.install(), t))
       } else {
         const r = what === 'reset' ? await api.reset() : await api.exec('start', { dir }, { sessionId, reveal: true })
         if (!r.ok && r.error) setNote(r.error)
@@ -110,6 +109,7 @@ export function SandboxRailCard({ live, sessionId, open, onToggle, bodyCap, sque
     : <div key={key} className="t2-tsum-row">{icon}<span className="t2-tsum-row-tx">{text}</span>{end && <span className="t2-tsum-hits">{end}</span>}</div>
   const errorText = st?.blocked || st?.setupError || st?.mountErrors[0]?.message || ''
   const op = live.running && live.lastOp && OPS.has(live.lastOp.op) ? live.lastOp : null
+  const ib = installButton(live.running ? (live.installed ?? st?.installed ?? null) : null)
 
   return (
     <SummaryCard id="sandbox" className="sbx-rail" open={open} onToggle={onToggle} bodyCap={bodyCap} squeezed={squeezed}
@@ -134,7 +134,11 @@ export function SandboxRailCard({ live, sessionId, open, onToggle, bodyCap, sque
       {state === 'stopped' && row('restart', spin('start', <Play size={14} />), t('sandbox.card.restart'), t(`sandbox.rail.stopped.${live.last?.reason ?? 'stopped'}`), () => void run('start'), !!busy || !dir)}
       {bad && row('open', <AppWindow size={14} />, t('sandbox.card.open'), st?.errorCount ? String(st.errorCount) : '', () => void api?.show())}
       {bad && row('reset', spin('reset', <RotateCcw size={14} />), t('sandbox.card.reset'), '', () => void run('reset'), !!busy)}
-      {state === 'running' && row('install', spin('install', <Download size={14} />), t('sandbox.card.install'), '', () => void run('install'), !!busy)}
+      {state === 'running' && (ib === 'done'
+        ? row('installed', <PackageCheck size={14} />, t('sandbox.inst.open'), t('sandbox.inst.installedShort'), () => void api?.openInstalled(live.pluginId ?? ''))
+        : ib === 'blocked'
+          ? row('plugin-settings', <Settings size={14} />, t('sandbox.inst.openSettings'), '', () => void api?.openInstalled(live.pluginId ?? '', true))
+          : row('install', spin('install', ib === 'update' ? <RefreshCw size={14} /> : <Download size={14} />), t(ib === 'update' ? 'sandbox.inst.update' : 'sandbox.card.install'), '', () => void run('install'), !!busy))}
       {!!note && <div className="sbx-rail-note">{note}</div>}
     </SummaryCard>
   )

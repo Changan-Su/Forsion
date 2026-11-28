@@ -26,7 +26,7 @@ import { confirmDesktopWindow } from './pluginDesktopDialog'
 import { createMacDriver } from './dictation/macDriver'
 import { DESKTOP_WINDOW_CHANNELS } from '../shared/desktopWindow'
 import { createComputerUsePip, createPipAgentRelay, PIP_AGENT_CHANNELS, PIP_MARGIN, PIP_WIDTH, type PipAgentHost } from './computerUsePip'
-import { createPluginSandbox, readSandboxManifest, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
+import { createPluginSandbox, readSandboxManifest, sandboxRequiredPlugins, type PluginSandboxUiSeed, type SandboxInstallResult } from './pluginSandbox'
 import { createPluginStage, StageError, STAGE_MESSAGES } from './pluginStage'
 import { parseStageCalendar, parseStageScript, startStageEngine } from './stageEngine'
 import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
@@ -6206,6 +6206,8 @@ app.whenReady().then(async () => {
   ipcMain.on('window:mainAction', (e, rawAction: unknown, rawPayload: unknown) => {
     const req = isTrustedSender(e) ? normalizeMainAction(rawAction, rawPayload) : undefined
     if (!req) return
+    // 用户那份的插件变了(商店装 / 卸、设置里卸):沙箱的「已安装」跟着重算,别拿卸载之前的结论挡按钮
+    if (req.action === 'extensions-changed') pluginSandbox?.hostPluginsChanged()
     // 只有要用户回主窗看结果的才把主窗抢到前面:重开引导、带着草稿 / 引用去聊天、打开 Agent、设置 › 设备里选了去处、设置里点「在蓬洲云中查看」(open-space)。其余(⌘K 重算、测试通知卡、恢复布局、
     // 成就弹窗、撤 Space)用户还在设置浮窗里,别打断。
     if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'chat-quote' || req.action === 'open-agents' || req.action === 'open-agent' || req.action === 'unit-route' || req.action === 'open-space' || req.action === 'open-link') showMainWindow()
@@ -6454,6 +6456,7 @@ app.whenReady().then(async () => {
       getWindow: () => mainWindow,
       // 设置是独立的浮动面板(不是主窗的子窗):agent 的 settings 动作开它、按 window 选它动手
       getSettingsWindow: () => floatingWindows.get('settings') ?? null,
+      yieldPinned: yieldPinnedWindows,
       quit: () => { isQuitting = true; app.quit() },
       log: (m) => console.log(m),
     })
@@ -6556,36 +6559,100 @@ const pluginSandbox = SANDBOX ? null : createPluginSandbox({
   onChange: (st) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('pluginSandbox:changed', st) },
   onChildEvent: (ev) => {
     if (ev.event === 'report') { showMainWindow(); mainWindow?.webContents.send('pluginSandbox:report', ev) }
-    else if (ev.event === 'install') void installFromSandbox().catch((e) => console.error('[plugin-sandbox] install failed:', e))
-    else if (ev.event === 'reset') void pluginSandbox?.reset().catch((e) => console.error('[plugin-sandbox] reset failed:', e))
+    else if (ev.event === 'install') void installFromSandbox('sandbox', { force: ev.force }).catch((e) => console.error('[plugin-sandbox] install failed:', e))
+    else if (ev.event === 'reset') void pluginSandbox?.reset(ev.gen).catch((e) => console.error('[plugin-sandbox] reset failed:', e))
+    else if (ev.event === 'openHost') openInstalledPlugin(ev.pluginId, ev.settings)
+    else if (ev.event === 'close') void pluginSandbox?.stop(ev.gen).catch((e) => console.error('[plugin-sandbox] stop failed:', e))
     else if (ev.kind === 'url') { if (isForsionUrl(ev.value) && !routeSpaceWindowLink(ev.value)) deliverDeepLink(ev.value) }
     else deliverOpenFile(ev.value)
   },
   log: (m) => console.log(m),
 })
-/** 「安装到我的 Forsion」:卡片、Coding Studio、沙箱窗口三处的按钮都到这里,先在用户那份的主窗上确认。 */
-async function installFromSandbox(): Promise<{ ok: boolean; pluginId?: string; error?: string; cancelled?: boolean }> {
-  const st = pluginSandbox?.state()
-  if (!pluginSandbox || !st?.running) return { ok: false, error: 'no sandbox is running' }
-  const expect = { pluginId: st.pluginId, dir: st.dir } // 用户点「安装」同意的就是框里这一个
+/**
+ * 安装确认框弹着时,把置顶的东西放回普通层:钉住的浮动面板、插件的桌面小窗(它们在 floating 层,比任何普通窗口都高,
+ * 会盖住挂在窗口上的确认框 —— 11-28 用户报)。回一个放回去的函数。父进程和沙箱进程跑的是同一份 main.ts,两边都用它。
+ */
+function yieldPinnedWindows(): () => void {
+  const lowered: BrowserWindow[] = []
+  for (const w of floatingWindows.values()) if (!w.isDestroyed() && pinnedFloating.has(w)) { w.setAlwaysOnTop(false); lowered.push(w) }
+  const desk = pluginDesktop && !pluginDesktop.hidden() ? pluginDesktop : null
+  desk?.setHidden(true)
+  return () => {
+    for (const w of lowered) if (!w.isDestroyed() && pinnedFloating.has(w)) w.setAlwaysOnTop(true, 'floating')
+    desk?.setHidden(false)
+  }
+}
+/** 主窗抬到最前:沙箱是另一个进程、用户刚在它的窗口里,光 show + focus 在 mac 上常常抢不回来(沙箱自己的「打开」用的就是 steal)。 */
+function presentMainForce(): void {
   showMainWindow()
-  // ⚠️ 必须挂父窗(同 confirmPair):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就不装
-  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
-  if (!win) return { ok: false, cancelled: true }
+  if (process.platform === 'darwin' && !QUIET_WINDOWS) app.focus({ steal: true })
+}
+/** 「在我的 Forsion 打开」(沙箱窗口回执卡 / 对话卡):主窗切到插件的 Space,没有 Space 就开它的设置页(渲染层 Root 的 open-plugin)。 */
+function openInstalledPlugin(pluginId: string, settings = false): void {
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(pluginId)) return
+  presentMainForce()
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:mainAction', 'open-plugin', JSON.stringify({ id: pluginId, settings }))
+}
+let sandboxInstalling: Promise<unknown> | null = null
+/**
+ * 「安装到我的 Forsion」:卡片、右栏、Coding Studio(origin host)与沙箱窗口(origin sandbox)的按钮都到这里。
+ * 确认框挂在用户点按钮的那扇窗上(11-28 方案 A):沙箱窗口里点的 → 沙箱进程在沙箱窗口上弹系统框;其余 → 用户那份的主窗。
+ * 同意仍绑在框里那个插件(id + 目录)上,装之前核对;装的就是这一份时不再悄悄覆盖(沙箱窗口回执卡上的「重新安装」才带 force)。
+ */
+async function installFromSandbox(origin: 'sandbox' | 'host', opts: { force?: boolean } = {}): Promise<SandboxInstallResult> {
+  if (sandboxInstalling) return { ok: false, cancelled: true } // 已经有一个确认框开着:不叠第二个
+  const run = installOnce(origin, opts)
+  sandboxInstalling = run
+  try { return await run } finally { sandboxInstalling = null }
+}
+async function installOnce(origin: 'sandbox' | 'host', opts: { force?: boolean }): Promise<SandboxInstallResult> {
+  const st = pluginSandbox?.state()
+  const gen = pluginSandbox?.gen() ?? null
+  if (!pluginSandbox || !st?.running || gen === null) return { ok: false, code: 'no_sandbox', error: 'no sandbox is running' }
+  const expect = { pluginId: st.pluginId, dir: st.dir, gen } // 用户点「安装」同意的就是框里这一个(这一个沙箱进程;重置换了就不算)
+  const tell = (r: SandboxInstallResult): SandboxInstallResult => { pluginSandbox?.tellInstallResult(gen, { ...r, origin }); return r }
+  // 不用弹框就知道装不了 / 不用装的:直接回(沙箱窗口那边垂一张说明)。先重算一次:缓存的那份可能是用户在设置里卸载之前的
+  const inst = await pluginSandbox.installedNow()
+  if (pluginSandbox.gen() !== gen) return { ok: false, code: 'changed', error: 'the sandbox changed; try installing again' }
+  if (inst?.state === 'store') return tell({ ok: false, code: 'store', error: `the same plugin is already installed in plugins/${inst.folder}; uninstall it first`, installed: inst })
+  if (inst?.state === 'same' && !opts.force) return tell({ ok: false, code: 'same', error: 'this exact copy is already installed', installed: inst })
   // 装好后 ctx.net 能连哪些域名:确认框里如实列出(读的是将要拷走的那份 manifest)
   const network = st.dir ? (await readSandboxManifest(st.dir).catch(() => null))?.network : undefined
-  const { response } = await dialog.showMessageBox(win, {
-    type: 'question', title: mt('main.pluginSandbox.installTitle'),
-    message: mt('main.pluginSandbox.installMessage', { name: st.name ?? '', version: st.version ?? '' }),
+  const update = inst?.state === 'older'
+  const again = inst?.state === 'same' // 只会是带 force 的(回执卡上的「重新安装」):照实说是覆盖同一份
+  const box = {
+    type: 'question' as const, title: mt('main.pluginSandbox.installTitle'),
+    message: again
+      ? mt('main.pluginSandbox.reinstallMessage', { name: st.name ?? '', version: st.version ?? '' })
+      : update
+      ? mt('main.pluginSandbox.updateMessage', { name: st.name ?? '', version: st.version ?? '', installed: inst?.version ?? '' })
+      : mt('main.pluginSandbox.installMessage', { name: st.name ?? '', version: st.version ?? '' }),
     detail: mt('main.pluginSandbox.installDetail', { dir: st.dir ?? '' })
       + (network?.length ? `\n\n${mt('main.pluginSandbox.installNetwork', { domains: network.join(', ') })}` : ''),
-    buttons: [mt('main.pluginSandbox.install'), mt('main.pluginSandbox.cancel')], defaultId: 0, cancelId: 1, noLink: true,
-  })
+    buttons: [mt(again ? 'main.pluginSandbox.reinstall' : update ? 'main.pluginSandbox.update' : 'main.pluginSandbox.install'), mt('main.pluginSandbox.cancel')], defaultId: 0, cancelId: 1, noLink: true,
+  }
+  let response: number | null = null
+  if (origin === 'sandbox') {
+    response = await pluginSandbox.confirmInChild(gen, box)
+    // 沙箱那边没回答(关了窗口 / 停了 / 重置换了一个 / 等太久):一律当取消。不回落到主窗再问 —— 那边的框可能还开着,两个框同意的不是同一回事
+    if (response === null) return { ok: false, cancelled: true }
+  } else {
+    // 主窗上弹(卡片 / 右栏 / Coding Studio 点的)。沙箱里和本进程里钉住的浮窗先让开,主窗抢到前面
+    pluginSandbox.yieldChild(true)
+    const restore = yieldPinnedWindows()
+    try {
+      presentMainForce()
+      // ⚠️ 必须挂父窗(同 confirmPair):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就不装
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+      if (!win) return { ok: false, cancelled: true }
+      response = (await dialog.showMessageBox(win, box)).response
+    } finally { restore(); pluginSandbox.yieldChild(false) }
+  }
   if (response !== 0) return { ok: false, cancelled: true }
-  const r = await pluginSandbox.install(expect)
+  const r = await pluginSandbox.install(expect, { force: opts.force || update })
   // 各窗自己重载插件(与商店安装同一条广播)
   if (r.ok) for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('window:mainAction', 'extensions-changed', JSON.stringify({ type: 'amadeus-plugin', ids: [r.pluginId] }))
-  return r
+  return tell(r)
 }
 if (pluginSandbox) {
   ipcMain.handle('pluginSandbox:exec', (e, op: unknown, args: unknown, origin: unknown) => {
@@ -6607,7 +6674,9 @@ if (pluginSandbox) {
   ipcMain.handle('pluginSandbox:show', (e) => (isTrustedSender(e) ? pluginSandbox.show() : false))
   ipcMain.handle('pluginSandbox:stop', (e) => (isTrustedSender(e) ? pluginSandbox.stop() : undefined))
   ipcMain.handle('pluginSandbox:reset', (e) => (isTrustedSender(e) ? pluginSandbox.reset() : { ok: false }))
-  ipcMain.handle('pluginSandbox:install', (e) => (isTrustedSender(e) ? installFromSandbox() : { ok: false }))
+  ipcMain.handle('pluginSandbox:install', (e) => (isTrustedSender(e) ? installFromSandbox('host') : { ok: false }))
+  ipcMain.handle('pluginSandbox:installedOf', (e, dir: unknown) => (isTrustedSender(e) && typeof dir === 'string' && dir.length <= 1024 ? pluginSandbox.installedOf(dir) : null))
+  ipcMain.handle('pluginSandbox:openInstalled', (e, pluginId: unknown, settings: unknown) => { if (isTrustedSender(e) && typeof pluginId === 'string') openInstalledPlugin(pluginId, settings === true) })
 }
 
 // ── 演示舞台(插件的 ctx.stage,pluginStage.ts):插件沙箱那套进程 / 目录隔离的第二个实例,父目录 stages/,闲置 5 分钟自停。
