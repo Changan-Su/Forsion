@@ -28,7 +28,7 @@ function invoker(): Invoke | null {
 }
 
 /** value 里还藏着失败的通道(内层)。 */
-const SOFT_FAIL = new Set<string>([CH.apply, CH.setScope, CH.setTarget, CH.renameAnswer, CH.resolve, CH.setEnabled, CH.choose, CH.takeoverRevert, CH.dismissCard])
+const SOFT_FAIL = new Set<string>([CH.preview, CH.recoveryRestore, CH.deletesConfirm, CH.deletesAbandon, CH.apply, CH.setScope, CH.setTarget, CH.renameAnswer, CH.resolve, CH.setEnabled, CH.choose, CH.takeoverRevert, CH.dismissCard])
 
 /** 归一两层回复(纯函数,单测直接喂)。 */
 export function normalizeReply<T>(channel: string, reply: unknown): VsResult<T> {

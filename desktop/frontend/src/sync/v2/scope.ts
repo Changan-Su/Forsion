@@ -17,7 +17,9 @@ export function itemCovers(it: ScopeItem, path: string): boolean {
   return p === s || (!!dir && (p.startsWith(dir) || p === dir.slice(0, -1)))
 }
 
-function excluded(scope: BindingScope, path: string): boolean {
+/** 被范围的排除项挡住(含排除文件夹里面、排除页面的子页目录)。 */
+export function isExcluded(scope: BindingScope | null | undefined, path: string): boolean {
+  if (!scope) return false
   if (scope.mode !== 'some') return false
   const p = noSlash(path)
   return (scope.exclude ?? []).some((e) => { const x = noSlash(e); const dir = pageDir(x); return p === x || p.startsWith(`${x}/`) || (!!dir && p.startsWith(dir)) })
@@ -27,7 +29,7 @@ function excluded(scope: BindingScope, path: string): boolean {
 export function scopeCovers(scope: BindingScope | null | undefined, path: string): 'explicit' | 'covered' | false {
   if (!scope) return false
   if (scope.mode === 'all') return 'covered'
-  if (excluded(scope, path)) return false
+  if (isExcluded(scope, path)) return false
   const p = noSlash(path)
   if (scope.items.some((it) => noSlash(it.path) === p)) return 'explicit'
   return scope.items.some((it) => itemCovers(it, p)) ? 'covered' : false
@@ -97,4 +99,26 @@ export function topLevelEntries(pages: string[], files: string[]): ScopeItem[] {
   }
   const cmp = (a: string, b: string): number => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
   return [...[...folders].sort(cmp).map((f) => ({ path: f, kind: 'folder' as const })), ...out.sort((a, b) => cmp(a.path, b.path))]
+}
+
+/**
+ * 汇总卡过期(stale)重新预演时:把「这次改了什么」(base → next 的差量:加了哪些、去了哪些、排除增减)
+ * 套到引擎此刻的范围 fresh 上,而不是拿当初那份整范围去盖 —— 期间别处去掉的项(右键「停止同步这一项」)不会被加回来,
+ * 别处新加的也不会被抹掉(Codex P1-1)。base 是整个库 = 当初是从整库收窄,差量没法套,原样用 next。
+ */
+export function rebaseScope(base: BindingScope, next: BindingScope, fresh: BindingScope): BindingScope {
+  if (next.mode === 'all' || base.mode === 'all') return next
+  if (fresh.mode === 'all') return fresh // 期间已经变成整个库:比这次要加的还宽,不往回收
+  const key = (it: ScopeItem): string => noSlash(it.path)
+  const baseKeys = new Set(base.items.map(key))
+  const nextKeys = new Set(next.items.map(key))
+  const added = next.items.filter((it) => !baseKeys.has(key(it)))
+  const removed = new Set([...baseKeys].filter((k) => !nextKeys.has(k)))
+  const baseEx = new Set((base.exclude ?? []).map(noSlash))
+  const nextEx = new Set((next.exclude ?? []).map(noSlash))
+  const items = fresh.items.filter((it) => !removed.has(key(it)))
+  for (const a of added) if (!items.some((it) => key(it) === key(a))) items.push(a)
+  const exclude = [...new Set([...(fresh.exclude ?? []).map(noSlash).filter((e) => !(baseEx.has(e) && !nextEx.has(e))), ...[...nextEx].filter((e) => !baseEx.has(e))])]
+  if (!items.length) return fresh
+  return { mode: 'some', items, ...(exclude.length ? { exclude } : {}) }
 }

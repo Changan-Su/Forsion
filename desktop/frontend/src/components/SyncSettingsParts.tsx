@@ -20,8 +20,10 @@ const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$
 const folderName = (root: string): string => root.split(/[\\/]/).filter(Boolean).pop() ?? root
 
 /** 页底汇总卡(方案 V9b,3B 的内容 + 2B 的主按钮):四格 + 太大,不一样的前几篇,三颗按钮。 */
-export function SummaryCard({ name, preview, busy, kind, added, onApply, onCancel }: {
+export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, onCancel }: {
   name: string
+  /** 去处一句话(蓬洲云 · 哪个库);库名和去处要看得见 */
+  dest?: string
   /** 这一次新加进范围的项(右键带来的那一项 + 关联闭包),标「刚勾上」 */
   added?: ScopeItem[]
   preview: VaultSyncPreview | null
@@ -59,6 +61,7 @@ export function SummaryCard({ name, preview, busy, kind, added, onApply, onCance
         <Cloud size={15} aria-hidden="true" /><b>{title}</b>
         <span className="ssync-faint">{t('ssync.sum.lead')}</span>
       </div>
+      {dest && <div className="ssync-sum-dest" data-ssync-dest="">{t('ssync.dest.line', { name, dest })}</div>}
       {!!added?.length && (
         <div className="ssync-sum-added" title={added.map((a) => a.path).join('\n')}>
           <span className="ssync-tag">{t('ssync.scope.justAdded')}</span>

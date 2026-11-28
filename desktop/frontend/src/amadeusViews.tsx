@@ -981,6 +981,7 @@ export function AmadeusPagesView() {
   const vaultLoading = usePageStore((s) => s.vaultLoading)
   // 智库同步第 2 步完整模式:右键入口改去设置 › 同步、旧的「云同步」分区不画(契约 §3.10);v2 状态变了菜单文案跟着变
   const fullSync = useSyncMode((s) => s.mode === 'full')
+  const legacySync = useSyncMode((s) => s.mode === 'legacy') // 旧写入口只在旧同步明确在管时给(读不出 / 停用 / 还没问出来都不给)
   const v2Status = useVaultSyncRaw((s) => s.v2)
   // 云端笔记库入口:web / 移动端(库本身在云端,cloudBridge 挂 amadeusCloudVaults)恒显示;桌面仅云端模式显示,本地模式给本地 Vault 选择器。
   // ⚠️ 不能用「没有 amadeusSync」当 web 的判据:桌面没装 Forsion Extend 时 amadeusSync 也不在,那是本地机器,不是云端库。
@@ -1977,7 +1978,7 @@ export function AmadeusPagesView() {
                 // 分区节点表:顺序由 orderedSecIds(持久化)决定,包装层提供拖拽排序。
                 const secNodes: Record<string, ReactNode> = {
                   pinned: <PinnedSection row={row} dragPath={dragPath} />,
-                  cloudsync: vaultSide === 'local' && !fullSync ? <CloudSyncSection dragPath={dragPath} /> : null,
+                  cloudsync: vaultSide === 'local' && legacySync ? <CloudSyncSection dragPath={dragPath} /> : null,
                   sharedby: foreignOwner ? null : <SharedByMeSection />,
                   shared: <SharedWithMeSection />,
                   prefs: <PrefsSections row={row} pages={pages} />,
@@ -2014,7 +2015,7 @@ export function AmadeusPagesView() {
             const f = menu.path
             return <button data-sync-entry={st || 'off'} onClick={() => { setMenu(null); runEntry(f, 'folder') }}>{st === 'explicit' ? <CloudOff size={13} /> : <Cloud size={13} />} {entryLabel(st, 'folder')}</button>
           })()}
-          {!fullSync && window.amadeusSync?.entrySyncEnable && vaultSide === 'local' && (
+          {legacySync && window.amadeusSync?.entrySyncEnable && vaultSide === 'local' && (
             isSyncedEntry(vaultRoot, menu.path) ? (
               <button onClick={() => { const f = menu.path; setMenu(null); void window.amadeusSync!.entrySyncDisable!(f) }}><CloudOff size={13} /> {t('amxv.menu.cloudSyncOff')}</button>
             ) : (
@@ -2028,6 +2029,8 @@ export function AmadeusPagesView() {
             <button onClick={() => {
               const f = menu.path
               setMenu(null)
+              // 完整模式下本机库的旧注册前缀不可信(Codex P1-5):v2 的发布接上之前不发,说清楚
+              if (fullSync && vaultSide === 'local') { useApp.getState().toast(t('ssync.share.v2Later')); return }
               const cloudPath = cloudPathFor(entryVaults, vaultRoot, vaultSide, f)
               if (!cloudPath) { openCloudSyncDialog(f, 'folder'); return }
               void window.amadeusCollab!.createPublish('subtree', cloudPath)
@@ -2800,6 +2803,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const pinned = !!barPath && pinsArr.includes(barPath)
   // 第 2 步完整模式:顶栏云按钮看 v2 的范围(null = 不是完整模式,照旧看条目同步)
   const barEntry = useV2EntrySync(myPs().vaultRoot, vaultSide === 'local' ? barPath : null)
+  const barLegacy = useSyncMode((s) => s.mode === 'legacy') // 旧的开 / 关按钮只在旧同步明确在管时给
   const synced = barEntry !== null ? !!barEntry : canEntrySync && !!barPath && isSyncedEntry(myPs().vaultRoot, barPath)
 
   // unified 接管 → 让 pageStore 交出本文件的快照(新建流/装载残留):陈旧快照×reconcile 回写
@@ -3052,7 +3056,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
               <Cloud size={14} />
             </button>
           )}
-          {barEntry === null && canEntrySync && (
+          {barEntry === null && canEntrySync && barLegacy && (
             <button
               className={`amx-mode-btn amx-pin-btn${synced ? ' amx-pin-on' : ''}`}
               title={synced ? t('amxv.cloud.disableTip') : t('amxv.menu.cloudSyncOn')}

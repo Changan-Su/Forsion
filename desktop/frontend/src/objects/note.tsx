@@ -25,6 +25,7 @@ import { useAmadeusPrefs } from '../amadeusPrefs'
 import { isSyncedEntry } from '../stores/entrySyncStore'
 import { openCloudSyncDialog } from '../components/CloudSyncDialog'
 import { entryLabel, entrySyncState, isFullSyncNow, runEntry } from '../sync/v2/entries'
+import { isLegacySync } from '../sync/v2/mode'
 import { isSafeVaultPath } from '../deepLinkPlan'
 import { canTrash, deleteFileMsg, deleteNoteFlow, deleteNoteMsg } from '../noteDelete'
 import { registerMessages, translate } from '../i18n'
@@ -233,7 +234,7 @@ export function installNoteObject(): void {
     title: ([r]) => (isFullSyncNow() ? entryLabel(entrySyncState(usePageStore.getState().vaultRoot, r.id), 'page')
       : translate(synced(r.id) ? 'amxv.menu.cloudSyncOff' : 'amxv.menu.cloudSyncOn')),
     on: ([r]) => (isFullSyncNow() ? !!entrySyncState(usePageStore.getState().vaultRoot, r.id) : synced(r.id)),
-    when: ([r]) => fileKind(r.id) === 'page' && (isFullSyncNow() ? vaultSideLocal() : canEntrySync()),
+    when: ([r]) => fileKind(r.id) === 'page' && (isFullSyncNow() ? vaultSideLocal() : isLegacySync() && canEntrySync()),
     run: ([r]) => {
       if (isFullSyncNow()) { runEntry(r.id, 'page'); return }
       if (synced(r.id)) void window.amadeusSync?.entrySyncDisable?.(r.id)

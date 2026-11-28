@@ -23,7 +23,7 @@ import { SyncRecordsDialogHost } from '../sync/SyncRecordList'
 import { CHANNEL_MISSING, EXTEND_UNAVAILABLE, deviceName, vaultSync } from '../sync/v2/client'
 import { modeFrom, setSyncMode } from '../sync/v2/mode'
 import { syncErrorText } from '../sync/v2/errors'
-import { closureItems, mergeScope, removeItem, scopeCovers, topLevelEntries } from '../sync/v2/scope'
+import { addedItems, closureItems, isExcluded, mergeScope, rebaseScope, removeItem, scopeCovers, topLevelEntries } from '../sync/v2/scope'
 import type { SyncFocus } from '../sync/v2/openSyncSettings'
 import type { StatusBindingExtras } from '../sync/v2/feed'
 import { CREATE_CANDIDATE } from '../sync/v2/types'
@@ -37,6 +37,20 @@ import './syncSettings.css'
 
 const folderName = (root: string): string => root.split(/[\\/]/).filter(Boolean).pop() ?? root
 const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
+const lastSeg = (prefix: string): string => prefix.split('/').filter(Boolean).pop() ?? prefix
+type TFn = (key: string, vars?: Record<string, unknown>) => string
+
+/** 汇总卡上写明「本机这个库 → 云端哪一处」:标题是通用的,库名和去处要看得见(Codex P1-4)。 */
+function destOf(p: Pending, data: VaultSyncGet, t: TFn): string {
+  const c = p.target.kind === 'penzor' ? p.target.candidate : undefined
+  if (c?.kind === 'new') return t('ssync.dest.new', { name: p.name })
+  if (c?.kind === 'own') return t('ssync.dest.own', { name: c.name })
+  if (c?.kind === 'legacy') return t('ssync.dest.legacy', { name: c.name ?? lastSeg(c.prefix) })
+  const tg = p.bindingId ? data.bindings.find((x) => x.id === p.bindingId)?.target : undefined
+  if (tg?.kind === 'penzor') return tg.placement === 'own' ? t('ssync.dest.own', { name: tg.vaultName || p.name }) : t('ssync.dest.legacy', { name: lastSeg(tg.prefix) })
+  if (tg?.kind === 'remote') return tg.label || t('vsync.target.other')
+  return t('ssync.target.penzor')
+}
 
 type Gate =
   | { kind: 'loading' }
@@ -69,16 +83,21 @@ export function SyncSettings({ focus, legacy, drive }: { focus?: SyncFocus; lega
   if (gate.kind === 'error') {
     return <SettingsPage host schema={{ state: { kind: 'error', title: t('ssync.loadFailed'), desc: ipcErrorText(gate.error), action: { label: t('ssync.retry'), onClick: () => load() } } }} />
   }
-  if (gate.kind === 'off') return <div className="ssync-page" data-ssync-mode="off"><ExtendOffNotice />{legacy}</div>
-  if (gate.kind === 'compat') {
+  // Extend 停用 = 同步停了(11-28 用户定):今天那份设置照样看得见,但只读 —— 改了也不会生效,别让人以为能用
+  if (gate.kind === 'off') return <div className="ssync-page" data-ssync-mode="off"><ExtendOffNotice /><div className="ssync-readonly" inert>{legacy}</div></div>
+  // 同步记录读不出来:引擎已经停下;这时不给旧界面的写入口(读失败 ≠ 空,Codex P1-7),只说清楚 + 重试
+  if (gate.kind === 'compat' && gate.reason === 'state-unreadable') {
     return (
-      <div className="ssync-page" data-ssync-mode="compat" data-compat-reason={gate.reason ?? 'channel-missing'}>
-        {gate.reason === 'state-unreadable' && (
-          <div className="ssync-off" role="status"><b>{t('ssync.unreadable.title')}</b><p>{t('ssync.unreadable.desc')}</p></div>
-        )}
-        {legacy}
+      <div className="ssync-page" data-ssync-mode="compat" data-compat-reason="state-unreadable">
+        <div className="ssync-off" role="status">
+          <b>{t('ssync.unreadable.title')}</b><p>{t('ssync.unreadable.desc')}</p>
+          <div><button type="button" className="btn sm" onClick={() => void load()}>{t('ssync.retry')}</button></div>
+        </div>
       </div>
     )
+  }
+  if (gate.kind === 'compat') {
+    return <div className="ssync-page" data-ssync-mode="compat" data-compat-reason={gate.reason ?? 'channel-missing'}>{legacy}</div>
   }
   return <SyncSettingsFull data={gate.data} reload={load} focus={focus} legacy={drive ?? legacy} />
 }
@@ -94,7 +113,13 @@ interface Pending {
   preview: VaultSyncPreview | null
   candidates?: ResolveCandidate[]
   note?: string
+  /** 预演那一刻引擎里这个绑定的范围与去处:过期重来时把「这次改了什么」套到引擎此刻的范围上(scope.ts rebaseScope) */
+  base?: BindingScope
+  baseTarget?: string
 }
+
+/** 落点只认一次:设置层拿着同一个 focus 对象,子页切走再回来(组件重挂)不再重放一遍预演(Codex P2-4)。 */
+const consumedFocus = new WeakSet<object>()
 
 function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet; reload: () => Promise<void>; focus?: SyncFocus; legacy: ReactNode }) {
   const { t } = useI18n()
@@ -105,14 +130,16 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   const [pending, setPending] = useState<Pending | null>(null)
   const [busy, setBusy] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [entries, setEntries] = useState<ScopeItem[] | null>(null)
+  // 范围清单按库根记:切库后旧库的清单不拿来用;读失败 = 不知道(failed),范围不许写(Codex P1-3)
+  const [entries, setEntries] = useState<{ root: string; items: ScopeItem[] | null; failed?: boolean } | null>(null)
   const [driveOpen, setDriveOpen] = useState(false)
   const [recKey, setRecKey] = useState(0)
-  const [handled, setHandled] = useState<string | null>(null)
   const v2 = useVaultSyncRaw((s) => s.v2)
   const sumRef = useRef<HTMLDivElement>(null)
+  const reqRef = useRef(0) // 预演请求号:晚回来的旧回包不再替换当前的卡(Codex P1-4)
 
-  useEffect(() => { ensureVaultSyncSubscribed(); void deviceName().then(setDevice) }, [])
+  useEffect(() => { ensureVaultSyncSubscribed(); if (!data.device?.name) void deviceName().then(setDevice) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const deviceLabel = data.device?.name || device
   useEffect(() => {
     let alive = true
     void (amadeus?.listVaults?.() ?? Promise.resolve(null)).then((rows: LocalVaultRow[] | null) => { if (alive) setVaults(rows ?? []) }).catch(() => { if (alive) setVaults([]) })
@@ -148,21 +175,32 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   useEffect(() => {
     if (!expanded || expanded !== current || !amadeus) return
     let alive = true
-    void Promise.all([amadeus.listPages().catch(() => []), amadeus.listFiles().catch(() => [])])
-      .then(([pages, files]) => { if (alive) setEntries(topLevelEntries(pages, files)) })
+    const root = current
+    setEntries((e) => (e?.root === root ? e : null))
+    void Promise.all([amadeus.listPages(), amadeus.listFiles()])
+      .then(([pages, files]) => { if (alive) setEntries({ root, items: topLevelEntries(pages, files) }) })
+      .catch(() => { if (alive) setEntries({ root, items: null, failed: true }) })
     return () => { alive = false }
   }, [expanded, current])
+
+  useEffect(() => {
+    if (pending?.bindingId && !data.bindings.some((b) => b.id === pending.bindingId)) { ++reqRef.current; setPending(null) }
+  }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const say = (root: string, text: string | null): void => setMsg((m) => { const n = { ...m }; if (text) n[root] = text; else delete n[root]; return n })
 
   const runPreview = useCallback(async (p: Pending): Promise<void> => {
+    const my = ++reqRef.current
     setPending({ ...p, preview: null, candidates: undefined })
     const r = await vaultSync.preview({ root: p.root, target: p.target, scope: p.scope, ...(p.bindingId ? { bindingId: p.bindingId } : {}) })
+    if (my !== reqRef.current) return // 期间又开了别的卡 / 取消了
     if (r.ok && r.value) { setPending({ ...p, preview: r.value, candidates: undefined }); return }
     const err = r.ok ? 'empty' : r.error
-    // 新建库时云端刚冒出同名的(别的设备刚建了):重新按名字找候选,让人挑(E 不替人绑,契约 E-4 第 1 条)
-    if (p.kind === 'new' && !p.bindingId && /name_exists/.test(err)) {
+    // 新建库时云端刚冒出同名的(别的设备刚建了 / 改名后当新库撞了名):重新按名字找候选,让人挑(E 不替人绑,契约 E-4 第 1 条);
+    // 改名那条带着 bindingId,挑了候选 = 这个绑定换到那个同名库(Codex P2-5)
+    if (p.kind === 'new' && /name_exists/.test(err)) {
       const res = await vaultSync.resolveName(p.root)
+      if (my !== reqRef.current) return
       if (res.ok && res.value?.candidates.length) {
         setNames((m) => ({ ...m, [p.root]: res.value! }))
         setPending({ ...p, kind: 'cloud', target: { kind: 'penzor' }, candidates: res.value.candidates, preview: null })
@@ -194,7 +232,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   /** 已有绑定扩大范围:预演新范围 → 汇总卡(kind scope)。 */
   const widen = useCallback(async (b: BindingView, next: BindingScope, added: ScopeItem[]): Promise<void> => {
     say(b.root, null)
-    await runPreview({ root: b.root, name: b.name, kind: 'scope', bindingId: b.id, target: { kind: 'penzor' }, scope: next, added, preview: null })
+    await runPreview({ root: b.root, name: b.name, kind: 'scope', bindingId: b.id, target: { kind: 'penzor' }, scope: next, added, preview: null, base: b.scope, baseTarget: JSON.stringify(b.target) })
   }, [runPreview])
 
   /** 改范围:纯收缩直接 setScope;引擎说要预演(有新加的)就出汇总卡。 */
@@ -213,7 +251,19 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     setBusy(true)
     const r = await vaultSync.apply({ token: pending.preview.token, generation: pending.preview.generation, onDiffer })
     setBusy(false)
-    if (!r.ok && /stale/.test(r.error)) { await runPreview({ ...pending, note: t('ssync.stale') }); return }
+    if (!r.ok && /stale/.test(r.error)) {
+      // 过期:改范围的卡按引擎此刻的绑定重算(别人期间去掉 / 加上的不被这张旧卡盖掉);去处变了 / 绑定没了 → 这张卡作废(Codex P1-1)
+      if (pending.bindingId && pending.base) {
+        const g = await vaultSync.get()
+        const fresh = g.ok ? g.value?.bindings.find((b) => b.id === pending.bindingId) : undefined
+        if (!fresh || JSON.stringify(fresh.target) !== pending.baseTarget) { setPending(null); say(pending.root, t(fresh ? 'ssync.targetChanged' : 'ssync.err.bindingGone')); await reload(); return }
+        const scope = rebaseScope(pending.base, pending.scope, fresh.scope)
+        await runPreview({ ...pending, scope, added: addedItems(fresh.scope, scope), base: fresh.scope, note: t('ssync.stale') })
+        return
+      }
+      await runPreview({ ...pending, note: t('ssync.stale') })
+      return
+    }
     const p = pending
     setPending(null)
     // 成功不另起一行提示:行里的状态就会变成「同步中…」,提示留着反倒在同步完以后还挂着
@@ -224,13 +274,11 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
 
   // 从右键 / 首登卡片带来的落点:滚到那一行,算关联闭包、勾好,出汇总卡
   useEffect(() => {
-    if (!focus?.root || !vaults) return
-    const key = JSON.stringify(focus)
-    if (handled === key) return
-    setHandled(key)
+    if (!focus?.root || !vaults || consumedFocus.has(focus)) return
     const row = rows.find((r) => r.root === focus.root)
+    if (!row) return // 库行还没出来(清单在路上):等 rows 变了再来,先别记成处理过
+    consumedFocus.add(focus)
     requestAnimationFrame(() => document.querySelector(`[data-ssync-root="${CSS.escape(focus.root!)}"]`)?.scrollIntoView({ block: 'center' }))
-    if (!row) return
     const b = bindingOf(focus.root)
     void (async () => {
       if (!focus.path) {
@@ -244,8 +292,9 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
         : null
       const ex = b?.scope.mode === 'some' ? b.scope.exclude ?? [] : []
       const { items: all, exclude } = closureItems(focus.path, kind, closure, (p) => ex.includes(p))
-      // 已经被范围盖住的关联项(比如整个 Work 文件夹已在同步)不再单列、不标「刚勾上」
-      const items = b ? all.filter((it) => !scopeCovers(b.scope, it.path)) : all
+      // 关联项里:已经被范围盖住的(比如整个 Work 文件夹已在同步)不再单列、不标「刚勾上」;
+      // 用户排除过的不因为被链接到就跟着进来 —— 只有右键点的那一项本身能把排除解开(Codex P1-2)
+      const items = b ? all.filter((it) => it.path === all[0]!.path || (!scopeCovers(b.scope, it.path) && !isExcluded(b.scope, it.path))) : all
       if (b) await widen(b, mergeScope(b.scope, items, exclude), items)
       else await startOpen(row.root, row.name, mergeScope(null, items, exclude), items)
     })()
@@ -260,7 +309,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   const groups: HostSettingsGroup[] = [
     {
       id: 'ssync-vaults', anchor: 'ssync-vaults', icon: <Cloud size={16} />, title: t('ssync.vaults'),
-      desc: device ? t('ssync.device', { name: device }) : t('ssync.deviceUnknown'),
+      desc: deviceLabel ? t('ssync.device', { name: deviceLabel }) : t('ssync.deviceUnknown'),
       headActions: (
         <button type="button" className="btn sm" disabled={!data.bindings.some((b) => b.enabled)} onClick={() => { void vaultSync.run().then(() => refreshVaultSync()) }}>
           <RefreshCw size={12} aria-hidden="true" /> {t('ssync.syncNow')}
@@ -269,12 +318,16 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       items: rows.map((r) => ({
         type: 'block' as const, id: `vault:${r.root}`, node: (
           <VaultRow key={r.root} row={r} binding={bindingOf(r.root)} data={data} names={names[r.root]} message={msg[r.root]}
-            busy={busy || pending?.root === r.root} expanded={expanded === r.root} entries={r.current ? entries : null}
+            busy={busy || pending?.root === r.root} expanded={expanded === r.root} entries={r.current && entries?.root === r.root ? entries : null}
             v2={v2?.bindings.find((x) => x.id === bindingOf(r.root)?.id) as StatusBindingExtras | undefined}
             onExpand={() => setExpanded((e) => (e === r.root ? null : r.root))}
             onToggle={async (on) => {
               const b = bindingOf(r.root)
-              if (!on) { if (pending?.root === r.root) setPending(null); if (b) { await vaultSync.setEnabled(b.id, false); await reload() } return }
+              if (!on) {
+                if (pending?.root === r.root) { ++reqRef.current; setPending(null) }
+                if (b) { const res = await vaultSync.setEnabled(b.id, false); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name)); refreshVaultSync(); await reload() }
+                return
+              }
               if (b) { const res = await vaultSync.setEnabled(b.id, true); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name)); await reload(); return }
               await startOpen(r.root, r.name, { mode: 'all' }, [])
             }}
@@ -374,11 +427,11 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
                   </button>
                 ))}
               </div>
-              <div className="ssync-sum-acts"><span className="ssync-grow" /><button type="button" className="btn sm" onClick={() => setPending(null)}>{t('ssync.sum.cancel')}</button></div>
+              <div className="ssync-sum-acts"><span className="ssync-grow" /><button type="button" className="btn sm" onClick={() => { ++reqRef.current; setPending(null) }}>{t('ssync.sum.cancel')}</button></div>
             </section>
           ) : (
             <SummaryCard name={pending.name} preview={pending.preview} busy={busy} kind={pending.kind} added={pending.added}
-              onApply={(d) => void apply(d)} onCancel={() => setPending(null)} />
+              dest={destOf(pending, data, t)} onApply={(d) => void apply(d)} onCancel={() => { ++reqRef.current; setPending(null) }} />
           )}
         </div>
       )}
@@ -396,7 +449,7 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
   message: string | undefined
   busy: boolean
   expanded: boolean
-  entries: ScopeItem[] | null
+  entries: { items: ScopeItem[] | null; failed?: boolean } | null
   v2: StatusBindingExtras | undefined
   onExpand: () => void
   onToggle: (on: boolean) => Promise<void>
@@ -504,7 +557,18 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
       {b && on && (b.status.deletesPending > 0 || deletes) && (
         <div className="ssync-note ssync-ask">
           <span>{t('ssync.review.deletes', { n: deletes?.count ?? b.status.deletesPending })}</span>
-          {deletes?.token && (
+          {/* 「照删」只在名单摆在眼前时给:看不到删哪一边、哪些文件就不放行整批(Codex P1-6);清单被截断时写还有多少 */}
+          {!!deletes?.items?.length && (
+            <div className="ssync-del-list" aria-label={t('ssync.review.deletesList')}>
+              {deletes.items.slice(0, 20).map((d) => (
+                <div key={`${d.side}:${d.path}`} className="ssync-del-row" title={d.path}>
+                  <span className="ssync-del-side">{t(d.side === 'cloud' ? 'ssync.review.deletesCloud' : 'ssync.review.deletesLocal')}</span><span>{d.path}</span>
+                </div>
+              ))}
+              {deletes.count > Math.min(20, deletes.items.length) && <div className="ssync-faint">{t('ssync.sum.more', { n: deletes.count - Math.min(20, deletes.items.length) })}</div>}
+            </div>
+          )}
+          {deletes?.token && !!deletes.items?.length && (
             <div className="ssync-ask-acts">
               <button type="button" className="btn sm" onClick={() => void act(() => vaultSync.deletesAbandon(b.id, deletes.token))}>{t('ssync.review.deletesAbandon')}</button>
               <button type="button" className="btn danger sm" onClick={() => void act(() => vaultSync.deletesConfirm(b.id, deletes.token))}>{t('ssync.review.deletesConfirm')}</button>
@@ -519,18 +583,21 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
 
 /** 范围清单:整个库 / 选中的文件夹和笔记;只能挑当前打开的库(别的库要打开它再改)。 */
 function ScopeEditor({ binding: b, current, entries, onScope }: {
-  binding: BindingView; current: boolean; entries: ScopeItem[] | null
+  binding: BindingView; current: boolean; entries: { items: ScopeItem[] | null; failed?: boolean } | null
   onScope: (b: BindingView, next: BindingScope, added: ScopeItem[]) => void
 }) {
   const { t } = useI18n()
   const [err, setErr] = useState<string | null>(null)
+  // 清单读不出来 = 不知道库里有什么:按顶层项勾选 / 从整库收窄都不许(拿残缺清单写范围会漏掉没读到的,Codex P1-3)
+  const list = entries?.items ?? null
+  const failed = !!entries?.failed
   const some = b.scope.mode === 'some'
   const pickAll = (): void => { if (some) onScope(b, { mode: 'all' }, []) }
-  const pickSome = (): void => { if (!some && entries?.length) onScope(b, { mode: 'some', items: entries }, []) }
+  const pickSome = (): void => { if (!some && list?.length) onScope(b, { mode: 'some', items: list }, []) }
   const toggle = (it: ScopeItem, checked: boolean): void => {
     setErr(null)
     if (checked) { onScope(b, mergeScope(b.scope, [it]), [it]); return }
-    if (b.scope.mode === 'all') { const rest = (entries ?? []).filter((e) => e.path !== it.path); if (rest.length) onScope(b, { mode: 'some', items: rest }, []); else setErr(t('ssync.scope.noneLeft')); return }
+    if (b.scope.mode === 'all') { if (!list) return; const rest = list.filter((e) => e.path !== it.path); if (rest.length) onScope(b, { mode: 'some', items: rest }, []); else setErr(t('ssync.scope.noneLeft')); return }
     const next = removeItem(b.scope, it.path)
     if (next) onScope(b, next, [])
     else setErr(t('ssync.scope.noneLeft'))
@@ -539,19 +606,20 @@ function ScopeEditor({ binding: b, current, entries, onScope }: {
     <div className="ssync-scope" role="group" aria-label={t('ssync.scope.someOpt')}>
       <div className="ssync-scope-modes">
         <label><input type="radio" checked={!some} onChange={pickAll} /> {t('ssync.scope.allOpt')}</label>
-        <label><input type="radio" checked={some} disabled={!current || !entries?.length} onChange={pickSome} /> {t('ssync.scope.someOpt')}</label>
+        <label><input type="radio" checked={some} disabled={!current || !list?.length} onChange={pickSome} /> {t('ssync.scope.someOpt')}</label>
       </div>
       {!current && <div className="ssync-faint ssync-note">{t('ssync.scope.otherVault')}</div>}
-      {current && entries && (
+      {current && failed && <div className="ssync-error" role="alert">{t('ssync.scope.listFailed')}</div>}
+      {current && list && (
         <div className="ssync-scope-list">
           {/* 右键加进来的那一项和它的关联项多半不在顶层:照样列出来、勾着(可以单独去掉) */}
-          {b.scope.mode === 'some' && b.scope.items.filter((it) => !entries.some((e) => e.path === it.path)).map((it) => (
+          {b.scope.mode === 'some' && b.scope.items.filter((it) => !list.some((e) => e.path === it.path)).map((it) => (
             <label key={`x:${it.path}`} className="ssync-scope-item" title={it.path} data-scope-extra="">
               <input type="checkbox" checked onChange={() => toggle(it, false)} />
               <span>{it.kind === 'folder' ? it.path : it.path.replace(/\.md$/i, '')}</span>
             </label>
           ))}
-          {entries.map((it) => {
+          {list.map((it) => {
             const covered = !!scopeCovers(b.scope, it.path)
             return (
               <label key={it.path} className="ssync-scope-item" title={it.path}>

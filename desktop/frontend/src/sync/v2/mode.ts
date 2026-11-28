@@ -31,7 +31,8 @@ export function modeFrom(r: { ok: true; value: Pick<VaultSyncGet, 'mode' | 'comp
     if (r.error === CHANNEL_MISSING) return { mode: 'legacy', compatReason: 'old-extend' }
     return { mode: 'unknown', error: r.error }
   }
-  const v = r.value as { mode: string; compatReason?: VaultSyncCompatReason }
+  const v = r.value as { mode?: string; compatReason?: VaultSyncCompatReason } | null | undefined
+  if (!v || typeof v !== 'object') return { mode: 'unknown', error: 'invalid_reply' }
   if (v.mode === 'full') return { mode: 'full' }
   if (v.compatReason === 'state-unreadable') return { mode: 'unreadable', compatReason: v.compatReason }
   return { mode: 'legacy', ...(v.compatReason ? { compatReason: v.compatReason } : {}) }
@@ -53,3 +54,6 @@ export async function refreshSyncMode(): Promise<SyncUiMode> {
 
 export const syncModeNow = (): SyncUiMode => useSyncMode.getState().mode
 export const isFullSync = (): boolean => useSyncMode.getState().mode === 'full'
+/** 明确是旧同步在管(compat,或老 Extend 没有 v2 通道)。旧入口(条目同步的开 / 关、旧弹窗、蓬洲云同步页)只在这时给:
+ *  还没问出来(unknown)、读不出(unreadable)、Extend 停用(off)都不给旧写入口(Codex P1-7 / P2-6)。 */
+export const isLegacySync = (): boolean => useSyncMode.getState().mode === 'legacy'

@@ -4,11 +4,11 @@ import { CHANNEL_MISSING, EXTEND_UNAVAILABLE, normalizeReply } from './client'
 import { isPlaceholderReview, v2Feed, v2Roots } from './feed'
 import { modeFrom, setSyncMode, useSyncMode } from './mode'
 import { parseSyncFocus } from './openSyncSettings'
-import { addedItems, closureItems, mergeScope, removeItem, scopeCovers, topLevelEntries } from './scope'
+import { addedItems, closureItems, isExcluded, mergeScope, rebaseScope, removeItem, scopeCovers, topLevelEntries } from './scope'
 import { entrySyncState } from './entries'
 import { syncErrorText } from './errors'
 import { feedsOf } from '../vaultSyncStore'
-import { VAULT_SYNC_CHANNELS as CH, type VaultSyncStatus } from './types'
+import { CREATE_CANDIDATE, VAULT_SYNC_CHANNELS as CH, type BindingScope, type VaultSyncStatus } from './types'
 import { translate } from '../../i18n'
 
 const t = (k: string, v?: Record<string, unknown>): string => translate(k, v)
@@ -141,5 +141,50 @@ describe('入口与落点', () => {
     expect(syncErrorText('reserved', t, 'X')).toBe(t('ssync.err.reserved', { name: 'X' }))
     expect(syncErrorText('target-location-changed', t)).toBe(t('ssync.targetChanged'))
     expect(syncErrorText('weird thing', t)).toContain('weird thing')
+  })
+})
+
+describe('Codex 评审返修(第 2 步 U)', () => {
+  const W = (p: string) => ({ path: p, kind: 'folder' as const })
+  const P = (p: string) => ({ path: p, kind: 'page' as const })
+  it('rebaseScope:过期重来按差量套到引擎此刻的范围,别处去掉的不加回、别处加的不抹掉(P1-1)', () => {
+    const base: BindingScope = { mode: 'some', items: [P('A.md'), P('B.md')] }
+    const next = mergeScope(base, [P('C.md')])
+    // 期间右键停了 B、别处又加了 D
+    const fresh: BindingScope = { mode: 'some', items: [P('A.md'), P('D.md')] }
+    expect(rebaseScope(base, next, fresh)).toEqual({ mode: 'some', items: [P('A.md'), P('D.md'), P('C.md')] })
+    // 这次本身去掉了 A、加了 C:套上去照样去掉 A
+    expect(rebaseScope(base, { mode: 'some', items: [P('B.md'), P('C.md')] }, fresh)).toEqual({ mode: 'some', items: [P('D.md'), P('C.md')] })
+    // 期间变成整个库:不往回收
+    expect(rebaseScope(base, next, { mode: 'all' })).toEqual({ mode: 'all' })
+    // 排除的增减也按差量
+    const b2: BindingScope = { mode: 'some', items: [W('Work')], exclude: ['Work/Old'] }
+    const n2: BindingScope = { mode: 'some', items: [W('Work'), P('X.md')], exclude: ['Work/Old', 'Work/Tmp'] }
+    expect(rebaseScope(b2, n2, { mode: 'some', items: [W('Work')], exclude: ['Work/Old', 'Work/Draft'] })).toEqual({ mode: 'some', items: [W('Work'), P('X.md')], exclude: ['Work/Old', 'Work/Draft', 'Work/Tmp'] })
+  })
+  it('isExcluded:排除的笔记不因被链接就跟着进来;mergeScope 只解开点名的那一项(P1-2)', () => {
+    const scope: BindingScope = { mode: 'some', items: [W('Work')], exclude: ['Private.md'] }
+    const { items } = closureItems('Plan.md', 'page', { pages: ['Private.md', 'Work/M.md'], files: [] }, () => false)
+    const kept = items.filter((it) => it.path === 'Plan.md' || (!scopeCovers(scope, it.path) && !isExcluded(scope, it.path)))
+    expect(kept.map((x) => x.path)).toEqual(['Plan.md'])
+    expect((mergeScope(scope, kept) as { exclude?: string[] }).exclude).toEqual(['Private.md'])
+    // 右键点的就是被排除的那篇:用户明说要同步,解开
+    expect((mergeScope(scope, [P('Private.md')]) as { exclude?: string[] }).exclude).toBeUndefined()
+  })
+  it('停止同步这一项:去掉后还被别的项盖着 = 不算停掉(P1-2)', () => {
+    const scope: BindingScope = { mode: 'some', items: [W('Work'), P('Work/A.md'), P('Other.md')] }
+    const next = removeItem(scope, 'Work/A.md')!
+    expect(scopeCovers(next, 'Work/A.md')).toBe('covered')
+  })
+  it('preview / 找回 / 删除确认的内层 {error} 当失败;get 成功但没 value 不崩(P2-1)', () => {
+    expect(normalizeReply(CH.preview, { ok: true, value: { error: 'scope_unreadable' } })).toEqual({ ok: false, error: 'scope_unreadable' })
+    expect(normalizeReply(CH.recoveryRestore, { ok: true, value: { error: 'not_found' } })).toEqual({ ok: false, error: 'not_found' })
+    expect(normalizeReply(CH.deletesConfirm, { ok: true, value: undefined })).toEqual({ ok: true, value: undefined })
+    expect(modeFrom({ ok: true, value: undefined as never }).mode).toBe('unknown')
+  })
+  it('按名字新建的候选是 E 认的 {kind:new}(3164e7c);新错误码有人话', () => {
+    expect(CREATE_CANDIDATE).toEqual({ kind: 'new' })
+    expect(syncErrorText('takeover_in_progress', t)).toBe(t('ssync.err.takeoverBusy'))
+    expect(syncErrorText('Error: binding_not_found', t)).toBe(t('ssync.err.bindingGone'))
   })
 })

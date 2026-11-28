@@ -88,6 +88,7 @@ export function useVaultSync(vault: { root: string | null; side: 'local' | 'clou
 
 /** 立刻再读一遍(用户刚点了立即同步 / 处理了等你定)。 */
 export function refreshVaultSync(): void {
+  v2MetaDirty = true // 刚做过写操作(开关 / 应用 / 改范围):开没开、主绑定还是备份可能变了
   void pullLegacy()
   void pollContent() // 重排:刚点了立即同步,马上进 1 秒一次的节奏
   void pullRemote()
@@ -174,7 +175,27 @@ async function readV2(): Promise<VaultSyncStatus | null> {
     return null
   }
   v2Channel = 'ok'
-  return r.value.mode === 'full' ? r.value : null
+  return r.value.mode === 'full' ? withBindingMeta(r.value) : null
+}
+
+/**
+ * vaultsync:status 目前不带 enabled / paused / role(只有 get 带;已回报 E,契约 U-4)。缺了不能当「开着的主绑定」:
+ * 右键会对停用的 / 备份绑定改范围、旧条目同步那条会被盖掉(Codex P2-3)。缺的时候用 get 补,绑定集合变了 / 刚写过 / 30 秒一次重问;
+ * get 也读不出就照旧缺着 —— 入口那边缺了就不当主绑定(entries.ts primaryOf)。E 把字段补进 status 以后这里不再发 get。
+ */
+let v2Meta: { at: number; ids: string; map: Map<string, { enabled: boolean; paused: boolean; role: 'primary' | 'backup' }> } | null = null
+let v2MetaDirty = true
+async function withBindingMeta(st: VaultSyncStatus): Promise<VaultSyncStatus> {
+  if (!st.bindings.some((b) => b.enabled === undefined || b.role === undefined)) return st
+  const ids = st.bindings.map((b) => b.id).sort().join(',')
+  if (!v2Meta || v2Meta.ids !== ids || v2MetaDirty || Date.now() - v2Meta.at > 30_000) {
+    v2MetaDirty = false
+    const g = await vaultSync.get().catch(() => null)
+    if (g?.ok && Array.isArray(g.value?.bindings)) v2Meta = { at: Date.now(), ids, map: new Map(g.value.bindings.map((b) => [b.id, { enabled: b.enabled, paused: b.paused, role: b.role }])) }
+  }
+  const meta = v2Meta
+  if (!meta) return st
+  return { ...st, bindings: st.bindings.map((b) => { const m = meta.map.get(b.id); return m ? { ...m, ...b } : b }) }
 }
 
 async function pollContent(): Promise<void> {

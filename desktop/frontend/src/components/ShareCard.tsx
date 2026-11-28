@@ -5,6 +5,7 @@
  * 配额随套餐(服务端强制;此处仅展示与报错透传):free 共享不可用/发布3;plus 2/10;pro 10/∞。
  */
 import { entryLabel, isFullSyncNow, runEntry, useV2EntrySync } from '../sync/v2/entries'
+import { useSyncMode } from '../sync/v2/mode'
 import React, { useEffect, useRef, useState } from 'react'
 import { X, Copy, Check, Link2, Globe2, Trash2, RotateCw, Cloud, CloudOff, FileText, Paperclip } from 'lucide-react'
 import { useApp } from '../stores/appStore'
@@ -80,6 +81,7 @@ registerMessages({
 
 const fmtQuota = (n: number): string => (Number.isFinite(n) ? String(n) : translate('share.unlimited'))
 const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
+const vaultSideNow = (): 'local' | 'cloud' => usePageStore.getState?.().vaultSide ?? 'local'
 
 interface ShareCardProps { path: string; anchor: { x: number; y: number }; onClose: () => void }
 
@@ -89,7 +91,10 @@ export function ShareCard({ path: localPath, anchor, onClose }: ShareCardProps):
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const vaultSide = usePageStore((s) => s.vaultSide)
   const entryVaults = useEntrySync((s) => s.vaults)
-  const path = cloudPathFor(entryVaults, vaultRoot, vaultSide, localPath) ?? ''
+  // 智库同步第 2 步完整模式:本机库的云端身份是 v2 绑定的 {库, 路径},旧注册表里可能还留着接手前的前缀 ——
+  // 拿它加上协作接口当前选中的云端库,会对着另一份同路径内容生成链接(Codex P1-5)。v2 的分享接上之前,本机侧一律不给链接
+  const full = useSyncMode((s) => s.mode === 'full')
+  const path = vaultSide === 'local' && full ? '' : cloudPathFor(entryVaults, vaultRoot, vaultSide, localPath) ?? ''
   // 文件移动、切库或同步映射改变时,旧 token、参与者和进行中的操作都属于旧目标。
   // 用完整目标身份重建内部状态,避免新路径首帧仍能点击旧页面的取消发布/共享按钮。
   return <ShareCardTarget key={JSON.stringify([vaultRoot, vaultSide, localPath, path])} path={path} localPath={localPath} anchor={anchor} onClose={onClose} />
@@ -211,7 +216,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
         </div>
 
         {!path ? (
-          <div className="amxc-hint" style={{ padding: '18px 8px' }}>{t(isFullSyncNow() ? 'ssync.share.notInCloud' : 'share.notInCloud')}</div>
+          <div className="amxc-hint" style={{ padding: '18px 8px' }}>{t(isFullSyncNow() && vaultSideNow() === 'local' ? 'ssync.share.v2Later' : 'share.notInCloud')}</div>
         ) : notOwner ? (
           <div className="amxc-hint" style={{ padding: '18px 8px' }}>{t('share.ownerOnly')}</div>
         ) : tab === 'share' ? (
@@ -357,6 +362,7 @@ function CloudSyncRow({ path, onClose }: { path: string; onClose: () => void }) 
   const { t } = useI18n()
   // 智库同步第 2 步完整模式:同一个入口(同步这篇… / 停止同步这一项 / 同步设置…),改去设置 › 同步
   const v2 = useV2EntrySync(vaultRoot, vaultSide === 'local' ? path : null)
+  const legacy = useSyncMode((s) => s.mode === 'legacy') // 旧写入口只在旧同步明确在管时给
   if (v2 !== null) {
     if (vaultSide !== 'local') return null
     return (
@@ -367,7 +373,7 @@ function CloudSyncRow({ path, onClose }: { path: string; onClose: () => void }) 
       </div>
     )
   }
-  if (!window.amadeusSync?.entrySyncEnable || vaultSide !== 'local') return null
+  if (!window.amadeusSync?.entrySyncEnable || vaultSide !== 'local' || !legacy) return null
   const synced = isSyncedEntry(vaultRoot, path)
   return (
     <div className="amxc-body" style={{ borderTop: '1px solid var(--border, rgba(128,128,128,.25))', marginTop: 4, paddingTop: 8 }}>

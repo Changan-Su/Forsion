@@ -90,6 +90,8 @@ export interface CloudVaultView {
 export interface VaultSyncGet {
   version: 2
   mode: VaultSyncMode
+  /** 这台电脑(E-6 第 2 条):id = 设备登记里的那个,name = 心跳用的名字;兼容模式不给。 */
+  device?: { id: string; name: string }
   compatReason?: VaultSyncCompatReason
   cadence: Cadence
   bindings: BindingView[]
@@ -105,9 +107,9 @@ export type ResolveCandidate = { kind: 'own'; vaultId: string; name: string } | 
 export interface ResolveNameResult { candidates: ResolveCandidate[]; error?: 'reserved' | 'server_unsupported' | 'invalid_name' }
 
 /** 按文件夹名新建一个蓬洲云库(名字 = 库文件夹名;apply 时才建,撞名回 stale,重新 preview 回 name_exists)。契约 U-1 第 1 条,E 已做。 */
-export type CreateCandidate = { kind: 'create' } | { kind: 'new'; name?: string }
-/** ⚠️ 契约 E-4 第 1 条写的是 `{kind:'new'}`,#128 推上去的 pair.ts(2b1222f)认的是 `{kind:'create'}`:界面只在这一处取,E 定了改这一行(契约 U-3 第 1 条)。 */
-export const CREATE_CANDIDATE: CreateCandidate = { kind: 'create' }
+/** 按文件夹名新建(契约 U-1 第 1 条;E 3164e7c 起认 `{kind:'new'}`,name 不给 = 文件夹名,给了须同一个名字键否则 name_mismatch)。 */
+export type CreateCandidate = { kind: 'new'; name?: string }
+export const CREATE_CANDIDATE: CreateCandidate = { kind: 'new' }
 /** candidate 缺 = 沿用已有绑定的去处(改范围)。 */
 export type PreviewTarget =
   | { kind: 'penzor'; candidate?: ResolveCandidate | CreateCandidate }

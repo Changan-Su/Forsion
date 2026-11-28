@@ -21,7 +21,8 @@ export type EntryState = 'explicit' | 'covered' | false
 
 function primaryOf(st: VaultSyncStatus | null, root: string | null): VaultSyncStatus['bindings'][number] | undefined {
   if (!st || !root) return undefined
-  return st.bindings.find((b) => b.root === root && b.enabled !== false && (b.role ?? 'primary') === 'primary')
+  // 开没开、是不是主绑定要确知(status 缺这两个字段时由 store 用 get 补;补不上 = 不当主绑定,入口去设置页)
+  return st.bindings.find((b) => b.root === root && b.enabled === true && b.role === 'primary')
 }
 
 /** 这一项在不在这个库正在同步的范围里。 */
@@ -60,8 +61,9 @@ export async function stopSyncEntry(root: string | null, path: string): Promise<
   const b = primaryOf(useVaultSyncRaw.getState().v2, root)
   if (!b) return false
   const next = removeItem(b.scope, path)
-  // 去掉后一项不剩:不在这里替人关掉整个库,去设置页那一行(开关在那)
-  if (!next) { openSyncSettings({ ...(root ? { root } : {}) }); return false }
+  // 去掉后一项不剩:不在这里替人关掉整个库,去设置页那一行(开关在那)。
+  // 去掉了还被别的项盖着(同时勾了 Work/ 和 Work/A.md):提示「已停止」是假的,也去那一行自己挑(Codex P1-2)
+  if (!next || scopeCovers(next, path)) { openSyncSettings({ ...(root ? { root } : {}) }); return false }
   const r = await vaultSync.setScope(b.id, next)
   const name = (path.split('/').pop() ?? path).replace(/\.md$/i, '')
   useApp.getState().toast(r.ok ? translate('ssync.entry.stopped', { name }) : translate('ssync.entry.stopFailed', { error: r.ok ? '' : ipcErrorText(r.error) }), !r.ok)

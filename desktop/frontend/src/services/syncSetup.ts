@@ -12,7 +12,7 @@
  * 开关的动作不做:setSync 对封着的那类不写任何东西、回 ok;卡片 / 引导跳过它们,新同步的建议配置恒不带插件和 Agent。
  * 引擎那边的 /agent/sync(POST)照常发 —— 它带着「我的资料」与默认日历(human/)上云。
  */
-import { isFullSync, refreshSyncMode, syncModeNow } from '../sync/v2/mode'
+import { isFullSync, isLegacySync, refreshSyncMode, syncModeNow } from '../sync/v2/mode'
 import { request, type SyncStatusResult } from './backendService'
 import { homeTarget } from './engine/targets'
 import { PLUGIN_SYNC_ALL_OFF_KEY, pluginSyncSummary } from '../amadeus/plugins/pluginDataSync'
@@ -362,6 +362,8 @@ export async function applyOnboardingSync(choices: Record<SyncKind, boolean>, ki
     if (!(kinds.includes('notes') && choices.notes)) markSyncDecided()
     return [{ ok: true }]
   }
+  // 问不出是哪套(读失败 / 读不出 / Extend 停用):不走旧的开启流程,也不记「点过了」—— 首登卡片下次再问(Codex P1-7)
+  if (!isLegacySync()) return [{ ok: false, error: `sync-mode-${syncModeNow()}` }]
   if (!snap?.contentRules) return applySyncChoices(choices, kinds)
   const who = account
   if (!(await sameAccount(who))) return [{ ok: false, error: 'account-changed' }]

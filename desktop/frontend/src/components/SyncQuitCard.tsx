@@ -33,9 +33,19 @@ export function SyncQuitCard() {
   if (!main || !s.open) return null
   const r = s.result
   const failed = r?.state === 'failed'
+  // 答复没送到 / 主进程说不行:卡留着、按钮放开,可以再点一次(Codex P2-10)。
+  // 取消退出送到了才收卡(主进程收到后也会推 open:false);直接退出送到了就等着进程退出,按钮保持按下
   const answer = (a: 'quit' | 'cancel'): void => {
+    const g = gate()
+    if (!g) return
     setBusy(true)
-    void gate()?.answer(a).catch(() => {}).finally(() => { if (a === 'cancel') setS({ open: false }) })
+    void g.answer(a).then(
+      (r) => {
+        if ((r as { ok?: unknown } | null)?.ok === false) { setBusy(false); return }
+        if (a === 'cancel') { setBusy(false); setS({ open: false }) }
+      },
+      () => setBusy(false),
+    )
   }
   const shown = r?.failed.slice(0, 5) ?? []
   return (
