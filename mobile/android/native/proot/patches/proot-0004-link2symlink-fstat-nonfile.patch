@@ -1,0 +1,48 @@
+link2symlink: don't fail a successful stat on an uninitialized buffer.
+At the exit of fstat, the descriptor's /proc link is lstat()ed as a
+path; for pipes, sockets, ... ("pipe:[123]") that lstat fails and the
+code went on reading the uninitialized struct stat, so depending on
+stack garbage it took the "fake hard link" path and replaced the
+syscall result with -1 (EPERM).  Programs that check their standard
+descriptors at startup (node aborts) failed at random.  Stop when the
+lstat fails, check the " (deleted)" suffix only on a valid link value,
+and return -errno instead of -1 when the link target vanished.
+
+--- a/src/extension/link2symlink/link2symlink.c
++++ b/src/extension/link2symlink/link2symlink.c
+@@ -285,10 +285,11 @@
+ 
+ 		if (sysnum == PR_fstat64 || sysnum == PR_fstat) {
+ 			status = readlink_proc_pid_fd(tracee->pid, peek_reg(tracee, MODIFIED, SYSARG_1), original);
+-			if (strcmp(original + strlen(original) - strlen(DELETED_SUFFIX), DELETED_SUFFIX) == 0)
+-				original[strlen(original) - strlen(DELETED_SUFFIX)] = '\0';
+ 			if (status < 0)
+ 				return status;
++			size = (ssize_t) strlen(original) - (ssize_t) strlen(DELETED_SUFFIX);
++			if (size >= 0 && strcmp(original + size, DELETED_SUFFIX) == 0)
++				original[size] = '\0';
+ 		} else {
+ 			if (sysnum == PR_fstatat64 || sysnum == PR_newfstatat || sysnum == PR_statx)
+ 				sysarg_path = SYSARG_2;
+@@ -307,8 +308,11 @@
+ 		else
+ 			name++;
+ 
+-		/* Check if it is a link */
++		/* Check if it is a link.  Descriptors of pipes, sockets,
++		 * ... don't name a file: nothing to do.  */
+ 		status = lstat(original, &statl);
++		if (status < 0)
++			return 0;
+ 
+ 		if (strncmp(name, PREFIX, strlen(PREFIX)) == 0) {
+ 			if (S_ISLNK(statl.st_mode)) {
+@@ -342,7 +346,7 @@
+ 
+ 		final_proc: status = lstat(final,&finalStat);
+ 		if (status < 0)
+-			return status;
++			return -errno;
+ 
+ 		finalStat.st_nlink = atoi(final + strlen(final) - 4);
+ 

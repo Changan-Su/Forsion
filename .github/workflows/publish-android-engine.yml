@@ -1,0 +1,153 @@
+name: publish-android-engine
+
+# The "This phone" engine npm package (@forsion/tangu-engine-android-arm64; mobile/android/local-engine/README.md):
+# engine code + its linux-arm64 glibc dependencies, signed with the engine key, downloaded by the Android test channel
+# from npmmirror first, then registry.npmjs.org. Built on an arm64 runner inside Ubuntu 24.04 with the base's Node, so
+# better-sqlite3 & co. are built for the phone's environment.
+#
+# Triggers:
+#   - push a tag android-engine-v<x.y.z> (x.y.z = tangu-agent/package.json version): build → check → publish with the
+#     single dist-tag android-<line> (line from mobile/android/local-engine/lock.json) → ask npmmirror to sync.
+#   - manual run: the same build and checks, no publish; the tarball is in Artifacts (benches, first manual publish).
+#
+# One publish = one dist-tag (trusted publishing cannot run `npm dist-tag add`). A new line (new base / incompatible
+# native contract) starts publishing to android-<new line>; APKs of older lines keep the last engine of theirs.
+# Order for a release that needs a new engine: publish here, wait for npmmirror to have it, then release the APK.
+#
+# Three jobs, so no dependency code shares a job with a credential: build (host npm ci + tsc, no secret, no OIDC) →
+# sign (fresh checkout + the built dist; dependency scripts run only in the keyless stage container; the boot check
+# runs package code with the output read-only and the tarball's hash re-checked) → publish (OIDC, runs no package code).
+#
+# npm trusted publishing (OIDC), no token in the repo. The package name must exist before a trusted publisher can be
+# registered: the first version is published once by hand from this workflow's artifact (then register this file).
+# Signing key = repository secret TANGU_ENGINE_SIGNING_KEY (the engine key; never rotated, see tangu-agent/src/boot/signingKey.ts).
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'android-engine-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.gate.outputs.version }}
+      dist_tag: ${{ steps.gate.outputs.dist_tag }}
+      pkg: ${{ steps.gate.outputs.pkg }}
+      publish: ${{ steps.gate.outputs.publish }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: 24.22.1 # the base's Node
+
+      - name: Gate
+        id: gate
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./tangu-agent/package.json').version")"
+          line="$(node -p "require('./mobile/android/local-engine/lock.json').line")"
+          pkg="$(node -p "require('./mobile/android/local-engine/lock.json').package")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=android-$line" >> "$GITHUB_OUTPUT"
+          echo "pkg=$pkg" >> "$GITHUB_OUTPUT"
+          publish=false
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            if [ "$GITHUB_REF_NAME" != "android-engine-v$version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match tangu-agent/package.json $version (expected android-engine-v$version)"
+              exit 1
+            fi
+            publish=true
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+      - name: Build the engine (no secret, no OIDC in this job)
+        working-directory: tangu-agent
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+        with:
+          name: tangu-agent-dist
+          path: tangu-agent/dist
+          if-no-files-found: error
+
+  sign:
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # actions/download-artifact@v8.0.2
+        with:
+          name: tangu-agent-dist
+          path: tangu-agent/dist
+
+      - name: Pack, sign, verify the tarball, start the engine from it
+        env:
+          TANGU_ENGINE_SIGNING_KEY: ${{ secrets.TANGU_ENGINE_SIGNING_KEY }}
+        run: |
+          if [ -z "$TANGU_ENGINE_SIGNING_KEY" ]; then
+            echo "::error::Missing TANGU_ENGINE_SIGNING_KEY. Phones refuse an unsigned engine, so there is nothing worth publishing."
+            exit 1
+          fi
+          set -euo pipefail
+          # stage (dependency scripts run, no key) → sign + verify against the key the APK pins (no package code runs) → boot from the tarball (read-only, hash re-checked)
+          mobile/scripts/local-engine/build-android-engine.sh "$RUNNER_TEMP/android-engine" --boot-check | tee "$RUNNER_TEMP/summary.log"
+          tail -n 1 "$RUNNER_TEMP/summary.log" > "$RUNNER_TEMP/android-engine/summary.json"
+          rm -rf "$RUNNER_TEMP/android-engine/.stage"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+        with:
+          name: forsion-tangu-engine-android-arm64
+          path: ${{ runner.temp }}/android-engine/*
+          if-no-files-found: error
+
+  publish:
+    needs: [build, sign]
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing (OIDC); this job runs no package code
+    steps:
+      # ⚠️ no registry-url here: setup-node would write a placeholder token and npm would then skip OIDC (same as check-unit.yml)
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: 24.22.1 # trusted publishing needs npm ≥ 11.5.1 + Node ≥ 22.14
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # actions/download-artifact@v8.0.2
+        with:
+          name: forsion-tangu-engine-android-arm64
+          path: engine
+
+      - name: Publish to npm
+        run: |
+          set -euo pipefail
+          pkg="${{ needs.build.outputs.pkg }}"; version="${{ needs.build.outputs.version }}"
+          tgz="engine/$(node -p "require('./engine/summary.json').tgz.split('/').pop()")"
+          [ -f "$tgz" ] || { echo "::error::$tgz is not in the artifact"; exit 1; }
+          view="$(npm view "$pkg" name 2>&1 || true)"
+          if grep -q E404 <<<"$view"; then
+            echo "::error::$pkg is not on npm yet. Publish this run's artifact once by hand (npm publish <tgz> --access public --tag ${{ needs.build.outputs.dist_tag }}), then register publish-android-engine.yml as its trusted publisher."
+            exit 1
+          elif [ -n "$(npm view "$pkg@$version" version 2>/dev/null || true)" ]; then
+            echo "::error::$pkg@$version is already on npm (versions are immutable): bump tangu-agent's version first."
+            exit 1
+          fi
+          npm publish "$tgz" --access public --tag "${{ needs.build.outputs.dist_tag }}"
+
+      # Mainland phones read npmmirror first; its sync lags by minutes. Ask it to sync now; failure does not fail the release.
+      - name: Ask npmmirror to sync
+        continue-on-error: true
+        run: curl -fsS -X PUT "https://registry.npmmirror.com/-/package/%40forsion%2Ftangu-engine-android-arm64/syncs"

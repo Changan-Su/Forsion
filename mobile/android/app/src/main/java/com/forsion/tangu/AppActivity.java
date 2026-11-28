@@ -35,6 +35,7 @@ public class AppActivity extends BridgeActivity {
         registerPlugin(CallKeepPlugin.class);
         // P1-K8:手机作为 Unit 的身份 + 远端引擎请求的原生中继(调用方票只在原生,见 UnitPlugin)。
         registerPlugin(UnitPlugin.class);
+        registerPlugin(com.forsion.tangu.localengine.LocalEnginePlugin.class);
         // P1-DL:存到系统「下载」(Capacitor WebView 没有 DownloadListener,<a download> 在 App 里是哑弹)。
         registerPlugin(DownloadsPlugin.class);
         registerPlugin(NativeModelPickerPlugin.class);

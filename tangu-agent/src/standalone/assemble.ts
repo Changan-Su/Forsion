@@ -2,6 +2,7 @@
  * standalone 形态的共享装配:host(嵌入式 PGlite / 外部 PG)、brain(httpBrain / multiBrain)、
  * 沙箱探测。被 standalone/main.ts(server 前端)与 cli/main.ts(终端前端)共用,杜绝漂移。
  */
+import { localHostCredential } from '../core/phoneMode.js';
 import { hostSpawnDenied } from '../core/hostSpawn.js';
 import { execFile } from 'node:child_process';
 import { readFileSync, mkdirSync } from 'node:fs';
@@ -99,7 +100,7 @@ export async function setupHost(
   cfg: StandaloneConfig,
 ): Promise<{ host: HostServices; runBaseSchema: () => Promise<void>; storage: string }> {
   if (cfg.databaseUrl) {
-    const { host, pool } = createLocalHost({ databaseUrl: cfg.databaseUrl, localToken: cfg.localToken || cfg.token, userId: cfg.userId });
+    const { host, pool } = createLocalHost({ databaseUrl: cfg.databaseUrl, localToken: localHostCredential(cfg), userId: cfg.userId });
     return { host, runBaseSchema: async () => { await pool.query(STANDALONE_SCHEMA); }, storage: '外部 Postgres' };
   }
   const inMemory = cfg.dataDir === 'memory';
@@ -107,12 +108,12 @@ export async function setupHost(
   if (process.env.TANGU_EMBED === 'pglite') {
     const dataDir = inMemory ? undefined : (cfg.dataDir || pgdataDir());
     if (dataDir) mkdirSync(dataDir, { recursive: true });
-    const { host, db } = await createEmbeddedHost({ dataDir, localToken: cfg.localToken || cfg.token, userId: cfg.userId });
+    const { host, db } = await createEmbeddedHost({ dataDir, localToken: localHostCredential(cfg), userId: cfg.userId });
     return { host, runBaseSchema: async () => { await db.exec(STANDALONE_SCHEMA); }, storage: inMemory ? 'PGlite(内存)' : `PGlite(${dataDir})` };
   }
   // 默认:原生 SQLite(WAL)。dataDir 是文件路径('memory'=内存库);三端默认同指 ~/.tangu/state.db。
   const dbPath = inMemory ? 'memory' : (cfg.dataDir || stateDbPath());
-  const { host, db } = createSqliteHost({ dataDir: dbPath, localToken: cfg.localToken || cfg.token, userId: cfg.userId });
+  const { host, db } = createSqliteHost({ dataDir: dbPath, localToken: localHostCredential(cfg), userId: cfg.userId });
   return {
     host,
     runBaseSchema: async () => { db.exec(toSqliteDDL(STANDALONE_SCHEMA)); },

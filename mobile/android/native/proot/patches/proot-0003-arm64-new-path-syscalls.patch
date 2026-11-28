@@ -1,0 +1,139 @@
+Teach PRoot the arm64 numbers of the path-taking syscalls added after
+statx, so none of them reaches the kernel with an untranslated path.
+The arm64 table stopped at statx (291): faccessat2 (439) was handled by
+the translation code and listed in the seccomp filter, but its number
+mapped to nothing, so it ran on the host path whenever the platform
+let it through.  faccessat2 and fchmodat2 are now translated like
+faccessat/fchmodat; execveat, openat2, io_uring_setup, the mount API
+and the *xattrat/file_*attr calls are answered with -ENOSYS, which
+their callers handle by falling back to the older syscalls.  Also fix
+the off-by-one bound check of the number lookup.
+
+--- a/src/syscall/enter.c
++++ b/src/syscall/enter.c
+@@ -431,6 +431,45 @@
+ 		status = translate_path2(tracee, dirfd, path, SYSARG_2, REGULAR);
+ 		break;
+ 
++	case PR_fchmodat2:
++		dirfd = peek_reg(tracee, CURRENT, SYSARG_1);
++		flags = peek_reg(tracee, CURRENT, SYSARG_4);
++
++		status = get_sysarg_path(tracee, path, SYSARG_2);
++		if (status < 0)
++			break;
++
++		if ((flags & AT_SYMLINK_NOFOLLOW) != 0)
++			status = translate_path2(tracee, dirfd, path, SYSARG_2, SYMLINK);
++		else
++			status = translate_path2(tracee, dirfd, path, SYSARG_2, REGULAR);
++		break;
++
++	/* Newer syscalls that reach paths without going through the
++	 * translation above: execveat would skip the execve handling,
++	 * openat2's RESOLVE_* rules apply to the guest's view of the
++	 * tree, io_uring runs path operations with no syscall at all,
++	 * and the mount API and *xattrat/file_*attr calls aren't
++	 * translated.  Letting them through would act on host paths, so
++	 * answer "not implemented": callers fall back to the older
++	 * syscalls handled here.  */
++	case PR_execveat:
++	case PR_io_uring_setup:
++	case PR_open_tree:
++	case PR_move_mount:
++	case PR_fspick:
++	case PR_openat2:
++	case PR_mount_setattr:
++	case PR_setxattrat:
++	case PR_getxattrat:
++	case PR_listxattrat:
++	case PR_removexattrat:
++	case PR_open_tree_attr:
++	case PR_file_getattr:
++	case PR_file_setattr:
++		status = -ENOSYS;
++		break;
++
+ 	case PR_inotify_add_watch:
+ 		flags = peek_reg(tracee, CURRENT, SYSARG_3);
+ 
+--- a/src/syscall/seccomp.c
++++ b/src/syscall/seccomp.c
+@@ -393,6 +393,21 @@
+ 	{ PR_stat,		0 },
+ 	{ PR_statx,		0 },
+ 	{ PR_faccessat2,	0 },
++	{ PR_fchmodat2,	0 },
++	{ PR_execveat,		0 },
++	{ PR_io_uring_setup,	0 },
++	{ PR_open_tree,	0 },
++	{ PR_move_mount,	0 },
++	{ PR_fspick,		0 },
++	{ PR_openat2,		0 },
++	{ PR_mount_setattr,	0 },
++	{ PR_setxattrat,	0 },
++	{ PR_getxattrat,	0 },
++	{ PR_listxattrat,	0 },
++	{ PR_removexattrat,	0 },
++	{ PR_open_tree_attr,	0 },
++	{ PR_file_getattr,	0 },
++	{ PR_file_setattr,	0 },
+ 	{ PR_stat64,		0 },
+ 	{ PR_statfs,		0 },
+ 	{ PR_statfs64,		0 },
+--- a/src/syscall/sysnum.c
++++ b/src/syscall/sysnum.c
+@@ -92,7 +92,7 @@
+ 	index = sysnum - sysnums.offset;
+ 
+ 	/* Sanity checks.  */
+-	if (index > sysnums.length)
++	if (index >= sysnums.length)
+ 		return PR_void;
+ 
+ 	return sysnums.table[index];
+--- a/src/syscall/sysnums-arm64.h
++++ b/src/syscall/sysnums-arm64.h
+@@ -263,5 +263,21 @@
+ 	[ 274 ] = PR_sched_setattr,
+ 	[ 275 ] = PR_sched_getattr,
+ 	[ 276 ] = PR_renameat2,
++	[ 281 ] = PR_execveat,
+ 	[ 291 ] = PR_statx,
++	[ 425 ] = PR_io_uring_setup,
++	[ 428 ] = PR_open_tree,
++	[ 429 ] = PR_move_mount,
++	[ 433 ] = PR_fspick,
++	[ 437 ] = PR_openat2,
++	[ 439 ] = PR_faccessat2,
++	[ 442 ] = PR_mount_setattr,
++	[ 452 ] = PR_fchmodat2,
++	[ 463 ] = PR_setxattrat,
++	[ 464 ] = PR_getxattrat,
++	[ 465 ] = PR_listxattrat,
++	[ 466 ] = PR_removexattrat,
++	[ 467 ] = PR_open_tree_attr,
++	[ 468 ] = PR_file_getattr,
++	[ 469 ] = PR_file_setattr,
+ };
+--- a/src/syscall/sysnums.list
++++ b/src/syscall/sysnums.list
+@@ -431,3 +431,18 @@
+ SYSNUM(x32_writev)
+ SYSNUM(statx)
+ SYSNUM(utimensat_time64)
++SYSNUM(execveat)
++SYSNUM(io_uring_setup)
++SYSNUM(open_tree)
++SYSNUM(move_mount)
++SYSNUM(fspick)
++SYSNUM(openat2)
++SYSNUM(mount_setattr)
++SYSNUM(fchmodat2)
++SYSNUM(setxattrat)
++SYSNUM(getxattrat)
++SYSNUM(listxattrat)
++SYSNUM(removexattrat)
++SYSNUM(open_tree_attr)
++SYSNUM(file_getattr)
++SYSNUM(file_setattr)

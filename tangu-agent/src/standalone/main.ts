@@ -18,6 +18,7 @@ import { loadOAuthDirectProviders } from '../llm/providerOAuth.js';
 import { resolveSandboxMode, setupHost, buildBrain, buildMultiAccountBaseBrain, fixLegacyAppIds, loadProviders } from './assemble.js';
 import { startMultiAccountServer } from './multiAccount.js';
 import { isMultiAccount } from '../core/accountScope.js';
+import { phoneMode } from '../core/phoneMode.js';
 import { createMcpManager } from '../mcp/manager.js';
 import { bindPluginMcp } from '../mcp/pluginServers.js';
 import { createEngineManager } from '../engines/index.js';
@@ -36,6 +37,7 @@ import { shutdownReasonForSelf } from '../services/shutdownIntentStore.js';
 import { attachRealtimeVoice } from '../services/realtimeVoice.js';
 
 import { printEffectiveConfig } from './diagnostics.js';
+import { announceReady } from './readyLine.js';
 
 /** 引擎版本标识:优先构建注入的 TANGU_WORKER_VERSION(git sha / build id,见 Dockerfile.standalone),
  *  回退 package.json 版本(发版随产品同步 bump,「引擎桌面同版发」)。/health 与 --version 共用。 */
@@ -173,8 +175,11 @@ async function main(): Promise<void> {
   app.use((req, res, next) => remoteLockGuard(req, res, next));
   const version = engineVersion();
   const startedAt = new Date().toISOString();
+  // Phone mode: the app's native shell stops an idle engine after 10 minutes, but never while a run is going
+  // (it reads activeRuns here; the count is not sensitive, the route stays unauthenticated like the rest of /health).
+  const phone = phoneMode();
   app.get('/health', (_req, res) =>
-    res.json({ ok: true, mode: 'standalone', sandbox: sandboxMode, version, startedAt, hostShutdown }));
+    res.json({ ok: true, mode: 'standalone', sandbox: sandboxMode, version, startedAt, hostShutdown, ...(phone ? { phone: true, activeRuns: activeRunCount() } : {}) }));
   app.use('/', mod.userRouter); // /agent/runs、/agent/runs/:id/events、/agent/workspace/*、审批
   app.use('/', mod.dataRouter); // /agent/sessions、/agent/models、/agent/memory、/agent/skills、/agent/tools
 
@@ -185,6 +190,8 @@ async function main(): Promise<void> {
     const port = address && typeof address === 'object' ? address.port : cfg.port;
     // Embedded hosts use port 0 and IPC readiness, avoiding a probe/listen race.
     if (process.send) process.send({ type: 'tangu:ready', host: cfg.host, port, version });
+    // Hosts without IPC (the Android app under PRoot) take the port from this line, never from the wording below.
+    announceReady({ host: cfg.host, port, version });
     console.log(`[tangu] standalone 已启动 http://${cfg.host}:${port}`);
     console.log(`[tangu] cloud=${cfg.cloudUrl} 存储=${storage} sandbox=${sandboxMode} model=${cfg.defaultModelId || '(run 指定)'}`);
     if (providers.length) {

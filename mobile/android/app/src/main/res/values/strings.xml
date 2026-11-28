@@ -4,4 +4,9 @@
     <string name="title_activity_main">Forsion</string>
     <string name="package_name">com.forsion.tangu</string>
     <string name="custom_url_scheme">com.forsion.tangu</string>
+    <!-- "This phone" local engine notification (system-language fallback; the page passes its own language via ForsionLocalEngine.configure) -->
+    <string name="local_engine_channel">Forsion on this phone</string>
+    <string name="local_engine_running">Forsion is running on this phone</string>
+    <string name="local_engine_running_text">Stops by itself after 10 minutes with nothing to do</string>
+    <string name="local_engine_stop">Stop</string>
 </resources>

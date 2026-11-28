@@ -15,3 +15,11 @@ test('only prerelease identifiers mark previews; metadata hyphens do not', () =>
   assert.throws(() => releaseFlags('v2.13.7.1', 'v2.13.7'), /Invalid/)
   assert.throws(() => releaseFlags('v2.13.8', 'unknown'), /Invalid/)
 })
+test('test channel = prerelease tags only (the Android local-engine launcher ships there first)', async () => {
+  const { isTestChannel } = await import('./release-channel.mjs')
+  assert.equal(isTestChannel('v2.15.0-beta.1'), true)
+  assert.equal(isTestChannel('v2.15.0-rc.1+build.3'), true)
+  assert.equal(isTestChannel('v2.15.0'), false)
+  assert.equal(isTestChannel('v2.13.8+sha.a-b'), false)
+  assert.throws(() => isTestChannel('nope'), /Invalid/)
+})

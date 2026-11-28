@@ -11,6 +11,7 @@
  *               读失败由调用方降级);硬删 / 回退 / 检查点恢复 / 整对象 PUT 配置 / 工作区删除 / 外部引擎都不可用;不能直链资源
  *               (隧道 cookie 对 https://localhost 是跨站,<img src> 不带凭据)。
  */
+import { isPhoneRef } from './phoneEngine'
 import type { EngineTarget, TargetRef, TargetVia } from './target'
 import { homeVia, hostDesktopMode } from './targets'
 
@@ -49,6 +50,9 @@ export function capsForVia(via: TargetVia): TargetCaps {
       const w = typeof window !== 'undefined' ? window.tangu : undefined
       return { ...ALL, remoteApprover: !!w?.remoteCaller, hostFs: w?.hostFiles !== false, externalEngines: false }
     }
+    case 'phone':
+      // 这台手机自己的引擎:审批就在这里答、不受 deny-remote 管;没有外部引擎;WebView 连不了带令牌的 127.0.0.1,资源一律经中继拉
+      return { ...ALL, remoteApprover: false, hostFs: true, externalEngines: false, directAssetUrl: false }
     case 'unit':
       return {
         remoteApprover: true, hostFs: true,
@@ -63,5 +67,5 @@ export function targetCaps(t: EngineTarget): TargetCaps {
 
 /** 不铸目标也能判(审批卡在没装宿主的单测里也要渲染):unit 位置 = unit 能力;home = 按端现算的来路。 */
 export function capsForRef(ref: TargetRef): TargetCaps {
-  return capsForVia(ref.kind === 'unit' ? 'unit' : homeVia())
+  return capsForVia(isPhoneRef(ref) ? 'phone' : ref.kind === 'unit' ? 'unit' : homeVia())
 }

@@ -38,6 +38,7 @@ import { currentPlatform } from '../platform'
 import { isRealUnitToken } from '../unitToken'
 import { cloudApiBaseOf } from './cloudBase'
 import { translate } from './messages'
+import { isPhoneEngineId, phoneEngineHost, phoneEngineInstalled, usePhoneEngine } from './phoneEngine'
 import { assertTargetRef, HOME_REF, isEngineTarget, isTargetKey, mintTarget, sameRef, targetKeyOf, type EngineTarget, type TargetKey, type TargetRef, type TargetVia } from './target'
 
 export type { EngineTarget, TargetKey, TargetRef, TargetVia } from './target'
@@ -587,7 +588,34 @@ const unitTargets = new Map<string, EngineTarget>()
 
 /** 按 (云端基址, 设备 id) 缓存:同一台电脑恒为同一个对象(消费方可以按对象身份做键)。基址在铸造时定死 ——
  *  手机 / 网页版换账号 = 整页重载,cloudApiBase 一页之内不变;真变了缓存键跟着变。 */
+/** 「这台手机」(phoneEngine.ts):基址与 unit 同形(mobile 的 fetch 前置据此把请求交给原生中继),原生按保留 id 改发本机引擎、
+ *  自己盖本机令牌。这里**不带任何凭据**:万一哪条请求绕过了原生中继(比如 WebSocket),发到 hub 的也只是一条没有令牌的请求。 */
+let phoneTargetCache: EngineTarget | null = null
+function phoneTarget(): EngineTarget | null {
+  if (currentPlatform() !== 'mobile' || !phoneEngineHost()) return null
+  // 原生已经说了这台手机现在用不了(包里没启动器 / 没配环境包地址 / 环境没装):不给目标 —— 恢复焦点不会落到它上面,
+  // 绑在它上面的会话照旧绑着(解析不了 = 失败关闭,装回来就能接着用)。状态还没读到(启动头一秒)时照旧给,
+  // 由 localEngine.ts 在首个状态到了之后把草稿焦点改回云端。
+  const st = usePhoneEngine.getState().state
+  if (st && !phoneEngineInstalled(st)) return null
+  const api = cloudApiBase()
+  if (!api) return null
+  if (phoneTargetCache && phoneTargetCache.unitBase === `${api}/units/${PHONE_ID_PATH}/proxy`) return phoneTargetCache
+  const unitBase = `${api}/units/${PHONE_ID_PATH}/proxy`
+  phoneTargetCache = mintTarget({
+    key: `unit:${PHONE_ID_PATH}`,
+    ref: { kind: 'unit', unitId: PHONE_ID_PATH },
+    via: 'phone',
+    base: `${unitBase}/engine`,
+    unitBase,
+    headers: async (json = true): Promise<Record<string, string>> => (json ? { 'Content-Type': 'application/json' } : {}),
+  })
+  return phoneTargetCache
+}
+const PHONE_ID_PATH = '00000000-0000-4000-8000-000000000001' // = phoneEngine.PHONE_ENGINE_ID(已是小写 uuid,不用再编码)
+
 function unitTarget(unitId: string): EngineTarget | null {
+  if (isPhoneEngineId(unitId)) return phoneTarget()
   // 桌面:基址 = 主进程的本机中转口(路径形状与 hub 相同),Bearer = 本次启动的口令;云端凭据与调用方票都由主进程盖,这里一概不带。
   const relay = currentPlatform() === 'desktop' ? desktopRelay : null
   const api = relay ? relay.base : currentPlatform() === 'desktop' ? '' : cloudApiBase()

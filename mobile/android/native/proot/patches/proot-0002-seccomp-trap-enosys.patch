@@ -1,0 +1,132 @@
+When a seccomp filter outside PRoot's control (Android's app policy)
+traps a syscall with SIGSYS, answer it with -ENOSYS instead of letting
+the signal kill the tracee, so callers run their fallback for syscalls
+the platform doesn't allow (io_uring, clone3, epoll_pwait2, rseq, ...).
+faccessat2 with no flag besides AT_EACCESS is re-issued as faccessat
+(arm64), which keeps access checks exact.
+
+--- a/src/tracee/event.c
++++ b/src/tracee/event.c
+@@ -49,8 +49,22 @@
+ 
+ #include "attribute.h"
+ #include "compat.h"
++#include "tracee/reg.h"
++#include "tracee/abi.h"
++#include "syscall/sysnum.h"
+ 
++#include <signal.h>     /* siginfo_t, SIGSYS, */
++#include <fcntl.h>      /* AT_EACCESS, */
++#include <sys/uio.h>    /* struct iovec, */
++#if defined(ARCH_ARM64)
++#include <linux/elf.h>  /* NT_PRSTATUS, */
++#endif
+ 
++#ifndef SYS_SECCOMP
++#define SYS_SECCOMP 1
++#endif
++
++
+ /**
+  * Start @tracee->exe with the given @argv[].  This function
+  * returns -errno if an error occurred, otherwise 0.
+@@ -387,6 +401,77 @@
+ }
+ 
+ /**
++ * Handle a SIGSYS raised by a seccomp filter that answered a syscall
++ * of @tracee with SECCOMP_RET_TRAP.  The platform may run tracees
++ * under such a filter (Android's app policy traps the syscalls it
++ * doesn't know: io_uring_*, clone3, faccessat2, epoll_pwait2, rseq,
++ * ...) and the most restrictive action wins over any filter
++ * installed later, so the tracee would die even though it is only
++ * probing an optional syscall it has a fallback for.  Turn the trap
++ * into the "not implemented" error those fallbacks expect: the
++ * kernel has already skipped the syscall and left the PC after it,
++ * so set the result register to -ENOSYS and cancel the signal.
++ *
++ * faccessat2 without flags other than AT_EACCESS is re-issued as
++ * faccessat instead, so access checks keep their exact kernel answer
++ * (and go through the usual path translation).  This is equivalent
++ * as long as the real and effective ids match, which holds when the
++ * set-id bits can't take effect (no_new_privs, as for any Android
++ * app).  Other flags get -ENOSYS and the caller's own fallback.
++ *
++ * This function returns the signal to deliver: 0 when handled,
++ * SIGSYS otherwise.
++ */
++static int handle_seccomp_trap(Tracee *tracee)
++{
++	siginfo_t siginfo;
++	long status;
++
++	status = ptrace(PTRACE_GETSIGINFO, tracee->pid, NULL, &siginfo);
++	if (status < 0 || siginfo.si_code != SYS_SECCOMP)
++		return SIGSYS;
++
++#if defined(ARCH_ARM64)
++	if (!is_32on64_mode(tracee)
++	    && (word_t) siginfo.si_syscall == detranslate_sysnum(get_abi(tracee), PR_faccessat2)) {
++		struct user_regs_struct regs;
++		struct iovec iov = { .iov_base = &regs, .iov_len = sizeof(regs) };
++
++		/* x0 was rolled back to the first argument.  */
++		status = ptrace(PTRACE_GETREGSET, tracee->pid, NT_PRSTATUS, &iov);
++		if (status == 0 && (regs.regs[3] & ~(word_t) AT_EACCESS) == 0) {
++			regs.regs[8] = detranslate_sysnum(get_abi(tracee), PR_faccessat);
++			regs.pc -= 4; /* Back onto the "svc" instruction.  */
++			status = ptrace(PTRACE_SETREGSET, tracee->pid, NT_PRSTATUS, &iov);
++			if (status == 0) {
++				VERBOSE(tracee, 1, "vpid %" PRIu64 ": trapped faccessat2 re-issued as faccessat",
++					tracee->vpid);
++				return 0;
++			}
++		}
++	}
++#endif
++
++	status = fetch_regs(tracee);
++	if (status < 0)
++		return SIGSYS;
++
++	/* Not inside a syscall: make the cached banks agree so only
++	 * the result register is written back.  */
++	save_current_regs(tracee, ORIGINAL);
++	tracee->restore_original_regs = false;
++	poke_reg(tracee, SYSARG_RESULT, (word_t) -ENOSYS);
++
++	status = push_regs(tracee);
++	if (status < 0)
++		return SIGSYS;
++
++	VERBOSE(tracee, 1, "vpid %" PRIu64 ": trapped syscall %d answered with ENOSYS",
++		tracee->vpid, siginfo.si_syscall);
++	return 0;
++}
++
++/**
+  * For kernels >= 4.8.0
+  * Handle the current event (@tracee_status) of the given @tracee.
+  * This function returns the "computed" signal that should be used to
+@@ -600,6 +685,10 @@
+ 				tracee->sigstop = SIGSTOP_ALLOWED;
+ 				signal = 0;
+ 			}
++			break;
++
++		case SIGSYS:
++			signal = handle_seccomp_trap(tracee);
+ 			break;
+ 
+ 		default:
+@@ -830,6 +919,10 @@
+ 				tracee->sigstop = SIGSTOP_ALLOWED;
+ 				signal = 0;
+ 			}
++			break;
++
++		case SIGSYS:
++			signal = handle_seccomp_trap(tracee);
+ 			break;
+ 
+ 		default:

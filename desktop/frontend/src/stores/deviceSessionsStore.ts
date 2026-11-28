@@ -25,6 +25,7 @@ import { rosterAvailable, runLocationsAvailable } from '../features/runtime'
 import { classify } from '../services/engine/health'
 import { getSessionDetail, updateSession } from '../services/backendService'
 import { AGENT_APP_ID } from '../services/agentRunService'
+import { PHONE_ENGINE_ID, PHONE_REF, isPhoneRef, phoneEngineHost, phoneEngineInstalled, phoneEngineName, phoneEngineOffered, usePhoneEngine } from '../services/engine/phoneEngine'
 import { normalizeSessionEmoji } from '../../../../tangu-agent/src/contracts/sessionEmoji'
 
 /** 逐台会话列表的新鲜度:比这更新就不重拉(手动刷新 / force 除外)。 */
@@ -139,12 +140,15 @@ export const useDeviceSessions = create<DeviceSessionsState>((set, get) => ({
   refresh: async (opts = {}) => {
     if (!runLocationsAvailable()) return
     const gen = get().gen
+    // 这台手机不在名册里:与名册并行、互不牵连(名册拉不到不耽误它)
+    const phone = fetchPhone(gen, !!opts.force)
     const units = await get().refreshRoster()
-    if (!units || gen !== get().gen) return
-    await Promise.all(units.map((u) => fetchDevice(u, gen, !!opts.force, !!opts.periodic)))
+    if (!units || gen !== get().gen) { await phone; return }
+    await Promise.all([...units.map((u) => fetchDevice(u, gen, !!opts.force, !!opts.periodic)), phone])
     if (gen !== get().gen) return
-    // 名册里没了的电脑:整段丢掉
+    // 名册里没了的电脑:整段丢掉(这台手机那段由 fetchPhone 自己管)
     const keep = new Set(units.map((u) => u.id.toLowerCase()))
+    keep.add(PHONE_ENGINE_ID)
     const byUnit = Object.fromEntries(Object.entries(get().byUnit).filter(([k]) => keep.has(k)))
     set({ byUnit, refreshedAt: Date.now() })
     syncInjected()
@@ -202,6 +206,37 @@ async function fetchDevice(u: UnitInfo, gen: number, force: boolean, periodic = 
   }
 }
 
+/**
+ * 这台手机的会话列表(phoneEngine.ts)。只在引擎**正在运行**时拉:原生不为 GET 启动没人要的引擎,拉了也只会白失败;
+ * 没在跑时留着上一份(点一条 = 先启动引擎再打开,DeviceSessionSections)。环境没装 / 删了 → 整段清空。
+ * 不记设备探针:那套口径(离线 / 确认 / 拒绝)说的是经 hub 的电脑。
+ */
+async function fetchPhone(gen: number, force: boolean): Promise<void> {
+  const st = usePhoneEngine.getState().state
+  if (!phoneEngineInstalled(st)) {
+    if (useDeviceSessions.getState().byUnit[PHONE_ENGINE_ID]) patchEntry(PHONE_ENGINE_ID, { sessions: [], loading: false, fetchedAt: null })
+    return
+  }
+  if (st?.engine !== 'running') return
+  const cur = useDeviceSessions.getState().byUnit[PHONE_ENGINE_ID]
+  if (!force && cur?.fetchedAt && Date.now() - cur.fetchedAt < DEVICE_LIST_FRESH_MS) return
+  const t = targetForRef(unitRef(PHONE_ENGINE_ID))
+  if (!t) return
+  patchEntry(PHONE_ENGINE_ID, { loading: true })
+  try {
+    const r = await engineFetch(t, `/agent/sessions?archived=false&limit=${DEVICE_LIST_LIMIT}&app_id=${encodeURIComponent(AGENT_APP_ID)}`, {}, { timeoutMs: DEVICE_LIST_TIMEOUT_MS })
+    const body: unknown = await r.json().catch(() => null)
+    if (gen !== useDeviceSessions.getState().gen) return
+    // 读失败 ≠ 没有会话:留着上一份(CLAUDE.md「读写用户数据」)
+    if (!r.ok) { patchEntry(PHONE_ENGINE_ID, { loading: false }); return }
+    const loc = unitRef(PHONE_ENGINE_ID)
+    const rows = sanitizeRows(body).filter((row) => !bindingConflict(row.id, loc))
+    patchEntry(PHONE_ENGINE_ID, { sessions: rows, fetchedAt: Date.now(), loading: false })
+  } catch {
+    if (gen === useDeviceSessions.getState().gen) patchEntry(PHONE_ENGINE_ID, { loading: false })
+  }
+}
+
 /** 终局态(不会自己好,自动重试只是空耗 / 打扰):调用方身份取不到 / 验不过、设备已移除、凭据被拒。 */
 function terminalProbe(p: ProbeResult | undefined): boolean {
   if (!p || p.ok) return false
@@ -254,6 +289,39 @@ export function unitById(unitId: string): UnitInfo | null {
  * 打开那台电脑上的一条会话(inject-on-open,R-17):先绑定(先到先得;conflict = 这个 id 已属于本端 / 别的电脑 → 拒绝,不改绑,R-16),
  * 再经 withLocation 打标插进 appStore.sessions(必须在 openSession 之前:setActiveId → loadSessionHistory 按绑定路由),最后打开。
  */
+// ── 「这台手机」给侧栏(Tangu 界面)的口径 ──
+// phoneEngine.ts 留在宿主;Tangu 的侧栏只经这里拿「这台手机」那一组要的几样,不为它多开一个宿主依赖(check:tanguboundary)。
+
+/** 这台手机在会话列表里的键(= 保留 id,和电脑的 unitId 同一张表)。 */
+export const PHONE_DEVICE_ID = PHONE_ENGINE_ID
+
+export type PhoneDeviceEngine = 'running' | 'starting' | 'failed' | 'stopped'
+
+/** 侧栏这一组:装好了才出现;engine = 本机引擎进程的状态(不是经 hub 的设备口径)。 */
+export function usePhoneDevice(): { shown: boolean; name: string; engine: PhoneDeviceEngine } {
+  const shown = usePhoneEngine((s) => phoneEngineInstalled(s.state))
+  const raw = usePhoneEngine((s) => s.state?.engine || 'stopped')
+  const engine: PhoneDeviceEngine = raw === 'running' || raw === 'starting' || raw === 'failed' ? raw : 'stopped'
+  return { shown, name: phoneEngineName(), engine }
+}
+
+/** 「在哪运行」能不能列出这台手机(包里带启动器、配了环境包地址;没装也列,点开走安装)。 */
+export function usePhoneOffered(): boolean {
+  return usePhoneEngine((s) => phoneEngineOffered(s.state))
+}
+
+/** 位置是不是这台手机 / 它的展示名(「在哪运行」药丸用)。 */
+export const isPhoneDeviceRef = isPhoneRef
+export const phoneDeviceName = phoneEngineName
+
+/** 打开这台手机上的一条会话:引擎没在跑就先启动(等它健康)再按绑定打开 —— 原生不为 GET 拉起没人要的引擎。 */
+export function openPhoneSession(rec: SessionRecord, onStartFailed: () => void): void {
+  const host = phoneEngineHost()
+  const loc = PHONE_REF as UnitRef
+  if (!host || usePhoneEngine.getState().state?.engine === 'running') { adoptRemoteSession(rec, loc); return }
+  void host.start().then(() => { adoptRemoteSession(rec, loc) }, onStartFailed)
+}
+
 export function adoptRemoteSession(rec: SessionRecord, loc: UnitRef): boolean {
   if (!rec?.id || !isUnitIdShape(loc.unitId)) return false
   const ref = unitRef(loc.unitId)

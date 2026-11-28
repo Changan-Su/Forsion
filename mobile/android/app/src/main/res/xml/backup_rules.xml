@@ -2,4 +2,6 @@
 <!-- API ≤ 30 的自动备份规则(AndroidManifest android:fullBackupContent)。P1-K8:手机 Unit 身份条目不进备份。 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="forsion_unit.xml" />
+    <!-- 本机引擎的环境与引擎家目录(几百 MB,含账号令牌文件):不备份,装回来重新下载 -->
+    <exclude domain="file" path="local-engine/" />
 </full-backup-content>

@@ -25,8 +25,9 @@ export type TargetKey = 'home' | `unit:${string}`
 export type { TargetRef }
 
 /** 来路:local = 桌面本机引擎(managed / external);cloud = web / 手机的云网关;
- *  unitPage = 设备页里被投射过来的那台引擎;unit = 经 hub 隧道的「我的电脑」(S2 起)。 */
-export type TargetVia = 'local' | 'cloud' | 'unitPage' | 'unit'
+ *  unitPage = 设备页里被投射过来的那台引擎;unit = 经 hub 隧道的「我的电脑」(S2 起);
+ *  phone = Android App 里的本机引擎(「这台手机」,ref 是保留 id 的 unit,见 phoneEngine.ts;经原生中继直达 127.0.0.1)。 */
+export type TargetVia = 'local' | 'cloud' | 'unitPage' | 'unit' | 'phone'
 
 export interface EngineTarget {
   readonly [ENGINE_TARGET]: true

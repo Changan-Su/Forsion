@@ -1,0 +1,43 @@
+--- a/src/syscall/heap.c	2026-11-28 02:38:02
++++ b/src/syscall/heap.c	2026-11-28 02:38:02
+@@ -23,6 +23,7 @@
+ #include <sys/mman.h>	/* PROT_*, MAP_*, */
+ #include <assert.h>	/* assert(3),  */
+ #include <string.h>     /* strerror(3), */
++#include <stdlib.h>     /* getenv(3), */
+ #include <unistd.h>     /* sysconf(3), */
+ #include <sys/param.h>  /* MIN(), MAX(), */
+ 
+@@ -42,6 +43,14 @@
+  * mapping is discarded in order to emulate an empty heap.  */
+ static word_t heap_offset = 0;
+ 
++/* B1 experiment: PROOT_NO_HEAP_EMULATION=1 leaves brk(2) to the kernel. */
++static int no_heap_emulation(void)
++{
++	static int v = -1;
++	if (v < 0) { const char *e = getenv("PROOT_NO_HEAP_EMULATION"); v = (e != NULL && e[0] == '1'); }
++	return v;
++}
++
+ /**
+  * Put @tracee's heap to a reliable location.  By default the Linux
+  * kernel puts it near loader's BSS, but this default location is not
+@@ -57,7 +66,7 @@
+ 	size_t old_heap_size;
+ 	size_t new_heap_size;
+ 
+-	if (tracee->heap->disabled)
++	if (tracee->heap->disabled || no_heap_emulation())
+ 		return;
+ 
+ 	if (heap_offset == 0) {
+@@ -153,7 +162,7 @@
+ 	word_t sysnum;
+ 	int tracee_errno;
+ 
+-	if (tracee->heap->disabled)
++	if (tracee->heap->disabled || no_heap_emulation())
+ 		return;
+ 
+ 	assert(heap_offset > 0);

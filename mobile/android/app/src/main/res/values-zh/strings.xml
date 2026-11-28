@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- 只放原生侧自己画的文案的系统语言回落;页面会把当前界面语言的文案经 ForsionLocalEngine.configure 传过来,优先用那份。 -->
+<resources>
+    <string name="local_engine_channel">这台手机上的 Forsion</string>
+    <string name="local_engine_running">Forsion 正在这台手机上运行</string>
+    <string name="local_engine_running_text">没有任务时 10 分钟后自动停止</string>
+    <string name="local_engine_stop">停止</string>
+</resources>

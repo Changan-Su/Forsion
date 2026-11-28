@@ -1,0 +1,86 @@
+# 本机引擎启动器（PRoot）
+
+「这台手机」本机引擎（第 1 期）在 Android 上用 PRoot 跑一份 Ubuntu 用户态环境，Tangu 引擎（Node）在里面运行。
+本目录是启动器的来源、补丁与构建脚本；产物在 `app/src/localEngine/jniLibs/arm64-v8a/`。
+
+| 文件 | 是什么 | 许可 |
+|---|---|---|
+| `libproot.so` | PRoot 5.4.0 + 下面 5 个补丁，talloc 2.4.3 静态链接 | PRoot：GPL-2.0-or-later；talloc：LGPL-3.0-or-later |
+| `libproot_loader.so` | PRoot 的 loader（静态、`-nostdlib`） | GPL-2.0-or-later |
+
+名字以 `lib…so` 结尾只是为了让安装器把它们解到 `nativeLibraryDir`（应用私有数据目录不让 exec，SELinux）；
+它们是**独立的可执行程序**，由 `LocalEngineProcess` 以子进程启动，**不与任何 App 代码链接**（没有 JNI、没有 `System.loadLibrary`）。
+
+## 构建
+
+```bash
+mobile/android/native/proot/build-proot.sh          # 重建并覆盖 jniLibs 里的两个文件
+mobile/android/native/proot/build-proot.sh --check  # 重建后比对 sha256，不覆盖；对不上退出 1
+```
+
+- 源码钉在 `sources.lock`（URL + sha256），NDK 钉 `28.2.13676358`、API 30，`-ffile-prefix-map` 去掉路径 → 可复现。
+- 构建方式改编自 Mika 的 `tools/sandbox/build-native.sh`（Apache-2.0，https://github.com/wangzan101/mika）：同一份源码、NDK 与参数，补丁 1–4 与 Mika 相同；只打那 4 个补丁时，产物与 Mika 的预编译文件逐字节一致。第 5 个补丁是这里加的，加了以后就不再一致。Mika 自己的启动器（`libmikarun.so`）不构建、不随包。
+- 当前提交的产物：
+
+| 文件 | sha256 |
+|---|---|
+| `libproot.so` | `4dc942cab1be0cf3f9ec95f4db0ad43dc3070c211bbabd1b05fbbaff4b1523b9` |
+| `libproot_loader.so` | `a73384d2f78b535936401ddee33909ae91966812e56437a16486934e0faa588c` |
+
+### 补丁（`patches/`；1–4 来自 Mika，5 是这里加的）
+
+1. `proot-0001-exitkill.patch` — 跟踪时加 `PTRACE_O_EXITKILL`：PRoot 自己被杀（App 被杀、停止时的 SIGKILL）时，内核连带杀掉它跟踪的整棵进程树，不留孤儿。
+2. `proot-0002-seccomp-trap-enosys.patch` — Android 给 App 的 seccomp 过滤器对 PRoot 不认识的系统调用（`io_uring_*`、`clone3`、`faccessat2`、`epoll_pwait2`、`rseq`）发 SIGSYS；补丁把它改成返回 `-ENOSYS`，让调用方走自己的回落（`faccessat2` 只带 `AT_EACCESS` 时改发 `faccessat`）。
+3. `proot-0003-arm64-new-path-syscalls.patch` — arm64 上较新的带路径系统调用（`openat2`、`faccessat2`、`fchmodat2`、`execveat`、`open_tree`、`move_mount`、`*xattrat` 等）也做路径翻译（不翻译的话它们会绕过 guest 根目录）。
+4. `proot-0004-link2symlink-fstat-nonfile.patch` — `--link2symlink` 下 `fstat` 管道 / socket 这类不指向文件的描述符时不再出错，并正确去掉 ` (deleted)` 后缀。
+5. `proot-0005-no-heap-emulation.patch` — `brk(2)` 不再经 PRoot 的堆模拟（`syscall/heap.c`），直接交给内核，也不再进 seccomp 的拦截表。
+   - 原因：堆模拟按程序 BSS 的末尾给 `mmap(2)` 一个地址提示来放堆，再用 `mremap(2)` 原地扩。Android 15 arm64 模拟器（6.6 内核）上，引擎冷启动约四分之一会让 glibc 报 `double free or corruption (out)` 退出。
+   - 证据：同一份环境里对照了几种跑法，各跑 20–30 次。
+     - 不经 PRoot：0 崩。
+     - 原版 PRoot（shell 用户 / App 身份）：5/20、4/20 崩。
+     - 只关掉堆模拟的实验版：0/30。
+     - 同一个实验版、堆模拟开着：6/20。
+     - 补丁 5 的最终版：经原生插件起停 40 轮，0 崩；紧接着换回原版对照，37 次拉起 8 次崩。
+   - 只能说触发点是堆模拟：同一个二进制里只关掉它就不崩。具体哪一步出错没有查到。11-27 在一台真机上用原版起过 21 次，没崩；那台的内核版本没有记，补丁 5 在真机上没测过。
+   - glibc 的 malloc 在 `brk` 扩不动时会自己改用 `mmap(2)`，所以环境里的 glibc 程序（node、apt / dpkg、git、bash）不受影响，补丁后实测过。只用 `sbrk`、或要求堆紧挨程序的程序（比如老版 Emacs 的 `unexec`）可能受影响，这是有意的取舍。
+   - 复现手段：`mobile/scripts/local-engine/proot-brk-probe/`。
+
+## 只在测试渠道的包里带
+
+- Gradle 开关：`-PlocalEngine` 或环境变量 `ANDROID_LOCAL_ENGINE=1` 时，`src/localEngine/jniLibs` 才并进主包，同时打开
+  `extractNativeLibs`（`useLegacyPackaging`）、启用前台服务 `LocalEngineService`。不带开关的包里没有 PRoot，「这台手机」也不出现。
+- CI（`build-desktop.yml` 的 Build APK）：tag 是测试渠道（`release-channel.mjs --test-channel <tag>` 输出 1，即预发布 tag）时才带。
+  正式渠道比测试渠道晚一个版本再带。
+- 基座（Ubuntu + Node）随测试渠道的包走：`local-engine/lock.json` 钉住的那份作为不压缩的资产进包；引擎由手机从 npm 取
+  （`@forsion/tangu-engine-android-arm64`，CI `publish-android-engine.yml` 发布）。来龙去脉、签名与回退规则见 `../../local-engine/README.md`。
+  基座本身仍由 `mobile/scripts/local-engine/build-env.sh` 生成（它出的引擎层和 manifest.json 已不再使用）。
+
+## GPL：发版附源码包
+
+带启动器的每个发布（目前只有测试渠道的预发布）在 GitHub Release 上另附一个源码包，做法：
+
+```bash
+# 在发布用的提交上
+VER=<版本号>
+mobile/android/native/proot/build-proot.sh --check     # 确认随包的二进制就是这份源码构建出来的
+OUT=forsion-${VER}-proot-source
+mkdir -p "$OUT"
+# 上游源码原包(与 sources.lock 的 sha256 一致)
+while read -r name ver url sha; do
+  case "$name" in ''|'#'*) continue ;; esac
+  curl -fsSL "$url" -o "$OUT/$name-$ver.tar.gz"
+  echo "$sha  $OUT/$name-$ver.tar.gz" | shasum -a 256 -c -
+done < mobile/android/native/proot/sources.lock
+# 补丁、构建脚本、本说明
+cp -R mobile/android/native/proot "$OUT/build"
+tar -czf "$OUT.tar.gz" "$OUT"
+gh release upload "v${VER}" "$OUT.tar.gz"
+```
+
+App 里「设置 › 关于 › 备案与协议 › 开源许可」写明这两个组件的许可，并指向本目录（`PhoneEngineLicenses.tsx`）。
+
+## 没验证的
+
+- 只编了 arm64-v8a；32 位手机与 x86 模拟器上「这台手机」不出现（`LocalEnginePaths.launcherBundled`）。
+- 16 KB 页大小的设备：链接参数已按 16 KB 对齐，未在这类设备上跑过。
+- 真机未测（11-27 定：不再做真机测试，兜底是先只发测试渠道）。验证在 Android 模拟器（API 35，arm64）上做，台架见 `mobile/scripts/local-engine-emu.cjs`。

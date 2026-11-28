@@ -31,6 +31,8 @@ import { clearDeviceSticky, noteDeviceProbe, noteDeviceSticky } from '@/services
 import { HOME_REF, type TargetRef } from '@/services/engine/target'
 import type { ProbeResult, StickyRefusal } from '@/services/deviceStatus'
 import { beginAttempt, endAttempts, isRunnableUnit, noteAttempt, NO_MARKS, removeThisPhone, rosterNameOf, rowTone, runOn, runRows, statusKey, type PhoneIssue, type RowMarks, type RunOnOutcome, type RunRow } from './unitsSheetModel'
+import { PhoneEngineRow } from './PhoneEngineRow'
+import { isPhoneRef, PHONE_REF, phoneEngineName } from '@/services/engine/phoneEngine'
 import './unitsSheet.css'
 
 /**
@@ -41,7 +43,7 @@ import './unitsSheet.css'
  * 焦点展示名 = 最近一次拉到的名册里那台的名字(M1B:审批结局行写「在执行的电脑上(名字)」;之前一直没带名字 → 只剩兜底「你的电脑」)。
  */
 export function selectRunLocation(ref: TargetRef): Promise<void> {
-  return setDraftLocation(ref, { explicit: true, name: rosterNameOf(lastRoster, ref) })
+  return setDraftLocation(ref, { explicit: true, name: isPhoneRef(ref) ? phoneEngineName() : rosterNameOf(lastRoster, ref) })
 }
 
 /** 最近一次拉到的名册(只给 selectRunLocation 取展示名;弹层关掉后仍留着 —— 「移除本机」切回云端不需要它)。 */
@@ -314,6 +316,15 @@ export function MobileUnitsSheet(): React.ReactElement | null {
     void selectRunLocation(HOME_REF)
   }
 
+  const pickPhone = (): void => {
+    flight.current?.abort()
+    flight.current = null
+    setBusy(null)
+    setMarks(endAttempts)
+    // 与电脑同一个出口;引擎由 testConnection 拉起(先 start 等健康再探),起不来 localEngine.ts 会切回云端
+    void selectRunLocation(PHONE_REF)
+  }
+
   // 移除本机:先收掉在途的「点电脑」流程(它可能在移除之后才 select 那台电脑),再切回云端并等它生效,最后才删身份(评审 P2)。
   const forget = (): void => {
     setConfirmForget(false)
@@ -406,6 +417,8 @@ export function MobileUnitsSheet(): React.ReactElement | null {
           </span>
           <span className="us-row-end">{homeSelected && <><em className="us-pill">{t('unitm.current')}</em><Check size={16} /></>}</span>
         </button>
+        {/* 这台手机(本机引擎):云端下面、电脑上面;只在带启动器的安卓包里出现 */}
+        <PhoneEngineRow selected={isPhoneRef(current)} onPick={pickPhone} />
         {units === undefined && <div className="us-empty">…</div>}
         {units === null && <div className="us-empty">{t('unit.notLoggedIn')}</div>}
         {units && rows.length === 0 && <div className="us-empty">{t('unit.mobileNone')}</div>}

@@ -1,0 +1,45 @@
+--- a/src/syscall/enter.c
++++ b/src/syscall/enter.c
+@@ -134,10 +134,8 @@
+ 		status = translate_wait_enter(tracee);
+ 		break;
+ 
+-	case PR_brk:
+-		translate_brk_enter(tracee);
+-		status = 0;
+-		break;
++	/* brk(2) is left to the kernel (no heap emulation): see the
++	 * comment in syscall/seccomp.c.  */
+ 
+ 	case PR_getcwd:
+ 		set_sysnum(tracee, PR_void);
+--- a/src/syscall/exit.c
++++ b/src/syscall/exit.c
+@@ -76,10 +76,6 @@
+ 	syscall_number = get_sysnum(tracee, ORIGINAL);
+ 	syscall_result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
+ 	switch (syscall_number) {
+-	case PR_brk:
+-		translate_brk_exit(tracee);
+-		goto end;
+-
+ 	case PR_getcwd: {
+ 		char path[PATH_MAX];
+ 		size_t new_size;
+--- a/src/syscall/seccomp.c
++++ b/src/syscall/seccomp.c
+@@ -334,7 +334,13 @@
+ 	{ PR_access,		0 },
+ 	{ PR_acct,		0 },
+ 	{ PR_bind,		0 },
+-	{ PR_brk,		FILTER_SYSEXIT },
++	/* No PR_brk: brk(2) goes straight to the kernel.  PRoot's heap
++	 * emulation (syscall/heap.c) maps the heap at a hint just past the
++	 * program's BSS and grows it with mremap(2); Node.js under it aborted
++	 * with glibc "double free or corruption (out)" in about a quarter of
++	 * cold starts on an Android 15 arm64 emulator (6.6 kernel); with
++	 * brk(2) left alone, none of 40 did.  glibc's malloc copes with a brk
++	 * area it cannot grow (it falls back to mmap(2)).  */
+ 	{ PR_chdir,		FILTER_SYSEXIT },
+ 	{ PR_chmod,		0 },
+ 	{ PR_chown,		0 },

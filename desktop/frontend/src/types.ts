@@ -597,6 +597,8 @@ declare global {
       account?: import('./amadeus/plugins/types').PluginAccount
       /** Verified Extend renderer is bundled with the mobile host. */
       extendMobile?: boolean
+      /** 「这台手机」本机引擎(Android App,mobile/src/localEngine.ts;见 services/engine/phoneEngine.ts)。web / 桌面恒无。 */
+      localEngine?: import('./services/engine/phoneEngine').PhoneEngineHost
       getConfig(): Promise<StoredDesktopConfig>
       /** config.json / provider-auth.json 读坏后从 .bak 恢复过:最近一次的时刻与恢复到的版本时刻(epoch ms);没有 = null。 */
       configRecoveryNotice?(): Promise<{ at: number; version: number } | null>

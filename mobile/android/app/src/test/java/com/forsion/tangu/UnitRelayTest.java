@@ -452,4 +452,94 @@ public class UnitRelayTest {
         r.start(new UnitRelay.Req("na", U, "/engine/agent/sessions", "GET", Collections.emptyMap(), null), s);
         assertEquals("[error:caller_unsupported]", s.drain().toString());
     }
+
+    // ── 「这台手机」本机引擎(保留 id → 127.0.0.1,第 1 期)──
+
+    static final class FakeLocal implements UnitRelay.Local {
+        final List<Boolean> writes = new CopyOnWriteArrayList<>();
+        final AtomicInteger started = new AtomicInteger();
+        final AtomicInteger ended = new AtomicInteger();
+        volatile UnitRelay.Endpoint ep;
+
+        /** 与真实现同契约:返回非 null 即登记一个在途(started 计数),调用方须恰好 ended() 一次。 */
+        @Override
+        public UnitRelay.Endpoint acquire(boolean write) {
+            writes.add(write);
+            UnitRelay.Endpoint e = ep;
+            if (e != null) started.incrementAndGet();
+            return e;
+        }
+
+        @Override
+        public void ended() { ended.incrementAndGet(); }
+    }
+
+    private UnitRelay localRelay(FakeLocal local) {
+        return new UnitRelay(apiBase, () -> bearer, tokens, FakeHub.LOG, local);
+    }
+
+    @Test
+    public void phoneEngineGoesToLoopbackWithLocalTokenOnly() throws Exception {
+        FakeLocal local = new FakeLocal();
+        local.ep = new UnitRelay.Endpoint(server.port(), "local-token-1");
+        RecSink s = new RecSink();
+        localRelay(local).start(new UnitRelay.Req("l1", UnitRelay.PHONE_ENGINE_ID, "/engine/agent/sessions?limit=1", "GET", jsHeaders(), null), s);
+        List<String> ev = s.drain();
+        assertEquals(200, s.status);
+        assertEquals("end", ev.get(ev.size() - 1));
+        assertEquals("去掉 /engine 前缀,直达本机引擎(不经 hub 的 /api/units/…/proxy)", "/agent/sessions?limit=1", seenPaths.get(0));
+        Map<String, String> h = seen.get(0);
+        assertEquals("只带本机令牌,JS 给的 Authorization 被丢掉", "Bearer local-token-1", h.get("authorization"));
+        assertNull("不带调用方票", h.get("x-forsion-caller"));
+        assertNull(h.get("x-forsion-remote-caller"));
+        assertNull(h.get("cookie"));
+        assertEquals("不去换票", 0, tokens.gets);
+        assertEquals("[false]", local.writes.toString());
+        assertEquals(1, local.started.get());
+        assertEquals("started / ended 成对", 1, local.ended.get());
+    }
+
+    @Test
+    public void phoneEngineWritesAskToStart() throws Exception {
+        FakeLocal local = new FakeLocal();
+        local.ep = new UnitRelay.Endpoint(server.port(), "local-token-2");
+        RecSink s = new RecSink();
+        localRelay(local).start(new UnitRelay.Req("l2", UnitRelay.PHONE_ENGINE_ID, "/engine/agent/runs", "POST", jsHeaders(), "{\"a\":1}"), s);
+        s.drain();
+        assertEquals("POST = 写请求,允许拉起引擎", "[true]", local.writes.toString());
+        assertEquals("{\"a\":1}", seen.get(0).get(":body"));
+        assertEquals("POST", seen.get(0).get(":method"));
+    }
+
+    @Test
+    public void phoneEngineNotRunningFailsFast() throws Exception {
+        FakeLocal local = new FakeLocal(); // acquire → null
+        RecSink s = new RecSink();
+        localRelay(local).start(new UnitRelay.Req("l3", UnitRelay.PHONE_ENGINE_ID, "/engine/agent/sessions", "GET", Collections.emptyMap(), null), s);
+        assertEquals("[error:network]", s.drain().toString());
+        assertTrue(seen.isEmpty());
+        assertEquals(0, local.started.get());
+    }
+
+    @Test
+    public void phoneEngineOnlyEngineGrammar() throws Exception {
+        FakeLocal local = new FakeLocal();
+        local.ep = new UnitRelay.Endpoint(server.port(), "t");
+        for (String p : new String[]{"/unit/config", "/remote-access/status", "/enginex", "/engine/../unit/mcp"}) {
+            RecSink s = new RecSink();
+            localRelay(local).start(new UnitRelay.Req("lg" + p.hashCode(), UnitRelay.PHONE_ENGINE_ID, p, "GET", Collections.emptyMap(), null), s);
+            assertEquals(p, "[error:bad_path]", s.drain().toString());
+        }
+        assertTrue(seen.isEmpty());
+        assertTrue("一次都没去要端口", local.writes.isEmpty());
+    }
+
+    @Test
+    public void phoneEngineIdWithoutLocalRouteIsRefused() throws Exception {
+        RecSink s = new RecSink();
+        relay.start(new UnitRelay.Req("l5", UnitRelay.PHONE_ENGINE_ID, "/engine/agent/sessions", "GET", jsHeaders(), null), s);
+        assertEquals("不带本机引擎的包:保留 id 不会被当成一台电脑发去 hub", "[error:bad_path]", s.drain().toString());
+        assertTrue(seen.isEmpty());
+        assertEquals(0, tokens.gets);
+    }
 }
