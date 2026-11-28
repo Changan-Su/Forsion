@@ -4,6 +4,7 @@
  * - 发布:公开只读链接,任何人可访问,Unpublish 即失效。
  * 配额随套餐(服务端强制;此处仅展示与报错透传):free 共享不可用/发布3;plus 2/10;pro 10/∞。
  */
+import { entryLabel, isFullSyncNow, runEntry, useV2EntrySync } from '../sync/v2/entries'
 import React, { useEffect, useRef, useState } from 'react'
 import { X, Copy, Check, Link2, Globe2, Trash2, RotateCw, Cloud, CloudOff, FileText, Paperclip } from 'lucide-react'
 import { useApp } from '../stores/appStore'
@@ -210,7 +211,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
         </div>
 
         {!path ? (
-          <div className="amxc-hint" style={{ padding: '18px 8px' }}>{t('share.notInCloud')}</div>
+          <div className="amxc-hint" style={{ padding: '18px 8px' }}>{t(isFullSyncNow() ? 'ssync.share.notInCloud' : 'share.notInCloud')}</div>
         ) : notOwner ? (
           <div className="amxc-hint" style={{ padding: '18px 8px' }}>{t('share.ownerOnly')}</div>
         ) : tab === 'share' ? (
@@ -354,6 +355,18 @@ function CloudSyncRow({ path, onClose }: { path: string; onClose: () => void }) 
   const vaultSide = usePageStore((s) => s.vaultSide)
   useEntrySync((s) => s.vaults) // 订阅注册表变化以刷新 synced 态
   const { t } = useI18n()
+  // 智库同步第 2 步完整模式:同一个入口(同步这篇… / 停止同步这一项 / 同步设置…),改去设置 › 同步
+  const v2 = useV2EntrySync(vaultRoot, vaultSide === 'local' ? path : null)
+  if (v2 !== null) {
+    if (vaultSide !== 'local') return null
+    return (
+      <div className="amxc-body" style={{ borderTop: '1px solid var(--border, rgba(128,128,128,.25))', marginTop: 4, paddingTop: 8 }}>
+        <button className="amxc-primary" data-sync-entry={v2 || 'off'} onClick={() => { onClose(); runEntry(path, 'page') }}>
+          {v2 === 'explicit' ? <CloudOff size={13} /> : <Cloud size={13} />} {entryLabel(v2, 'page')}
+        </button>
+      </div>
+    )
+  }
   if (!window.amadeusSync?.entrySyncEnable || vaultSide !== 'local') return null
   const synced = isSyncedEntry(vaultRoot, path)
   return (

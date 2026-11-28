@@ -10,6 +10,12 @@ import type { SyncFeedReport, SyncReviewItem } from '../../../shared/vaultSync'
 import { openPenzorSync, penzorSyncReady } from '../services/syncSetup'
 import { useApp } from '../stores/appStore'
 import { refreshVaultSync } from './vaultSyncStore'
+import { vaultSync } from './v2/client'
+import { isFullSync } from './v2/mode'
+import { openSyncSettings as openV2Settings } from './v2/openSyncSettings'
+
+/** v2 的 feed(`vault:<bindingId>`):立即同步 / 重试走 vaultsync:run,别撞已退场的 penzor:sync:*。 */
+const v2Binding = (f: SyncFeedReport): string | null => (f.id.startsWith('vault:') ? f.id.slice(6) : null)
 
 async function contentCall(channel: string, ...args: unknown[]): Promise<void> {
   const r = await window.tangu?.cloudInvoke?.(channel, ...args) as { ok?: boolean; error?: string } | undefined
@@ -20,7 +26,8 @@ async function contentCall(channel: string, ...args: unknown[]): Promise<void> {
 export async function syncNow(feeds: SyncFeedReport[]): Promise<void> {
   const jobs: Array<Promise<unknown>> = []
   if (feeds.some((f) => f.engine === 'legacy' && f.canSyncNow)) jobs.push(window.amadeusSync?.syncNow?.() ?? Promise.resolve())
-  if (feeds.some((f) => f.engine === 'content' && f.canSyncNow)) jobs.push(contentCall('penzor:sync:run'))
+  for (const f of feeds) { const id = v2Binding(f); if (id && f.canSyncNow) jobs.push(vaultSync.run(id)) }
+  if (feeds.some((f) => f.engine === 'content' && !v2Binding(f) && f.canSyncNow)) jobs.push(contentCall('penzor:sync:run'))
   if (feeds.some((f) => f.engine === 'remote' && f.canSyncNow)) jobs.push(window.remoteSync?.run?.() ?? Promise.resolve())
   setTimeout(refreshVaultSync, 300) // 踢完马上读一次:面板别停在「已同步」上等一整轮
   await Promise.allSettled(jobs)
@@ -31,7 +38,8 @@ export async function syncNow(feeds: SyncFeedReport[]): Promise<void> {
 export async function retryFailed(feeds: SyncFeedReport[]): Promise<void> {
   const jobs: Array<Promise<unknown>> = []
   if (feeds.some((f) => f.engine === 'legacy' && f.failures.length)) jobs.push(window.amadeusSync?.syncNow?.() ?? Promise.resolve())
-  if (feeds.some((f) => f.engine === 'content' && f.failures.length)) jobs.push(contentCall('penzor:sync:retry'))
+  for (const f of feeds) { const id = v2Binding(f); if (id && f.failures.length) jobs.push(vaultSync.run(id)) }
+  if (feeds.some((f) => f.engine === 'content' && !v2Binding(f) && f.failures.length)) jobs.push(contentCall('penzor:sync:retry'))
   if (feeds.some((f) => f.engine === 'remote' && f.failures.length)) jobs.push(window.remoteSync?.run?.() ?? Promise.resolve())
   await Promise.allSettled(jobs)
   refreshVaultSync()
@@ -41,14 +49,17 @@ type SettingsTab = Parameters<ReturnType<typeof useApp.getState>['openSettings']
 
 /** 拦下的删除去哪确认(都是已有的确认处,面板里不另造删除按钮):
  *  新同步 → 蓬洲云的同步页;旧的在线同步 → 设置 › Forsion 云端 › 笔记同步(「放行删除」在那一行);远程服务 → 设置 › 同步。 */
-export function openDeletesReview(item: Extract<SyncReviewItem, { kind: 'deletes' }>): void {
+export function openDeletesReview(item: Extract<SyncReviewItem, { kind: 'deletes' }>, root?: string | null): void {
+  // 第 2 步完整模式:拦下的删除在设置 › 同步那个库那一行确认(契约 §3.10)
+  if (isFullSync()) { openV2Settings(root ? { root } : undefined); return }
   if (item.ref.feed === 'content' && penzorSyncReady()) openPenzorSync()
   else if (item.ref.feed.startsWith('legacy:')) useApp.getState().openSettings('forsion/f-sync' as SettingsTab)
   else useApp.getState().openSettings('sync')
 }
 
-/** 「同步设置…」:第 1 步还指向蓬洲云的同步页(第 2 步搬进设置 › 同步);没装 Extend 的去设置 › 同步。 */
-export function openSyncSettings(): void {
+/** 「同步设置…」:完整模式 → 设置 › 同步(带上库根就定位到那一行);其余照第 1 步:蓬洲云的同步页,没装 Extend 的去设置 › 同步。 */
+export function openSyncSettings(root?: string | null): void {
+  if (isFullSync()) { openV2Settings(root ? { root } : undefined); return }
   if (penzorSyncReady()) openPenzorSync()
   else useApp.getState().openSettings('sync')
 }

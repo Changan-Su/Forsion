@@ -93,6 +93,11 @@ import { byExpiry, daysUntil } from './amadeus/lib/shareState'
 import type { AmadeusPageShare, AmadeusSharedItem } from './types'
 import { openCloudSyncDialog, HeldSyncNotice } from './components/CloudSyncDialog'
 import { VaultSyncChip } from './sync/VaultSyncChip'
+import { entryLabel, entrySyncState, runEntry, useV2EntrySync } from './sync/v2/entries'
+import { useSyncMode } from './sync/v2/mode'
+import { openSyncSettings } from './sync/v2/openSyncSettings'
+import { useVaultSyncRaw } from './sync/vaultSyncStore'
+import './components/syncSettingsMessages'
 import { track } from './achievements/store'
 import { act } from './activity/log'
 import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 side-effect 导入则块显示「未知块类型」
@@ -974,6 +979,9 @@ export function AmadeusPagesView() {
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const vaultSide = usePageStore((s) => s.vaultSide)
   const vaultLoading = usePageStore((s) => s.vaultLoading)
+  // 智库同步第 2 步完整模式:右键入口改去设置 › 同步、旧的「云同步」分区不画(契约 §3.10);v2 状态变了菜单文案跟着变
+  const fullSync = useSyncMode((s) => s.mode === 'full')
+  const v2Status = useVaultSyncRaw((s) => s.v2)
   // 云端笔记库入口:web / 移动端(库本身在云端,cloudBridge 挂 amadeusCloudVaults)恒显示;桌面仅云端模式显示,本地模式给本地 Vault 选择器。
   // ⚠️ 不能用「没有 amadeusSync」当 web 的判据:桌面没装 Forsion Extend 时 amadeusSync 也不在,那是本地机器,不是云端库。
   const cloudLib = !!(window as { amadeusCloudVaults?: unknown }).amadeusCloudVaults || vaultSide === 'cloud'
@@ -1969,7 +1977,7 @@ export function AmadeusPagesView() {
                 // 分区节点表:顺序由 orderedSecIds(持久化)决定,包装层提供拖拽排序。
                 const secNodes: Record<string, ReactNode> = {
                   pinned: <PinnedSection row={row} dragPath={dragPath} />,
-                  cloudsync: vaultSide === 'local' ? <CloudSyncSection dragPath={dragPath} /> : null,
+                  cloudsync: vaultSide === 'local' && !fullSync ? <CloudSyncSection dragPath={dragPath} /> : null,
                   sharedby: foreignOwner ? null : <SharedByMeSection />,
                   shared: <SharedWithMeSection />,
                   prefs: <PrefsSections row={row} pages={pages} />,
@@ -2001,7 +2009,12 @@ export function AmadeusPagesView() {
           ))}
           <button onClick={() => { const f = menu.path; setMenu(null); void askString(t('amxv.renameFolder'), folderName(f)).then((name) => { const n = name?.trim(); if (n) void ps().renameFolder(f, n) }) }}><Pencil size={13} /> {t('amxv.menu.rename')}</button>
           {canRevealInFileManager() && <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> {t('objects.file.reveal')}</button>}
-          {window.amadeusSync?.entrySyncEnable && vaultSide === 'local' && (
+          {fullSync && vaultSide === 'local' && (() => {
+            const st = entrySyncState(vaultRoot, menu.path, v2Status)
+            const f = menu.path
+            return <button data-sync-entry={st || 'off'} onClick={() => { setMenu(null); runEntry(f, 'folder') }}>{st === 'explicit' ? <CloudOff size={13} /> : <Cloud size={13} />} {entryLabel(st, 'folder')}</button>
+          })()}
+          {!fullSync && window.amadeusSync?.entrySyncEnable && vaultSide === 'local' && (
             isSyncedEntry(vaultRoot, menu.path) ? (
               <button onClick={() => { const f = menu.path; setMenu(null); void window.amadeusSync!.entrySyncDisable!(f) }}><CloudOff size={13} /> {t('amxv.menu.cloudSyncOff')}</button>
             ) : (
@@ -2022,12 +2035,16 @@ export function AmadeusPagesView() {
                 .catch((e) => useApp.getState().toast((e as any)?.code === 'QUOTA' ? ((e as Error).message || t('amxv.publish.quota')) : (e as any)?.status === 404 ? t('amxv.publish.notUploaded') : t('amxv.publish.failed'), true))
             }}><Share2 size={13} /> {t('amxv.menu.publishFolder')}</button>
           )}
-          <button className="danger" onClick={() => { const f = menu.path; setMenu(null); if (confirmedDelete('folder', f)) void ps().deleteFolder(f) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
+          {vaultSide === 'cloud' && !menu.path.includes('/') && cloudSections?.vaultSecs.some((v) => v.name === menu.path)
+            ? <button className="danger" disabled aria-disabled="true" title={t('ssync.web.rootProtected')} data-root-protected=""><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
+            : <button className="danger" onClick={() => { const f = menu.path; setMenu(null); if (confirmedDelete('folder', f)) void ps().deleteFolder(f) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>}
         </TreeMenu>
       )}
       {menu?.kind === 'vaultsec' && (
         <TreeMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
-          <button onClick={() => { const f = menu.path; setMenu(null); markVaultSection(f, false) }}><FolderMinus size={13} /> {t('amxv.menu.vaultSectionOff')}</button>
+          {/* 智库同步第 2 步:云端笔记里的旧库根是别的电脑新同步的去处(legacy-root),网页 / 手机上不再取消分区、不删,删库到蓬洲云 */}
+          <button disabled aria-disabled="true" title={t('ssync.web.rootProtected')} data-root-protected=""><FolderMinus size={13} /> {t('amxv.menu.vaultSectionOff')}</button>
+          <div className="amx-menu-note">{t('ssync.web.rootProtected')}</div>
         </TreeMenu>
       )}
       {rootMenu && webRootMenu && (
@@ -2781,7 +2798,9 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // 顶栏/菜单/移动端胶囊的「当前笔记」:v3 = activePage;unified 不设 activePage,用 leaf 认领的路径。
   const barPath = activePage ?? (unifiedRoute && notePath ? notePath : null)
   const pinned = !!barPath && pinsArr.includes(barPath)
-  const synced = canEntrySync && !!barPath && isSyncedEntry(myPs().vaultRoot, barPath)
+  // 第 2 步完整模式:顶栏云按钮看 v2 的范围(null = 不是完整模式,照旧看条目同步)
+  const barEntry = useV2EntrySync(myPs().vaultRoot, vaultSide === 'local' ? barPath : null)
+  const synced = barEntry !== null ? !!barEntry : canEntrySync && !!barPath && isSyncedEntry(myPs().vaultRoot, barPath)
 
   // unified 接管 → 让 pageStore 交出本文件的快照(新建流/装载残留):陈旧快照×reconcile 回写
   // =延时毁档链,见 pageStore.releasePage 注释。
@@ -3020,7 +3039,20 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           >
             <Pin size={14} />
           </button>
-          {canEntrySync && (
+          {barEntry !== null && vaultSide === 'local' && !!barPath && (
+            <button
+              className={`amx-mode-btn amx-pin-btn${synced ? ' amx-pin-on' : ''}`}
+              data-sync-entry={barEntry || 'off'}
+              title={synced ? t('ssync.entry.settings') : t('ssync.entry.note')}
+              onClick={() => {
+                const root = myPs().vaultRoot
+                openSyncSettings({ ...(root ? { root } : {}), ...(synced ? {} : { path: barPath, kind: 'page' as const }) })
+              }}
+            >
+              <Cloud size={14} />
+            </button>
+          )}
+          {barEntry === null && canEntrySync && (
             <button
               className={`amx-mode-btn amx-pin-btn${synced ? ' amx-pin-on' : ''}`}
               title={synced ? t('amxv.cloud.disableTip') : t('amxv.menu.cloudSyncOn')}

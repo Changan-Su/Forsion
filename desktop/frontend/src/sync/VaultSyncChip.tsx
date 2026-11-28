@@ -29,8 +29,8 @@ function Ring({ pct }: { pct: number | null }) {
   )
 }
 
-/** 小字前面的那枚记号(整句和最短写法共用一套)。 */
-function Mark({ short }: { short: VaultSyncShort }) {
+/** 小字前面的那枚记号(整句和最短写法共用一套;设置 › 同步每个库那一行也用它)。 */
+export function Mark({ short }: { short: VaultSyncShort }) {
   switch (short.kind) {
     case 'check': return <Check size={12} className="vsync-mark-check" aria-hidden="true" />
     case 'ring': return <Ring pct={short.pct} />

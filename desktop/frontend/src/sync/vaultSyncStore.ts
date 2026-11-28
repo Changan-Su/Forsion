@@ -17,6 +17,10 @@ import { ensureEntrySyncSubscribed, useEntrySync } from '../stores/entrySyncStor
 import type { AmadeusEntrySyncVault, AmadeusSyncStatus, RemoteSyncState } from '../types'
 import { amadeus } from '@amadeus/api'
 import { assumedContentFeed, assumedEntryFeed, contentFeeds, legacyFeed, legacyFeedId, remoteFeed, type ContentStatusLite } from './feeds'
+import { v2Feeds, v2Roots } from './v2/feed'
+import { CHANNEL_MISSING, EXTEND_UNAVAILABLE, vaultSync } from './v2/client'
+import { modeFrom, setSyncMode } from './v2/mode'
+import type { VaultSyncStatus } from './v2/types'
 
 type RemoteLite = Pick<RemoteSyncState, 'config' | 'running' | 'lastReport' | 'progress' | 'root' | 'rootError'>
 
@@ -30,26 +34,32 @@ interface VaultSyncRaw {
   pinnedRoot: string | null
   /** 老 Extend(没有只读的 penzor:sync:status)且新同步认领了这个库:状态说不出,只说开着 */
   contentAssumed: boolean
+  /** 智库同步 v2(第 2 步)的只读状态 vaultsync:status;compat / 没有这个通道 = null */
+  v2: VaultSyncStatus | null
   /** 「现在」:每 30 秒走一格,「2 分钟前」跟着变 */
   now: number
 }
 
 export const useVaultSyncRaw = create<VaultSyncRaw>(() => ({
-  legacy: {}, entryVaults: [], content: null, remote: null, pinnedRoot: null, contentAssumed: false, now: Date.now(),
+  legacy: {}, entryVaults: [], content: null, remote: null, pinnedRoot: null, contentAssumed: false, v2: null, now: Date.now(),
 }))
 
 /** 原始状态 → 所有 feed(纯函数,单测直接喂)。 */
-export function feedsOf(raw: Pick<VaultSyncRaw, 'legacy' | 'entryVaults' | 'content' | 'remote' | 'pinnedRoot'> & { contentAssumed?: boolean }): SyncFeedReport[] {
+export function feedsOf(raw: Pick<VaultSyncRaw, 'legacy' | 'entryVaults' | 'content' | 'remote' | 'pinnedRoot'> & { contentAssumed?: boolean; v2?: VaultSyncStatus | null }): SyncFeedReport[] {
   const out: SyncFeedReport[] = []
   const statuses = Object.values(raw.legacy)
   const hasOwn = statuses.some((s) => typeof s.ownPendingDeletions === 'number')
+  // v2 接手了的根:旧条目同步不再为它起来(契约 §3.8 A0),注册表里留着的那条不再算 —— 否则它的「同步开着」会盖过 v2 的「已同步」
+  const taken = v2Roots(raw.v2 ?? null)
   for (const s of statuses) {
     // 注册表里已经没有的条目同步(关掉了):它最后那条状态不再算
     if (s.binding && !raw.entryVaults.some((v) => v.vaultRoot === s.binding)) continue
+    if (s.binding && taken.has(s.binding)) continue
     out.push(legacyFeed(s, { entryVaults: raw.entryVaults, carriesTotalDeletions: !hasOwn && legacyFeedId(s) === 'legacy:mirror' }))
   }
   const mirror = raw.legacy['legacy:mirror'] ?? null
-  for (const v of raw.entryVaults) if (!raw.legacy[`legacy:entry:${v.vaultRoot}`] && v.entries.length) out.push(assumedEntryFeed(v, mirror))
+  for (const v of raw.entryVaults) if (!raw.legacy[`legacy:entry:${v.vaultRoot}`] && v.entries.length && !taken.has(v.vaultRoot)) out.push(assumedEntryFeed(v, mirror))
+  out.push(...v2Feeds(raw.v2 ?? null))
   if (raw.content) out.push(...contentFeeds(raw.content, { pinnedRoot: raw.pinnedRoot, signedIn: raw.content.session !== false }))
   else if (raw.contentAssumed) out.push(assumedContentFeed(raw.pinnedRoot))
   if (raw.remote) out.push(remoteFeed(raw.remote))
@@ -65,7 +75,8 @@ export function useSyncFeeds(): SyncFeedReport[] {
   const remote = useVaultSyncRaw((s) => s.remote)
   const pinnedRoot = useVaultSyncRaw((s) => s.pinnedRoot)
   const contentAssumed = useVaultSyncRaw((s) => s.contentAssumed)
-  return useMemo(() => feedsOf({ legacy, entryVaults, content, remote, pinnedRoot, contentAssumed }), [legacy, entryVaults, content, remote, pinnedRoot, contentAssumed])
+  const v2 = useVaultSyncRaw((s) => s.v2)
+  return useMemo(() => feedsOf({ legacy, entryVaults, content, remote, pinnedRoot, contentAssumed, v2 }), [legacy, entryVaults, content, remote, pinnedRoot, contentAssumed, v2])
 }
 
 /** 一个库此刻的状态(合成后)。vault.side = cloud 是账号的云端镜像那一侧。 */
@@ -91,6 +102,8 @@ let statusChannel: 'status' | 'missing' | null = null
 /** 轮询代号:立即同步后重排轮询,旧的那一轮回来时不再接着排 */
 let pollGen = 0
 let ownedByContent = false
+/** vaultsync:status 那一路:missing = 老 Extend(粘住,不再问);off = cloudInvoke 不在 */
+let v2Channel: 'ok' | 'missing' | 'off' | null = null
 
 const set = (patch: Partial<VaultSyncRaw>): void => useVaultSyncRaw.setState(patch)
 
@@ -149,15 +162,36 @@ async function readContent(): Promise<ContentStatusLite | null> {
   }
 }
 
+/** 智库同步 v2 的只读状态;顺手定这台用哪套界面(sync/v2/mode.ts)。 */
+async function readV2(): Promise<VaultSyncStatus | null> {
+  if (!hasWindow() || v2Channel === 'missing') return null
+  const r = await vaultSync.status()
+  setSyncMode(modeFrom(r))
+  if (!r.ok) {
+    if (r.error === CHANNEL_MISSING) v2Channel = 'missing'
+    else if (r.error === EXTEND_UNAVAILABLE) v2Channel = 'off'
+    else return useVaultSyncRaw.getState().v2 // 偶发失败:留着上一份
+    return null
+  }
+  v2Channel = 'ok'
+  return r.value.mode === 'full' ? r.value : null
+}
+
 async function pollContent(): Promise<void> {
   const gen = ++pollGen
   if (contentTimer) { clearTimeout(contentTimer); contentTimer = null }
-  const c = await readContent().catch(() => useVaultSyncRaw.getState().content)
+  const [c, v2] = await Promise.all([
+    readContent().catch(() => useVaultSyncRaw.getState().content),
+    readV2().catch(() => useVaultSyncRaw.getState().v2),
+  ])
   if (gen !== pollGen || !hasWindow()) return // 期间又重排过:那一轮负责排下一次
   if (JSON.stringify(c) !== JSON.stringify(useVaultSyncRaw.getState().content)) set({ content: c })
+  if (JSON.stringify(v2) !== JSON.stringify(useVaultSyncRaw.getState().v2)) set({ v2 })
   // 在跑时每秒一次(进度跟手),开着每 5 秒,没开 / 窗口不在前台放慢
   const hidden = typeof document !== 'undefined' && document.hidden
-  const delay = c?.running ? 1000 : hidden ? 30_000 : (c?.enabled ?? c?.config?.enabled) ? 5000 : 20_000
+  const v2Busy = !!v2?.bindings.some((b) => b.status.phase === 'checking' || b.status.phase === 'transferring')
+  const v2On = !!v2?.bindings.length
+  const delay = c?.running || v2Busy ? 1000 : hidden ? 30_000 : (c?.enabled ?? c?.config?.enabled) || v2On ? 5000 : 20_000
   contentTimer = setTimeout(() => void pollContent(), delay)
 }
 

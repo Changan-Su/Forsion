@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { parseSyncFocus } from './sync/v2/openSyncSettings'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
@@ -79,6 +80,7 @@ export function FloatingRoot() {
       {target.builtin === 'settings' && <SettingsModal key={JSON.stringify(target.params ?? {})}
         open initialTab={typeof target.params?.tab === 'string' ? target.params.tab as never : undefined}
         initialSkillKey={typeof target.params?.skillKey === 'string' ? target.params.skillKey : undefined}
+        initialSyncFocus={parseSyncFocus(target.params?.syncFocus)}
         cfg={app.cfg} activeSession={panelSession}
         themeLang={theme.lang} themeSkin={theme.skin} themeMode={theme.mode} themeModePref={theme.modePref}
         flatOn={theme.flat} glassOn={theme.glass} themeSeed={theme.seed}

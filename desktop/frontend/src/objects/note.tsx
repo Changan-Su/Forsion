@@ -24,6 +24,7 @@ import { openNote, openDb, openPdf, openImage, openDrawing, openDashboard, openF
 import { useAmadeusPrefs } from '../amadeusPrefs'
 import { isSyncedEntry } from '../stores/entrySyncStore'
 import { openCloudSyncDialog } from '../components/CloudSyncDialog'
+import { entryLabel, entrySyncState, isFullSyncNow, runEntry } from '../sync/v2/entries'
 import { isSafeVaultPath } from '../deepLinkPlan'
 import { canTrash, deleteFileMsg, deleteNoteFlow, deleteNoteMsg } from '../noteDelete'
 import { registerMessages, translate } from '../i18n'
@@ -228,10 +229,13 @@ export function installNoteObject(): void {
     group: 'organize',
     order: 1,
     icon: Cloud,
-    title: ([r]) => translate(synced(r.id) ? 'amxv.menu.cloudSyncOff' : 'amxv.menu.cloudSyncOn'),
-    on: ([r]) => synced(r.id),
-    when: ([r]) => fileKind(r.id) === 'page' && canEntrySync(),
+    // 第 2 步完整模式:「同步这篇… / 停止同步这一项 / 同步设置…」看 v2 的范围,改去设置 › 同步(sync/v2/entries.ts)
+    title: ([r]) => (isFullSyncNow() ? entryLabel(entrySyncState(usePageStore.getState().vaultRoot, r.id), 'page')
+      : translate(synced(r.id) ? 'amxv.menu.cloudSyncOff' : 'amxv.menu.cloudSyncOn')),
+    on: ([r]) => (isFullSyncNow() ? !!entrySyncState(usePageStore.getState().vaultRoot, r.id) : synced(r.id)),
+    when: ([r]) => fileKind(r.id) === 'page' && (isFullSyncNow() ? vaultSideLocal() : canEntrySync()),
     run: ([r]) => {
+      if (isFullSyncNow()) { runEntry(r.id, 'page'); return }
       if (synced(r.id)) void window.amadeusSync?.entrySyncDisable?.(r.id)
       else openCloudSyncDialog(r.id, 'page')
     },

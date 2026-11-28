@@ -31,7 +31,7 @@ registerMessages({
   'vsync.target.penzor': { zh: '蓬洲云', en: 'Penzor Cloud' },
   'vsync.target.folder': { zh: '本地文件夹', en: 'Local folder' },
   'vsync.target.gdrive': { zh: 'Google 云端硬盘', en: 'Google Drive' },
-  'vsync.target.other': { zh: '远程服务', en: 'Remote service' },
+  'vsync.target.other': { zh: '网盘', en: 'Network drive' },
   'vsync.op.upload': { zh: '正在上传 {path}', en: 'Uploading {path}' },
   'vsync.op.download': { zh: '正在下载 {path}', en: 'Downloading {path}' },
   'vsync.op.merge': { zh: '正在合并 {path}', en: 'Merging {path}' },

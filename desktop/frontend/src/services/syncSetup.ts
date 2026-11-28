@@ -12,6 +12,7 @@
  * 开关的动作不做:setSync 对封着的那类不写任何东西、回 ok;卡片 / 引导跳过它们,新同步的建议配置恒不带插件和 Agent。
  * 引擎那边的 /agent/sync(POST)照常发 —— 它带着「我的资料」与默认日历(human/)上云。
  */
+import { isFullSync } from '../sync/v2/mode'
 import { request, type SyncStatusResult } from './backendService'
 import { homeTarget } from './engine/targets'
 import { PLUGIN_SYNC_ALL_OFF_KEY, pluginSyncSummary } from '../amadeus/plugins/pluginDataSync'
@@ -354,6 +355,12 @@ function holdCard(on: boolean): void {
  *  预览或确认失败不记「点过了」:首登卡片会再问一次。 */
 export async function applyOnboardingSync(choices: Record<SyncKind, boolean>, kinds: readonly SyncKind[] = ['agents', 'plugins', 'notes']): Promise<SyncResult[]> {
   if (!snap) await refreshSync()
+  // 智库同步第 2 步完整模式:引导里勾了智库不在这里悄悄开(新同步要先比一下、出汇总卡再确认)。
+  // 不记「点过」→ 引导收尾后首登卡片(只有智库一行)接着问,开始同步 = 设置 › 同步那一行;没勾 = 点过了
+  if (isFullSync()) {
+    if (!(kinds.includes('notes') && choices.notes)) markSyncDecided()
+    return [{ ok: true }]
+  }
   if (!snap?.contentRules) return applySyncChoices(choices, kinds)
   const who = account
   if (!(await sameAccount(who))) return [{ ok: false, error: 'account-changed' }]
