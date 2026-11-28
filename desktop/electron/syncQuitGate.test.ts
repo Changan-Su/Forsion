@@ -126,6 +126,16 @@ describe('sync quit gate', () => {
     expect(await gate.unattended()).toBe(false)
   })
 
+  it('one check failing while another times out still reads as pending > 0: unattended installs wait', async () => {
+    const gate = createSyncQuitGate({ ui: fakeUi(), checkTimeoutMs: 10 })
+    gate.add(async () => ({ state: 'failed', pending: 0, failed: [{ path: 'a.md', reason: 'too large' }] }))
+    gate.add(() => new Promise(() => {}))
+    const r = await gate.check()
+    expect(r?.state).toBe('failed')
+    expect(r?.pending).toBeGreaterThan(0)
+    expect(await gate.unattended()).toBe(false)
+  })
+
   it('the old engine\'s quit hook skips a before-quit that the gate is holding and fires once when the quit goes ahead', () => {
     const app = new EventEmitter()
     let held = false

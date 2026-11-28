@@ -60,7 +60,7 @@ export function createSyncQuitGate(deps: { ui: QuitGateUi; pollMs?: number; chec
     try {
       return await Promise.race([
         Promise.resolve().then(fn).then(normalize),
-        sleep(timeout).then((): QuitCheckResult => ({ state: 'pending', pending: 0, failed: [] })), // 扫得太久 = 还在同步
+        sleep(timeout).then((): QuitCheckResult => ({ state: 'pending', pending: 1, failed: [] })), // 扫得太久 = 还在同步(记一件待同步:和别的失败合起来时 state 是 failed,pending 仍 > 0,无人值守不装)
       ])
     } catch (e) {
       // 插件抛错:说成失败(界面写明哪儿错了),不当成同步完了

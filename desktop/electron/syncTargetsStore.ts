@@ -40,11 +40,12 @@ export const SYNC_TARGETS_MALFORMED = 'sync-targets-malformed'
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 
-/** legacy 封口记录:缺的字段取缺省(读成「没持有 / 没归档」);在、但类型或取值不对 = 整个文件读不了(调用方按持有处理),
+/** legacy 封口记录:整个记录缺省 = 没持有;记录在时 holder 必须在(null / 'v2'),其余字段缺的取缺省;在、但类型或取值不对 = 整个文件读不了(调用方按持有处理),
  *  不能把 holder:'v1' 之类读成 null(= 已交还)。 */
 function validLegacy(l: unknown): boolean {
   if (!isObject(l)) return false
-  if (l.holder !== undefined && l.holder !== null && l.holder !== 'v2') return false
+  // holder 不可缺:落盘的记录总带着它(封口 / 交还 / 归档都从读到的整份改),缺了 = 不是我们写的,不能读成「已交还」
+  if (l.holder !== null && l.holder !== 'v2') return false
   if (l.archived !== undefined && typeof l.archived !== 'boolean') return false
   if (l.archivedAt !== undefined && !(typeof l.archivedAt === 'number' && Number.isFinite(l.archivedAt))) return false
   if (l.archiveDir !== undefined && typeof l.archiveDir !== 'string') return false

@@ -93,7 +93,18 @@ function readDefaultsStrict(): Record<string, AccountDefault> {
   const raw = readSyncBytes(agentsDir(), defaultFile());
   if (raw === null) return {};
   const data = JSON.parse(raw.toString('utf8'));
-  if (!data || typeof data !== 'object' || (data.accounts !== undefined && (typeof data.accounts !== 'object' || data.accounts === null))) throw new Error('content sync owner file is malformed');
+  if (!data || typeof data !== 'object' || (data.accounts !== undefined && (typeof data.accounts !== 'object' || data.accounts === null || Array.isArray(data.accounts)))) throw new Error('content sync owner file is malformed');
+  // 每个账号的 owner 字段形状也要对:contentOwns.human 写成 "true" 之类读成 false 会让引擎以为 human/ 归自己(两个写者)
+  const bool = (v: unknown): boolean => v === undefined || typeof v === 'boolean';
+  for (const e of Object.values(data.accounts ?? {}) as unknown[]) {
+    if (!e || typeof e !== 'object' || Array.isArray(e)) throw new Error('content sync owner file is malformed');
+    const x = e as { contentOwns?: unknown; owner?: unknown };
+    if (x.owner !== undefined && typeof x.owner !== 'string') throw new Error('content sync owner file is malformed');
+    if (x.contentOwns !== undefined) {
+      const o = x.contentOwns as { human?: unknown; agents?: unknown } | null;
+      if (!o || typeof o !== 'object' || Array.isArray(o) || !bool(o.human) || !bool(o.agents)) throw new Error('content sync owner file is malformed');
+    }
+  }
   return data.accounts ?? {};
 }
 export function agentSyncDefault(scope: string | null): boolean | null {

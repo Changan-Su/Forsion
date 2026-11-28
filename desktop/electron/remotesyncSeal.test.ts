@@ -172,6 +172,27 @@ describe('archiving the legacy remotesync', () => {
     expect(JSON.parse(readFileSync(join(userData(), 'sync-targets.json'), 'utf8')).legacy).toMatchObject({ holder: 'v2', archived: true })
   })
 
+  it('archive with the key seen at takeover: a config changed meanwhile (another bucket / root) is refused and nothing moves', async () => {
+    writeFileSync(cfgFile(), JSON.stringify(original(), null, 2), { mode: 0o600 })
+    await boot()
+    ipc.legacyRemoteSync.extendLoaded(true)
+    await ipc.legacyRemoteSync.seal()
+    const seen = (await ipc.legacyRemoteSync.view())!.legacyKey!
+    expect(seen).toMatch(/^[a-f0-9]{32}$/)
+    expect(JSON.stringify(await ipc.legacyRemoteSync.view())).not.toContain('fixture-secret-value')
+    const moved = { ...original(), webdav: { ...original().webdav, baseDir: 'team/other' } }
+    writeFileSync(cfgFile(), JSON.stringify(moved, null, 2), { mode: 0o600 })
+    await expect(ipc.legacyRemoteSync.archive(join(env.root, 'archive'), { expectKey: seen })).rejects.toThrow('legacy-config-changed')
+    expect(JSON.parse(readFileSync(cfgFile(), 'utf8'))).toEqual(moved) // 原文件没动
+    expect(existsSync(join(env.root, 'archive', 'remotesync.json'))).toBe(false)
+    expect(JSON.parse(readFileSync(join(userData(), 'sync-targets.json'), 'utf8')).legacy.archived).toBe(false)
+    // 键对得上:照常归档,档案里不留临时文件
+    const now = (await ipc.legacyRemoteSync.view())!.legacyKey!
+    await ipc.legacyRemoteSync.archive(join(env.root, 'archive'), { expectKey: now })
+    expect(readdirSync(join(env.root, 'archive')).filter((n) => n.includes('.tmp-'))).toEqual([])
+    expect(JSON.parse(readFileSync(join(env.root, 'archive', 'remotesync.json'), 'utf8'))).toEqual(moved)
+  })
+
   it('penzor (its fingerprint needs a whoami round-trip): moves only this root\'s penzor baselines for this vault, recognised by their own recorded fingerprint', async () => {
     writeFileSync(cfgFile(), JSON.stringify({ backend: 'penzor', intervalMin: 5, penzor: { vault: 'notes' } }))
     const sd = join(userData(), 'remotesync-state')
@@ -337,6 +358,9 @@ describe('sync targets keep their identity', () => {
     const d = await saveSyncTarget({ kind: 'webdav', section: dav })
     await expect(saveSyncTarget({ id: d.id, kind: 'webdav', section: { ...dav, username: 'fixture-user-b' } })).rejects.toThrow('target-location-changed')
     await expect(saveSyncTarget({ id: d.id, kind: 'webdav', section: { ...dav, address: 'https://other.test/remote.php' } })).rejects.toThrow('target-location-changed')
+    // 打开时原样用 section:目录多一个空格 = 另一个目录,哪怕 targetLocation 去空格后看着一样
+    await expect(saveSyncTarget({ id: d.id, kind: 'webdav', section: { ...dav, baseDir: 'v ' } })).rejects.toThrow('target-location-changed')
+    await expect(saveSyncTarget({ id: a.id, kind: 's3', section: { ...s3, bucket: 'bucket-a ' } })).rejects.toThrow('target-location-changed')
     await saveSyncTarget({ id: d.id, kind: 'webdav', section: { ...dav, password: 'p2' } })
     expect(file().targets[d.id].section.password).toBe('p2')
     const dbx = { appKey: 'fixture-app', refreshToken: 'r1', accountId: 'dbid:a', baseDir: 'v' }
@@ -367,5 +391,21 @@ describe('entry ignores', () => {
       const view = await ipc.legacyRemoteSync.view()
       expect(view?.entryIgnores).toEqual(['Notes/a.md', 'Notes/a.fd/', 'Shared/', 'locked.md', 'locked.fd/'])
     } finally { chmodSync(locked, 0o755) }
+  })
+
+  it('the old engine\'s own round keeps the pre-step-2 rule for an unresolvable vault root: it is not this vault, nothing here is skipped', async () => {
+    const locked = join(env.root, 'locked')
+    mkdirSync(join(locked, 'Inner'), { recursive: true })
+    env.entrySync = [{ vaultRoot: join(locked, 'Inner'), cloudName: 'L', entries: [{ path: 'a.md', kind: 'page' }] }]
+    writeFileSync(cfgFile(), JSON.stringify({ backend: 'folder', intervalMin: 0, folder: { path: join(env.root, 'Remote') } }))
+    await boot()
+    ipc.legacyRemoteSync.extendLoaded(false)
+    chmodSync(locked, 0o000)
+    try {
+      expect((await call<any>('remotesync:run')).ok).toBe(true)
+      expect((await ipc.legacyRemoteSync.view())?.entryIgnores).toEqual(['a.md', 'a.fd/']) // 接手视图:不知道 = 让开
+    } finally { chmodSync(locked, 0o755) }
+    expect(readFileSync(join(env.root, 'Remote', 'a.md'), 'utf8')).toBe('alpha')
+    expect(readFileSync(join(env.root, 'Remote', 'b.md'), 'utf8')).toBe('beta')
   })
 })

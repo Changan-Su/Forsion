@@ -16,7 +16,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 describe('sync-targets store', () => {
   it('a present but malformed legacy record is unreadable (so the gate holds), never read as "handed back"', async () => {
-    for (const legacy of [{ holder: 'v1' }, { holder: 2 }, { holder: 'v2', archived: 'yes' }, { holder: 'v2', archiveDir: 5 }, { holder: 'v2', archivedAt: 'now' }, { holder: 'v2', targetId: 3 }, []]) {
+    for (const legacy of [{ holder: 'v1' }, { holder: 2 }, { holder: 'v2', archived: 'yes' }, { holder: 'v2', archiveDir: 5 }, { holder: 'v2', archivedAt: 'now' }, { holder: 'v2', targetId: 3 }, [], { archived: true }, { targetId: 't1' }]) {
       writeFileSync(file(), JSON.stringify({ version: 1, targets: {}, legacy }))
       const store = createSyncTargetsStore(file)
       await expect(store.readLegacy(), JSON.stringify(legacy)).rejects.toThrow('sync-targets-malformed')
@@ -26,9 +26,11 @@ describe('sync-targets store', () => {
       expect(g.state().hold).toBe('unknown')
       expect(g.blocked()).toBe(true)
     }
-    // 缺的字段取缺省;holder 显式 null = 交还着
-    writeFileSync(file(), JSON.stringify({ version: 1, targets: {}, legacy: { archived: true } }))
+    // 记录在时 holder 必须在(缺了不是我们写的,不能读成「已交还」);其余缺的字段取缺省;holder 显式 null = 交还着
+    writeFileSync(file(), JSON.stringify({ version: 1, targets: {}, legacy: { holder: null, archived: true } }))
     expect(await createSyncTargetsStore(file).readLegacy()).toEqual({ holder: null, archived: true })
+    writeFileSync(file(), JSON.stringify({ version: 1, targets: {} }))
+    expect(await createSyncTargetsStore(file).readLegacy()).toEqual({ holder: null, archived: false })
     writeFileSync(file(), JSON.stringify({ version: 1, targets: {}, legacy: { holder: null, archived: false, targetId: null } }))
     expect(await createSyncTargetsStore(file).readLegacy()).toEqual({ holder: null, archived: false })
   })

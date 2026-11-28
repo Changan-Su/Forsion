@@ -79,25 +79,14 @@ describe('S3:条件头', () => {
     await expect(t.rm('k.md', undefined, null)).rejects.toThrow()
   })
 
-  it('PUT 不回 ETag(部分 S3 兼容服务):返回的 id 与随后的 stat / walk 一致,拿它条件写不误报冲突', async () => {
-    s3 = await startFakeS3({ conditions: 'honour', putEtag: false })
-    const t = open()
-    const e1 = await t.writeFile('c.md', buf('one'), T, undefined, null)
-    expect((await t.stat('c.md'))!.id).toBe(e1.id)
-    expect((await t.walk()).find((e) => e.key === 'c.md')!.id).toBe(e1.id)
-    const e2 = await t.writeFile('c.md', buf('two'), T, undefined, e1.id)
-    expect((await t.stat('c.md'))!.id).toBe(e2.id)
-    expect(s3.objects.get('v/c.md')!.data.toString()).toBe('two')
-  })
-
-  it('PUT 不回 ETag 且写后、核对前别人写了 → cas-conflict(不把别人的版本当成这次写的)', async () => {
+  it('PUT 不回 ETag(部分 S3 兼容服务):拿不到这次提交的版本 → cas-conflict,字节照写、交引擎重判(弱身份分不出同秒同大小的另一份)', async () => {
     s3 = await startFakeS3({ conditions: 'honour', putEtag: false })
     s3.externalPut('v/k.md', 'v1')
     const t = open()
     const [a] = await t.walk()
-    s3.afterPut = (key) => { s3.afterPut = undefined; s3.externalPut(key, 'theirs') }
-    await expect(t.writeFile('k.md', buf('ours'), T, undefined, a.id)).rejects.toThrow(/^cas-conflict s3 PUT k\.md: .*changed after write/)
-    expect(s3.objects.get('v/k.md')!.data.toString()).toBe('theirs')
+    await expect(t.writeFile('n.md', buf('one'), T, undefined, null)).rejects.toThrow(/^cas-conflict s3 PUT n\.md: no commit version/)
+    await expect(t.writeFile('k.md', buf('ours'), T, undefined, a.id)).rejects.toThrow(/^cas-conflict s3 PUT k\.md: no commit version/)
+    expect(s3.objects.get('v/k.md')!.data.toString()).toBe('ours')
   })
 
   it('无条件写走旧的 Upload 路径,不带条件头', async () => {

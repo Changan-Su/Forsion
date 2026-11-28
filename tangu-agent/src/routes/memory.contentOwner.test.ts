@@ -111,6 +111,16 @@ it('GET refuses a stale account and does not report a corrupt owner file as "nob
   expect(readFileSync(join(agentsDir(), '.cloudsync-default.json'), 'utf8')).toBe('{"accounts":');
 });
 
+it('a wrongly typed owner bit is unreadable, never read as "the engine owns human/"', async () => {
+  for (const entry of [{ contentOwns: { human: 'true', agents: false } }, { contentOwns: { human: 1 } }, { contentOwns: 'content' }, { owner: 5 }, 'x']) {
+    const body = JSON.stringify({ accounts: { [alpha]: entry } });
+    writeFileSync(join(agentsDir(), '.cloudsync-default.json'), body);
+    expect(() => contentSyncOwnership(alpha), JSON.stringify(entry)).toThrow('malformed');
+    expect((await call('GET', '/agent/sync/content-owner')).status).toBe(500);
+    expect(readFileSync(join(agentsDir(), '.cloudsync-default.json'), 'utf8')).toBe(body);
+  }
+});
+
 it('content-touched never writes the owner and mirrors human/ only while content owns it', async () => {
   const file = join(agentsDir(), '.cloudsync-default.json');
   const before = readFileSync(file, 'utf8');

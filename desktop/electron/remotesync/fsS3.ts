@@ -11,10 +11,9 @@
  * 再用单次 PutObject / DeleteObject 带 If-None-Match / If-Match(412 / 409 ConditionalRequestConflict → cas-conflict)。
  * 有的 S3 兼容服务默默忽略条件头,所以对外不声明 CAS,真正兜底的是复查(窗口一个往返,非原子)。
  * HEAD 没有响应体,404 分不清「key 不在」和「桶不在」:cas 下 HEAD 404 再用 ListObjectsV2(Prefix = 完整 key)确认。
- * 条件 PUT 不回 ETag(部分 S3 兼容服务)时:HEAD → GET → HEAD,两次身份一致且内容 sha256 正是这次写的才认,否则 cas-conflict。
+ * 条件 PUT 不回 ETag(部分 S3 兼容服务)时:拿不到与这次提交绑定的版本,一律 cas-conflict(弱身份分不出同秒同大小的另一份)。
  * 缺省 = 旧行为。
  */
-import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
 import {
   DeleteObjectCommand,
@@ -116,7 +115,6 @@ export function createS3Remote(cfg: S3Config, opts: S3RemoteOptions = {}): Remot
     const size = obj.Size ?? 0
     return { key, size, mtimeMs, id: obj.ETag ?? `${mtimeMs}:${size}` }
   }
-  const sha256 = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
 
   return {
     kind: 's3',
@@ -176,13 +174,9 @@ export function createS3Remote(cfg: S3Config, opts: S3RemoteOptions = {}): Remot
           const mt = metaMtimeMs({ MTime: `${mtimeMs / 1000.0}` }) || mtimeMs
           return { key, size: data.byteLength, mtimeMs: mt, id: etag }
         }
-        // 不回 ETag:拿客户端 mtime 拼的 id 与随后 HEAD 的 ETag 对不上(下一轮必误报冲突),写后 HEAD 又可能已是别人的版本。
-        // HEAD → GET → HEAD:两次身份一致、下到的正是这次写的字节,这个身份才是我们的;否则抛冲突,交引擎重判。
-        const s1 = await statKey(key, signal)
-        const back = s1 ? await bodyToBuffer((await client.send(new GetObjectCommand({ Bucket: cfg.bucket, Key: full(key) }), { abortSignal: signal })).Body) : null
-        const s2 = s1 ? await statKey(key, signal) : null
-        if (!s1 || !s2 || !back || s1.id !== s2.id || sha256(back) !== sha256(data)) throw conflict('PUT', key, 'remote changed after write')
-        return s1
+        // 不回 ETag:拿不到与这次提交绑定的版本。HEAD 的弱身份(秒级 LastModified + size)分不出同秒同大小的另一份,
+        // 回读核对也证明不了版本属于这次 PUT —— 直接报冲突、保留原基线,交引擎下一轮重判(写进去的字节就是本机那份,重判会认成一致)。
+        throw conflict('PUT', key, 'no commit version')
       }
       const upload = new Upload({
         client,

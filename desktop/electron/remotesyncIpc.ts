@@ -7,7 +7,7 @@
  *  - 按条目云同步(entrySync)绑定的路径自动加入忽略 —— 双引擎不许抢管辖同一批文件;
  *  - 本地删除注入系统回收站(shell.trashItem),兜底 fs.rm。
  */
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, app, ipcMain, net, shell } from 'electron'
@@ -119,9 +119,11 @@ function inConfigQueue<T>(fn: () => Promise<T>): Promise<T> {
   return work
 }
 
-function saveConfig(patch: Partial<RemoteSyncConfig>): Promise<RemoteSyncConfig> {
+/** patch 可以是函数:在写队列里拿到最新那份再算(OAuth 回调只改自己那一段,不拿排队前读的旧段盖掉设置页刚存的目录)。 */
+function saveConfig(patch: Partial<RemoteSyncConfig> | ((cur: RemoteSyncConfig) => Partial<RemoteSyncConfig>)): Promise<RemoteSyncConfig> {
   return inConfigQueue(async () => {
-    const next = { ...(await loadConfig()), ...patch }
+    const cur = await loadConfig()
+    const next = { ...cur, ...(typeof patch === 'function' ? patch(cur) : patch) }
     await fs.mkdir(app.getPath('userData'), { recursive: true }).catch(() => {})
     if (loadBroken) {
       // 读不了的那份原样挪开留着(里面可能有凭据),再写新的。挪不开(文件已经不在除外)就不写:覆盖写会把它截掉
@@ -236,17 +238,21 @@ export async function resolveLocalSyncRoot(): Promise<{ root: string } | { error
 }
 
 /** entrySync 绑定路径 → 忽略规则(双引擎不抢管辖)。库根按物理路径比(realpath:解开符号链接、mac 上纠正大小写,
- *  同 contentSyncHost.canonRoot 的口径):经软链登记的库也认得出。条目库根解析不了时:不存在(ENOENT / ENOTDIR)= 不可能是
- *  这个(在的)根;别的错(没权限、链接打转)= 不知道,当成同一个、让开它的条目(接手据此暂停),不猜。 */
-async function entrySyncIgnores(root: string): Promise<string[]> {
+ *  同 contentSyncHost.canonRoot 的口径):经软链登记的库也认得出;字面相同照旧算(第 2 步以前的口径)。
+ *  条目库根解析不了时:不存在(ENOENT / ENOTDIR)= 不可能是这个(在的)根;别的错(没权限、链接打转):
+ *  - 'legacy'(remotesync 自己 runNow):回到字面比较,别的库解析不了不该让这个库少同步文件(没登记 v2 时行为照旧);
+ *  - 'takeover'(给接手的视图):不知道 = 当成同一个、让开它的条目(接手据此暂停),不猜。 */
+async function entrySyncIgnores(root: string, mode: 'legacy' | 'takeover'): Promise<string[]> {
   const am = await readAmadeusConfig()
   const here = await canon(root)
   const out: string[] = []
   for (const v of am.entrySync ?? []) {
-    let same: boolean
-    try { same = (await fs.realpath(v.vaultRoot)) === here } catch (e) {
-      const code = (e as NodeJS.ErrnoException)?.code
-      same = code !== 'ENOENT' && code !== 'ENOTDIR'
+    let same = path.resolve(v.vaultRoot) === path.resolve(root)
+    if (!same) {
+      try { same = (await fs.realpath(v.vaultRoot)) === here } catch (e) {
+        const code = (e as NodeJS.ErrnoException)?.code
+        same = mode === 'takeover' && code !== 'ENOENT' && code !== 'ENOTDIR'
+      }
     }
     if (!same) continue
     for (const e of v.entries ?? []) {
@@ -323,7 +329,7 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
       remote: built.remote,
       statePath: path.join(app.getPath('userData'), 'remotesync-state', `${hash8(scope)}.json`),
       fingerprint: built.fingerprint,
-      ignoreGlobs: [...(cfg.ignore ?? []), ...(await entrySyncIgnores(rooted.root))],
+      ignoreGlobs: [...(cfg.ignore ?? []), ...(await entrySyncIgnores(rooted.root, 'legacy'))],
       maxFileSize: effectiveMaxFileSize(cfg, built.maxFileBytes),
       direction: cfg.direction,
       concurrency: cfg.concurrency,
@@ -442,11 +448,10 @@ async function finishDropboxAuth(code: string): Promise<{ ok: boolean; error?: s
   try {
     const r = await dropboxExchangeCode(pending.appKey, code, pending.verifier, pending.redirectUri, remoteFetch)
     dbxPending = null
-    const cur = (await loadConfig()).dropbox
-    const config = await saveConfig({
+    const config = await saveConfig((c) => ({
       // 内置官方应用的 key 不落配置:否则日后换 key,旧值会一直盖住内置值
-      dropbox: { ...cur, appKey: pending.custom ? pending.appKey : '', refreshToken: r.refreshToken, accountId: r.accountId, email: r.email ?? r.name },
-    })
+      dropbox: { ...c.dropbox, appKey: pending.custom ? pending.appKey : '', refreshToken: r.refreshToken, accountId: r.accountId, email: r.email ?? r.name },
+    }))
     return { ok: true, email: r.email ?? r.name, config }
   } catch (e) {
     return { ok: false, error: String((e as Error)?.message || e) }
@@ -482,17 +487,16 @@ async function finishGdriveAuth(attempt: GdAttempt, code: string): Promise<{ ok:
     const r = await gdriveExchangeCode(attempt, code, attempt.verifier, attempt.redirectUri, remoteFetch)
     if (gdAttempt !== attempt) return { ok: false, error: 'auth-superseded' }
     gdAttempt = null
-    const cur = (await loadConfig()).gdrive
-    const config = await saveConfig({
+    const config = await saveConfig((c) => ({
       gdrive: {
-        ...cur,
+        ...c.gdrive,
         clientId: attempt.custom ? attempt.clientId : '',
         clientSecret: attempt.custom ? attempt.clientSecret : '',
         refreshToken: r.refreshToken,
         accountId: r.accountId,
         email: r.email ?? r.name,
       },
-    })
+    }))
     return { ok: true, email: r.email ?? r.name, config }
   } catch (e) {
     if (gdAttempt === attempt) gdAttempt = null
@@ -628,6 +632,13 @@ function legacyGate(): LegacyGate {
  *  - 外置后端(penzor 的指纹要 whoami 出网,这里不调它的工厂)或内置但认身份的字段缺了:按每个基线文件里记的指纹认 ——
  *    文件名正是 hash8(这个根|它记的指纹) 才算这个根的,再要后端前缀一致(penzor 再要库名一致;同一个根、同一个库、
  *    不同账号的也挪:宁可多挪,挪走 = 交还后首次合流、不做删除判定)。读不了 / 解析不了的基线引擎本来就当空的用,不挪。 */
+/** 「根 × 去处」的不透明键:内置后端用基线指纹,算不出的(penzor 等)用后端 + 目录 + 库名。只是 hash,不含凭据。 */
+function legacyKeyOf(cfg: RemoteSyncConfig, root: string): string {
+  const penzorVault = cfg.backend === 'penzor' ? (typeof cfg.penzor?.vault === 'string' ? cfg.penzor.vault : 'default').trim() || 'default' : ''
+  const where = builtinFingerprint(cfg) ?? `${cfg.backend}:${legacyDirOf(cfg)}|${penzorVault}`
+  return createHash('sha256').update(`${root}\n${where}`).digest('hex').slice(0, 32)
+}
+
 async function legacyBaselines(cfg: RemoteSyncConfig, stateDir: string): Promise<string[]> {
   if (cfg.backend === 'off') return []
   const rooted = await resolveLocalSyncRoot()
@@ -685,8 +696,10 @@ export interface LegacyRemoteSyncView {
   hold: 'none' | 'v2'
   archived: boolean
   handshake: 'pending' | 'ok' | 'released'
-  /** 「让开条目绑定的路径」(契约 H-2 第 2 条):同 runNow 里的 entrySyncIgnores(root),现算。非空 = 这个根也配着条目同步。 */
+  /** 「让开条目绑定的路径」(契约 H-2 第 2 条):同 runNow 里的 entrySyncIgnores,现算(条目库根解析不了按同一个算)。非空 = 这个根也配着条目同步。 */
   entryIgnores: string[]
+  /** 这份配置「根 × 去处」的不透明键(不含凭据):接手前后各取一次比对、交给 archive 核对,换了根 / 桶 / 账号就对不上。根解析不了 = null。 */
+  legacyKey: string | null
 }
 
 /** 新同步(Extend)用的那几样;syncTargets.ts 包成 CloudHost.syncTargets。凭据只经 legacySection() 给宿主自己,永不进 Extend。 */
@@ -716,7 +729,8 @@ export const legacyRemoteSync = {
       },
       root: 'root' in rooted ? rooted.root : null,
       rootError: 'error' in rooted ? rooted.error : null,
-      entryIgnores: 'root' in rooted ? await entrySyncIgnores(rooted.root) : [],
+      legacyKey: 'root' in rooted ? legacyKeyOf(cfg, rooted.root) : null,
+      entryIgnores: 'root' in rooted ? await entrySyncIgnores(rooted.root, 'takeover') : [],
       running,
       hold: st.hold === 'v2' ? 'v2' : 'none',
       archived: st.archived,
@@ -738,8 +752,9 @@ export const legacyRemoteSync = {
    *  **这个根 × 这个指纹**的基线挪进档案(契约 H-1 第 2 条;用户以前同步过的别的根 / 去处的基线留着)。幂等。
    *  整段在封口闸的锁里跑(gate.exclusive):闸关着、没有在途的一轮,中途来的 unseal 排在后面;
    *  读 remotesync.json 和改写它在同一个写队列里(saveConfig 排在前或后,不会被改写盖掉)。锁的顺序:闸 → 配置队列,别反过来。 */
-  async archive(archiveDir: string): Promise<{ copied: string[]; moved: string[] }> {
+  async archive(archiveDir: string, opts?: { expectKey?: string }): Promise<{ copied: string[]; moved: string[] }> {
     if (typeof archiveDir !== 'string' || !path.isAbsolute(archiveDir)) throw new Error('bad-archive-dir')
+    const expectKey = typeof opts?.expectKey === 'string' ? opts.expectKey : null
     return legacyGate().exclusive(async (g) => {
       if (running) throw new Error('already-running')
       const copied: string[] = []
@@ -748,14 +763,26 @@ export const legacyRemoteSync = {
       const pick = await inConfigQueue(async () => {
         const strict = await readLegacyConfigStrict()
         if (!strict) throw new Error('no-legacy-config')
+        // 接手时看到的「根 × 去处」和现在的对不上(封口期间用户改了旧同步的根 / 桶 / 账号):什么都不动,交接手重来
+        if (expectKey !== null) {
+          const rooted = await resolveLocalSyncRoot()
+          if ('error' in rooted) throw new Error('legacy-root-unavailable')
+          if (legacyKeyOf(strict.cfg, rooted.root) !== expectKey) throw new Error('legacy-config-changed')
+        }
         // 先认出要挪哪份基线(认不出根就抛,什么都不动):不能一边改了原文件一边留着认不出的基线还记 archived
         const names = await legacyBaselines(strict.cfg, stateDir)
         await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 })
         const dest = path.join(archiveDir, path.basename(configFile()))
-        // 只复制一次:重跑时档案里那份是改之前的原件,不能被已经关了自动同步的新内容盖掉。复制的是这次严格读到的那份字节
-        try { await fs.writeFile(dest, strict.bytes, { mode: 0o600, flag: 'wx' }); copied.push(dest) } catch (e) {
-          if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') throw e
+        // 只复制一次:重跑时档案里那份是改之前的原件,不能被已经关了自动同步的新内容盖掉。复制的是这次严格读到的那份字节。
+        // 先写满临时文件并刷盘,再 link 独占发布:写到一半(磁盘满 / 断电)留下的只是临时文件,EEXIST 才真表示档案里有完整原件
+        const tmp = `${dest}.tmp-${process.pid}-${Date.now()}`
+        const fh = await fs.open(tmp, 'wx', 0o600)
+        try { await fh.writeFile(strict.bytes); await fh.sync() } catch (e) { await fh.close().catch(() => {}); await fs.rm(tmp, { force: true }).catch(() => {}); throw e }
+        await fh.close()
+        try { await fs.link(tmp, dest); copied.push(dest) } catch (e) {
+          if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') { await fs.rm(tmp, { force: true }).catch(() => {}); throw e }
         }
+        await fs.rm(tmp, { force: true })
         await fs.chmod(dest, 0o600).catch(() => {})
         if ((strict.cfg.intervalMin ?? 0) !== 0 || strict.cfg.syncOnStart) {
           const obj = JSON.parse(strict.raw) as Record<string, unknown>

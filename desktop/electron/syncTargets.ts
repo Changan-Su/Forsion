@@ -29,7 +29,8 @@ export interface SyncTargetsSeam {
   legacyRemoteSync(): Promise<(LegacyRemoteSyncView & { targetId: string | null }) | null>
   importLegacyRemoteSync(): Promise<{ targetId: string }>
   sealLegacyRemoteSync(): Promise<void>
-  archiveLegacyRemoteSync(archiveDir: string): Promise<{ copied: string[]; moved: string[] }>
+  /** opts.expectKey = 接手时 legacyRemoteSync() 给的 legacyKey:现在的配置对不上就抛 legacy-config-changed、什么都不动。 */
+  archiveLegacyRemoteSync(archiveDir: string, opts?: { expectKey?: string }): Promise<{ copied: string[]; moved: string[] }>
   unsealLegacyRemoteSync(): Promise<void>
   vaults(): Promise<Array<{ root: string; name: string }>>
 }
@@ -49,6 +50,15 @@ export function targetLocation(kind: SyncTargetKind, s: Record<string, unknown>)
 
 /** 网盘的「账号」(位置里没编进去的那部分身份):WebDAV 的用户名(同一个地址换个用户 = 别人的那棵树)。
  *  S3 的 accessKeyID 不算(换钥匙 = 同一个桶的凭据轮换);Dropbox / Google Drive 的账号已经在 targetLocation 里;文件夹没有账号。 */
+/** 打开时原样传下去的位置字段(specOf:S3 / WebDAV 整段 section,Dropbox / Drive 的 baseDir)的原文,不去空格、不归一:
+ *  `v` 改成 `v ` 在 targetLocation 里看不出来,打开的却是另一个目录。文件夹打开时也 trim,targetLocation 已经够。 */
+const RAW_LOCATION_KEYS: Record<SyncTargetKind, readonly string[]> = {
+  folder: [], s3: ['endpoint', 'bucket', 'prefix'], webdav: ['address', 'baseDir', 'username'], dropbox: ['baseDir'], gdrive: ['baseDir'],
+}
+function rawLocation(kind: SyncTargetKind, s: Record<string, unknown>): string {
+  return JSON.stringify(RAW_LOCATION_KEYS[kind].map((k) => (s[k] === undefined ? null : s[k])))
+}
+
 function targetAccount(kind: SyncTargetKind, s: Record<string, unknown>): string {
   return kind === 'webdav' ? str(s.username) : ''
 }
@@ -181,7 +191,7 @@ export function createSyncTargets(): SyncTargetsSeam {
       return { targetId: id }
     },
     async sealLegacyRemoteSync() { await touch(); await legacyRemoteSync.seal() },
-    async archiveLegacyRemoteSync(archiveDir) { await touch(); return legacyRemoteSync.archive(archiveDir) },
+    async archiveLegacyRemoteSync(archiveDir, opts) { await touch(); return legacyRemoteSync.archive(archiveDir, opts) },
     async unsealLegacyRemoteSync() { await touch(); await legacyRemoteSync.unseal() },
     async vaults() { await touch(); return localVaults() },
   }
@@ -204,7 +214,7 @@ export async function saveSyncTarget(input: SaveTargetInput): Promise<SyncTarget
     if (prev && prev.kind !== input.kind) throw new Error('target-kind-changed')
     // 同一个 id 只能更新凭据:换了位置(桶 / 前缀 / 地址 / 目录 / 文件夹)或账号 = 另一棵远端树,
     // 绑定会拿旧基线去对它做删除判定。要换就在设置页新建一条(新 id、新基线)
-    if (prev && (targetLocation(prev.kind, prev.section) !== targetLocation(input.kind, section) || targetAccount(prev.kind, prev.section) !== targetAccount(input.kind, section))) {
+    if (prev && (targetLocation(prev.kind, prev.section) !== targetLocation(input.kind, section) || targetAccount(prev.kind, prev.section) !== targetAccount(input.kind, section) || rawLocation(prev.kind, prev.section) !== rawLocation(input.kind, section))) {
       throw new Error('target-location-changed')
     }
     cur.targets[id] = { kind: input.kind, label: (input.label ?? '').trim() || labelOf(input.kind, section), section, source: prev?.source ?? 'user', createdAt: prev?.createdAt ?? now, updatedAt: now }
