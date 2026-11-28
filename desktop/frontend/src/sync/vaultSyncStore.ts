@@ -19,7 +19,7 @@ import { amadeus } from '@amadeus/api'
 import { assumedContentFeed, assumedEntryFeed, contentFeeds, legacyFeed, legacyFeedId, remoteFeed, type ContentStatusLite } from './feeds'
 import { v2Feeds, v2Roots } from './v2/feed'
 import { CHANNEL_MISSING, EXTEND_UNAVAILABLE, vaultSync } from './v2/client'
-import { modeFromStatus, setSyncMode, useSyncMode } from './v2/mode'
+import { modeFromStatus, setSyncMode } from './v2/mode'
 import type { VaultSyncStatus } from './v2/types'
 
 type RemoteLite = Pick<RemoteSyncState, 'config' | 'running' | 'lastReport' | 'progress' | 'root' | 'rootError'>
@@ -226,12 +226,18 @@ async function pullRemote(): Promise<void> {
 /** 主窗 = 没有 ?window= 参数(同 services/syncSetup.ts)。windowKind() 会把 standalone 之类它不认识的值也算成 main。 */
 const isMainWindow = (): boolean => { try { return !new URLSearchParams(location.search).get('window') } catch { return false } }
 
-/** 主窗切回前台:告诉 Extend(vaultsync:run {reason:'focus'}),由它按自己的节流决定跑不跑一轮、重不重取云端库清单(隔 1 分钟;
- *  契约 step34 E3L-2)。只主窗发(独立窗 / 浮窗 / Mini 不发);只在 v2 完整模式下发 —— 老 Extend(没有 vaultsync:*)、兼容模式、
- *  Extend 不在、模式还没问出来都不发。结果不看、不记日志。宿主主进程那边不另发(两处只发一处)。 */
+/** vaultsync:run 这条通道:missing = 老 Extend / Extend 不在(preload 的 cloud:present 开窗前就定了,这扇窗的一辈子不变),不再发。 */
+let focusRunChannel: 'unknown' | 'missing' = 'unknown'
+
+/** 主窗切回前台:告诉 Extend(vaultsync:run {reason:'focus'}),跑不跑一轮、重不重取云端库清单、节流(隔 1 分钟)都由 Extend 定
+ *  (契约 step34 E3L-2)。只主窗发(独立窗 / 浮窗 / Mini 不发);不看界面模式(Codex P2:模式还没问出来、或兼容模式时照样发,
+ *  兼容模式下 Extend 自己回 compat_mode)。只看通道在不在:第一次回「通道不在」就记住、以后不发。结果不看、不记日志。
+ *  宿主主进程那边不另发(两处只发一处)。 */
 export function kickVaultSyncOnFocus(): void {
-  if (!isMainWindow() || useSyncMode.getState().mode !== 'full') return
-  void vaultSync.run(undefined, 'focus') // call() 不会抛:通道不在 / 调用失败都回 { ok:false }
+  if (!isMainWindow() || focusRunChannel === 'missing') return
+  void vaultSync.run(undefined, 'focus').then((r) => { // call() 不会抛:通道不在 / 调用失败都回 { ok:false }
+    if (!r.ok && (r.error === CHANNEL_MISSING || r.error === EXTEND_UNAVAILABLE)) focusRunChannel = 'missing'
+  })
 }
 
 /** 幂等:第一个用到状态源的组件挂载时调一次。 */
