@@ -19,7 +19,7 @@ import { amadeus } from '@amadeus/api'
 import { assumedContentFeed, assumedEntryFeed, contentFeeds, legacyFeed, legacyFeedId, remoteFeed, type ContentStatusLite } from './feeds'
 import { v2Feeds, v2Roots } from './v2/feed'
 import { CHANNEL_MISSING, EXTEND_UNAVAILABLE, vaultSync } from './v2/client'
-import { modeFrom, setSyncMode } from './v2/mode'
+import { modeFromStatus, setSyncMode } from './v2/mode'
 import type { VaultSyncStatus } from './v2/types'
 
 type RemoteLite = Pick<RemoteSyncState, 'config' | 'running' | 'lastReport' | 'progress' | 'root' | 'rootError'>
@@ -167,7 +167,7 @@ async function readContent(): Promise<ContentStatusLite | null> {
 async function readV2(): Promise<VaultSyncStatus | null> {
   if (!hasWindow() || v2Channel === 'missing') return null
   const r = await vaultSync.status()
-  setSyncMode(modeFrom(r))
+  setSyncMode(await modeFromStatus(r))
   if (!r.ok) {
     if (r.error === CHANNEL_MISSING) v2Channel = 'missing'
     else if (r.error === EXTEND_UNAVAILABLE) v2Channel = 'off'

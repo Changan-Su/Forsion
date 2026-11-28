@@ -1,8 +1,8 @@
 // 智库同步第 2 步 U 包的纯函数:两层回复的拆法、v2 feed 与旧条目 feed 的去重、范围计算、模式判定、入口状态、错误码文案。
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CHANNEL_MISSING, EXTEND_UNAVAILABLE, normalizeReply } from './client'
 import { isPlaceholderReview, v2Feed, v2Roots } from './feed'
-import { isDesktopExtendOff, isLegacySync, modeFrom, setSyncMode, useSyncMode } from './mode'
+import { isDesktopExtendOff, isLegacySync, modeFrom, modeFromStatus, setSyncMode, useSyncMode } from './mode'
 import { parseSyncFocus } from './openSyncSettings'
 import { addedItems, closureItems, isExcluded, mergeScope, rebaseScope, removeItem, scopeCovers, topLevelEntries } from './scope'
 import { entrySyncState } from './entries'
@@ -200,5 +200,19 @@ describe('旧流程照旧的模式(网页 / 手机没有 v2 通道 = off,旧流�
   it('isDesktopExtendOff 只在桌面宿主(有设置 › 同步这一页)上成立,网页 / 手机的 off 照旧去蓬洲云', () => {
     useSyncMode.setState({ mode: 'off' })
     expect(isDesktopExtendOff()).toBe(false) // 测试环境 = 没有 tangu / amadeus / remoteSync,同网页
+  })
+})
+
+describe('status 在兼容模式下不带原因:用 get 补(台架 probe-states unreadable 实测)', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  it('get 问不出 → unknown(不放旧写入口);get 说读不出 → unreadable;带了原因的 / full 原样', async () => {
+    let getReply: unknown = { ok: false, error: 'timeout' }
+    vi.stubGlobal('window', { tangu: { cloudInvoke: async (ch: string) => (ch === CH.get ? getReply : { ok: true, value: { mode: 'compat', bindings: [] } }) } })
+    const st = { ok: true as const, value: { mode: 'compat' as const } }
+    expect((await modeFromStatus(st)).mode).toBe('unknown') // 问不出不缓存
+    getReply = { ok: true, value: { mode: 'compat', compatReason: 'state-unreadable' } }
+    expect((await modeFromStatus(st)).mode).toBe('unreadable')
+    expect((await modeFromStatus({ ok: true, value: { mode: 'compat', compatReason: 'content-sync-active' } as never })).mode).toBe('legacy')
+    expect((await modeFromStatus({ ok: true, value: { mode: 'full' } })).mode).toBe('full')
   })
 })

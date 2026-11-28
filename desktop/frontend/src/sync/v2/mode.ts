@@ -45,10 +45,27 @@ export function setSyncMode(next: SyncModeState): void {
   if (cur.mode !== next.mode || cur.compatReason !== next.compatReason || cur.error !== next.error) useSyncMode.setState({ mode: next.mode, compatReason: next.compatReason, error: next.error })
 }
 
+/**
+ * vaultsync:status 的回复 → 模式。E 的 status 在兼容模式下不带 compatReason(只有 get 带):这时问一次 get 补上原因(30 秒内复用),
+ * 否则「同步记录读不出」会被当成普通兼容、把旧写入口放出来(台架 probe-states 的 unreadable 实测出来的)。get 也问不出 = 不知道(unknown)。
+ * 已请 E 在 status 里带 compatReason(契约 U-4)。
+ */
+let reasonCache: { at: number; reason: VaultSyncCompatReason | undefined } | null = null
+export async function modeFromStatus(r: VsStatusReply): Promise<SyncModeState> {
+  if (!r.ok || !r.value || r.value.mode !== 'compat' || (r.value as { compatReason?: unknown }).compatReason) return modeFrom(r)
+  if (!reasonCache || Date.now() - reasonCache.at > 30_000) {
+    const g = await vaultSync.get().catch(() => null)
+    if (!g?.ok || !g.value) return { mode: 'unknown', error: g && !g.ok ? g.error : 'compat_reason_unknown' }
+    reasonCache = { at: Date.now(), reason: g.value.mode === 'compat' ? g.value.compatReason : undefined }
+  }
+  return modeFrom({ ok: true, value: { mode: 'compat', ...(reasonCache.reason ? { compatReason: reasonCache.reason } : {}) } })
+}
+type VsStatusReply = { ok: true; value: Pick<VaultSyncStatus, 'mode'> } | { ok: false; error: string }
+
 /** 现在问一次(只读、便宜的 vaultsync:status)。 */
 export async function refreshSyncMode(): Promise<SyncUiMode> {
   const r = await vaultSync.status()
-  setSyncMode(modeFrom(r))
+  setSyncMode(await modeFromStatus(r))
   return useSyncMode.getState().mode
 }
 
