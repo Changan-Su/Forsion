@@ -1,6 +1,7 @@
 /** 智库同步 v2 的错误码 → 一句人话(设置 › 同步、入口、汇总卡共用)。E 的码见 Extend src/desktop/sync/{ipc,pair,bindings}.ts。 */
 import { ipcErrorText } from '../../ipcError'
 import '../../components/syncSettingsMessages'
+import { TARGET_ERROR_CODES, targetErrorKey } from './targets'
 
 type T = (key: string, vars?: Record<string, unknown>) => string
 /** E 抛的错误码(`Error('xxx')` 经两层信封后可能带前缀)→ 一句人话。 */
@@ -22,5 +23,7 @@ export function syncErrorText(err: string, t: T, name = ''): string {
   if (code === 'deletes_changed') return t('ssync.err.deletesChanged')
   if (code === 'binding_not_running') return t('ssync.err.notRunning')
   if (OVERLAP.has(code)) return t('ssync.err.overlap')
+  // 网盘 / 本地文件夹去处的宿主码(预演 open() 时抛上来的):同一套人话
+  if ((TARGET_ERROR_CODES as readonly string[]).includes(code)) return t(targetErrorKey(code))
   return t('ssync.err.generic', { error: ipcErrorText(err) })
 }

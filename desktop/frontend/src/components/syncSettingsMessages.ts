@@ -255,4 +255,6 @@ registerMessages({
   'ssync.review.allDone': { zh: '处理了 {n} 篇；还有 {left} 篇没动（判不出哪边新，或名单变了）。', en: 'Handled {n}. {left} left as they were (newer side unclear, or the list changed).' },
   'ssync.err.deletesChanged': { zh: '要删的名单变了，重新看一下再决定。', en: 'The list of deletions changed. Review it again before deciding.' },
   'ssync.err.notRunning': { zh: '这个库现在没在同步，先打开同步再处理。', en: 'This vault isn’t syncing right now. Turn sync on first.' },
+  'ssync.target.saved': { zh: '去处「{label}」已经加上了，可以在「同步到」里再选它。', en: 'The destination “{label}” was added. You can pick it again under “Sync to”.' },
+  'ssync.target.listFailed': { zh: '去处清单读不出来，稍后再打开这个菜单。', en: 'Couldn’t read the list of destinations. Open this menu again later.' },
 })

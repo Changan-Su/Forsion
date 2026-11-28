@@ -68,5 +68,10 @@ export function previewTargetOf(b: BindingView): PreviewTarget {
     : { kind: 'penzor' }
 }
 
+/** 去处的身份(只比身份,不比名字 / 后端这些展示字段):换去处 / 改范围的卡过期时,拿它判「原去处变没变」(Codex)。 */
+export function targetIdentity(t: BindingView['target']): string {
+  return t.kind === 'remote' ? `remote:${t.targetId}:${t.dir}:${t.direction}` : `penzor:${t.vaultId}:${t.prefix}`
+}
+
 /** 这一行此刻选的是哪个去处:'penzor' 或网盘的 targetId。 */
 export const currentTargetKey = (b: BindingView | undefined): string => (b?.target.kind === 'remote' ? b.target.targetId : 'penzor')

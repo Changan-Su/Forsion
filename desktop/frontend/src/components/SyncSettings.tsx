@@ -27,7 +27,7 @@ import { addedItems, closureItems, isExcluded, mergeScope, rebaseScope, removeIt
 import type { SyncFocus } from '../sync/v2/openSyncSettings'
 import type { StatusBindingExtras } from '../sync/v2/feed'
 import { CREATE_CANDIDATE } from '../sync/v2/types'
-import { addFolderTarget, canAuth, cancelAuth, currentTargetKey, finishAuth, hasTargets, listTargets, onAuth, previewTargetOf, startAuth, targetErrorKey, type AuthKind } from '../sync/v2/targets'
+import { addFolderTarget, canAuth, cancelAuth, currentTargetKey, finishAuth, hasTargets, listTargets, onAuth, previewTargetOf, startAuth, targetErrorKey, targetIdentity, type AuthEvent, type AuthKind } from '../sync/v2/targets'
 import type { SyncTargetSummary } from '../types'
 import type {
   BindingScope, BindingView, Cadence, PreviewTarget, ResolveCandidate, ResolveNameResult, ScopeItem, VaultSyncCompatReason,
@@ -217,34 +217,37 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   const loadTargets = useCallback(async (): Promise<void> => { setTargets(await listTargets()) }, [])
   useEffect(() => { void loadTargets() }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const runPreview = useCallback(async (p: Pending): Promise<void> => {
+  const runPreview = useCallback(async (p: Pending): Promise<boolean> => {
     const my = ++reqRef.current
     setPending({ ...p, preview: null, candidates: undefined })
     const r = await vaultSync.preview({ root: p.root, target: p.target, scope: p.scope, ...(p.bindingId ? { bindingId: p.bindingId } : {}) })
-    if (my !== reqRef.current) return // 期间又开了别的卡 / 取消了
-    if (r.ok && r.value) { setPending({ ...p, preview: r.value, candidates: undefined }); return }
+    if (my !== reqRef.current) return false // 期间又开了别的卡 / 取消了
+    if (r.ok && r.value) { setPending({ ...p, preview: r.value, candidates: undefined }); return true }
     const err = r.ok ? 'empty' : r.error
     // 新建库时云端刚冒出同名的(别的设备刚建了 / 改名后当新库撞了名):重新按名字找候选,让人挑(E 不替人绑,契约 E-4 第 1 条);
     // 改名那条带着 bindingId,挑了候选 = 这个绑定换到那个同名库(Codex P2-5)
     if (p.kind === 'new' && /name_exists/.test(err)) {
       const res = await vaultSync.resolveName(p.root)
-      if (my !== reqRef.current) return
+      if (my !== reqRef.current) return false
       if (res.ok && res.value?.candidates.length) {
         setNames((m) => ({ ...m, [p.root]: res.value! }))
         setPending({ ...p, kind: 'cloud', target: { kind: 'penzor' }, candidates: res.value.candidates, preview: null })
-        return
+        return false
       }
     }
     setPending(null)
     say(p.root, syncErrorText(err, t, p.name))
+    return false
   }, [t])
 
   /** 打开同步(没有绑定的库):按名字找云端 → 一个候选直接比 / 几个候选让人挑 / 没有就新建(U-1 第 1 条)。 */
   const startOpen = useCallback(async (root: string, name: string, scope: BindingScope, added: ScopeItem[]): Promise<void> => {
     say(root, null)
+    const my = ++reqRef.current // 同名查询也算一次请求:查询途中又开了别的卡,这次的结果不再顶掉它(Codex)
     let res = names[root]
     if (!res || 'error' in res && !('candidates' in res)) {
       const r = await vaultSync.resolveName(root)
+      if (my !== reqRef.current) return
       res = r.ok && r.value ? r.value : { error: r.ok ? 'empty' : r.error }
       setNames((m) => ({ ...m, [root]: res! }))
     }
@@ -261,7 +264,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   const widen = useCallback(async (b: BindingView, next: BindingScope, added: ScopeItem[]): Promise<void> => {
     say(b.root, null)
     // 去处沿用这一行此刻的:网盘那一行按蓬洲云去预演 = 换了去处
-    await runPreview({ root: b.root, name: b.name, kind: 'scope', bindingId: b.id, target: previewTargetOf(b), scope: next, added, preview: null, base: b.scope, baseTarget: JSON.stringify(b.target) })
+    await runPreview({ root: b.root, name: b.name, kind: 'scope', bindingId: b.id, target: previewTargetOf(b), scope: next, added, preview: null, base: b.scope, baseTarget: targetIdentity(b.target) })
   }, [runPreview])
 
   /** 改范围:纯收缩直接 setScope;引擎说要预演(有新加的)就出汇总卡。 */
@@ -276,16 +279,20 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   }, [reload, t, widen])
 
   /** 换「同步到哪」:蓬洲云先按名字找同名库(一个直接比 / 几个让人挑 / 没有就新建);网盘 / 本地文件夹按那条去处预演。都先出汇总卡,点了才换。 */
-  const switchTarget = useCallback(async (b: BindingView, key: string, label?: string): Promise<void> => {
+  const switchTarget = useCallback(async (b: BindingView, key: string, label?: string): Promise<boolean> => {
     say(b.root, null)
-    if (key === currentTargetKey(b)) return
-    const base = { root: b.root, name: b.name, kind: 'target' as const, bindingId: b.id, scope: b.scope, added: [] as ScopeItem[], preview: null, base: b.scope, baseTarget: JSON.stringify(b.target) }
-    if (key !== 'penzor') { await runPreview({ ...base, target: { kind: 'remote', targetId: key }, targetLabel: label }); return }
+    if (key === currentTargetKey(b)) return false
+    const base = { root: b.root, name: b.name, bindingId: b.id, scope: b.scope, added: [] as ScopeItem[], preview: null, base: b.scope, baseTarget: targetIdentity(b.target) }
+    if (key !== 'penzor') return runPreview({ ...base, kind: 'target', target: { kind: 'remote', targetId: key }, targetLabel: label })
+    // 换回蓬洲云:按名字认库。认到的同名库走「云端已经有一份」那张卡(带「这不是同一个库…」);没有就按新建走(撞名时能回到候选)
+    const my = ++reqRef.current
     const r = await vaultSync.resolveName(b.root)
+    if (my !== reqRef.current) return false
     const res = r.ok && r.value ? r.value : null
-    if (!res || res.error) { say(b.root, syncErrorText(res?.error ?? (r.ok ? 'empty' : r.error), t, b.name)); return }
-    if (res.candidates.length > 1) { setPending({ ...base, target: { kind: 'penzor' }, candidates: res.candidates }); return }
-    await runPreview({ ...base, target: { kind: 'penzor', candidate: res.candidates[0] ?? CREATE_CANDIDATE } })
+    if (!res || res.error) { say(b.root, syncErrorText(res?.error ?? (r.ok ? 'empty' : r.error), t, b.name)); return false }
+    if (res.candidates.length > 1) { setPending({ ...base, kind: 'cloud', target: { kind: 'penzor' }, candidates: res.candidates }); return false }
+    const c = res.candidates[0]
+    return runPreview(c ? { ...base, kind: 'cloud', target: { kind: 'penzor', candidate: c } } : { ...base, kind: 'new', target: { kind: 'penzor', candidate: CREATE_CANDIDATE } })
   }, [runPreview, t])
   const switchRef = useRef(switchTarget)
   switchRef.current = switchTarget
@@ -299,31 +306,60 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     const r = await addFolderTarget(dir)
     if (!r.ok) { say(b.root, t(targetErrorKey(r.error))); return }
     await loadTargets()
-    await switchTarget(b, r.target.id, r.target.label)
+    // 去处已经存上了:预演没出卡时说清楚,免得再选一次同一个文件夹建出第二条
+    if (!(await switchTarget(b, r.target.id, r.target.label))) setMsg((m) => ({ ...m, [b.root]: [m[b.root], t('ssync.target.saved', { label: r.target.label })].filter(Boolean).join(' ') }))
   }, [loadTargets, switchTarget, t])
 
   /** 连接 / 重新授权 Dropbox、Google Drive:宿主做完 OAuth,凭据直接进 sync-targets(H-9);这里只等结果事件。 */
+  const authSeq = useRef(0)
+  // 结果事件可能比 authStart 的回包先到(被顶掉时宿主马上发 auth-superseded):先记下,回包到了再认
+  const early = useRef(new Map<string, AuthEvent>())
+  const handleAuth = useRef<(ev: AuthEvent) => void>(() => {})
   const connect = useCallback(async (b: BindingView, kind: AuthKind, reauthId?: string): Promise<void> => {
     say(b.root, null)
-    if (authRef.current) cancelAuth(authRef.current.attempt)
+    const seq = ++authSeq.current
+    if (authRef.current) { cancelAuth(authRef.current.attempt); setAuth(null) }
     const r = await startAuth(kind, reauthId ? { id: reauthId } : undefined)
+    // 回包回来之前用户又点了别的(另一行 / 另一个网盘):这次作废,不盖掉后来的那个
+    if (seq !== authSeq.current) { if (r.ok) cancelAuth(r.attempt); return }
     if (!r.ok) { setAuth(null); say(b.root, t(targetErrorKey(r.error))); return }
-    setAuth({ root: b.root, bindingId: b.id, attempt: r.attempt, mode: r.mode, kind, reauth: !!reauthId })
+    const st: AuthState = { root: b.root, bindingId: b.id, attempt: r.attempt, mode: r.mode, kind, reauth: !!reauthId }
+    authRef.current = st
+    setAuth(st)
+    const ev = early.current.get(r.attempt)
+    if (ev) { early.current.delete(r.attempt); handleAuth.current(ev) }
   }, [t])
-  useEffect(() => onAuth((ev) => {
+  const stopAuth = useCallback((): void => { ++authSeq.current; const a = authRef.current; if (a) cancelAuth(a.attempt); authRef.current = null; setAuth(null) }, [])
+  handleAuth.current = (ev: AuthEvent): void => {
     const a = authRef.current
-    if (!a || ev.attempt !== a.attempt) return
+    if (!a || ev.attempt !== a.attempt) {
+      // 不是在等的那次:记下(可能回包还没到);成功的照样刷新去处清单(宿主已经存上了,菜单里要看得见),但不替哪一行换去处
+      early.current.set(ev.attempt, ev)
+      if (early.current.size > 8) early.current.delete(early.current.keys().next().value!)
+      if (ev.ok) void loadTargets()
+      return
+    }
+    authRef.current = null
     setAuth(null)
     if (!ev.ok) { if (ev.error !== 'auth-cancelled') say(a.root, t(targetErrorKey(ev.error))); return }
     void loadTargets()
     if (a.reauth) { say(a.root, t('ssync.auth.reauthed', { account: ev.account })); void reload(); return }
     const b = bindingsRef.current.find((x) => x.id === a.bindingId)
     if (b) void switchRef.current(b, ev.target.id, ev.target.label)
-  }), []) // eslint-disable-line react-hooks/exhaustive-deps
+  }
+  useEffect(() => onAuth((ev) => handleAuth.current(ev)), [])
 
   const apply = async (onDiffer: 'newer' | 'hold'): Promise<void> => {
     if (!pending?.preview) return
     setBusy(true)
+    // 换去处:卡上带的是出卡那一刻的整份范围。点「开始同步」前再核一次引擎此刻的范围,变了(别处刚排除了什么)就按新的重比,
+    // 不把刚排除的带到新去处(Codex P1)
+    if (pending.bindingId && pending.base && pending.kind !== 'scope') {
+      const g = await vaultSync.get()
+      const fresh = g.ok ? g.value?.bindings.find((b) => b.id === pending.bindingId) : undefined
+      if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setBusy(false); setPending(null); say(pending.root, t(fresh ? 'ssync.targetChanged' : 'ssync.err.bindingGone')); await reload(); return }
+      if (JSON.stringify(fresh.scope) !== JSON.stringify(pending.base)) { setBusy(false); await runPreview({ ...pending, scope: fresh.scope, base: fresh.scope, note: t('ssync.stale') }); return }
+    }
     const r = await vaultSync.apply({ token: pending.preview.token, generation: pending.preview.generation, onDiffer })
     setBusy(false)
     if (!r.ok && /stale/.test(r.error)) {
@@ -331,8 +367,9 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       if (pending.bindingId && pending.base) {
         const g = await vaultSync.get()
         const fresh = g.ok ? g.value?.bindings.find((b) => b.id === pending.bindingId) : undefined
-        if (!fresh || JSON.stringify(fresh.target) !== pending.baseTarget) { setPending(null); say(pending.root, t(fresh ? 'ssync.targetChanged' : 'ssync.err.bindingGone')); await reload(); return }
-        const scope = rebaseScope(pending.base, pending.scope, fresh.scope)
+        if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setPending(null); say(pending.root, t(fresh ? 'ssync.targetChanged' : 'ssync.err.bindingGone')); await reload(); return }
+        // 换去处的卡不改范围:直接用引擎此刻的范围重比(期间别处排除的不被带回来);改范围的卡把「这次改了什么」套上去
+        const scope = pending.kind === 'scope' ? rebaseScope(pending.base, pending.scope, fresh.scope) : fresh.scope
         await runPreview({ ...pending, scope, added: addedItems(fresh.scope, scope), base: fresh.scope, note: t('ssync.stale') })
         return
       }
@@ -412,7 +449,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
             onTarget={(b, key, label) => void switchTarget(b, key, label)}
             onAddFolder={(b) => void addFolder(b)}
             onConnect={(b, kind, id) => void connect(b, kind, id)}
-            onAuthCancel={() => { const a = authRef.current; if (a) { cancelAuth(a.attempt); setAuth(null) } }}
+            onAuthCancel={stopAuth}
             onAuthCode={async (code) => { const a = authRef.current; if (!a) return; const res = await finishAuth(a.attempt, code); if (!res.ok) say(a.root, t(targetErrorKey(res.error ?? 'auth-failed'))) }}
             onPair={(b) => void runPreview({ root: b.root, name: b.name, kind: 'cloud', bindingId: b.id, target: { kind: 'penzor' }, scope: b.scope, added: [], preview: null })}
             onNewVault={(b) => void (async () => {
@@ -808,6 +845,9 @@ function TargetPicker({ binding: b, targets, disabled, onPick, onAddFolder, onCo
               <span className="ssync-target-opt"><span>{x.label}</span><span className="ssync-faint" title={x.dirDefault}>{kindLabel(x.kind, t)}</span></span>
             </button>
           ))}
+          {host && targets === null && (
+            <button type="button" role="menuitem" disabled aria-disabled="true"><Radio on={false} /><span className="ssync-target-opt"><span className="ssync-faint">{t('ssync.target.listFailed')}</span></span></button>
+          )}
           <div className="ctx-separator" role="separator" />
           {host ? (
             <>
