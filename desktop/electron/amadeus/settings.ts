@@ -96,15 +96,17 @@ async function storedConfig(): Promise<StoredConfig> {
   return loading
 }
 
-/** 严格读盘:没有文件 = {};读不了 / 不是 JSON 对象就抛。认领(syncOwnershipV2)只走这条:读失败 ≠ 没认领。 */
+/** 严格读盘:没有文件 = {};读不了 / 不是 JSON 对象就抛。认领(syncOwnershipV2)只走这条:读失败 ≠ 没认领。
+ *  抛固定错误码(会经 ownership 接缝到 Extend 的日志):JSON.parse 的原始报错带一截文件原文(库路径、库名),不往外带。 */
 async function storedConfigStrict(): Promise<StoredConfig> {
   let raw: string
   try { raw = await fs.readFile(configFile(), 'utf8') } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return {}
-    throw e
+    throw new Error('amadeus-config-unreadable')
   }
-  const parsed = JSON.parse(raw) as unknown
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('amadeus-config is not an object')
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { throw new Error('amadeus-config-unparseable') }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('amadeus-config-malformed')
   return normalizeStored(parsed as StoredConfig)
 }
 

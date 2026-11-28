@@ -7,11 +7,12 @@
  * - 读失败 ≠ 空:remotesync.json 读不了时接手视图抛错;设置页再保存先把坏文件挪开,不拿缺省值盖掉。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, promises as fsp, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
-const env = vi.hoisted(() => ({ root: '', handlers: new Map<string, (...a: unknown[]) => unknown>() }))
+const env = vi.hoisted(() => ({ root: '', handlers: new Map<string, (...a: unknown[]) => unknown>(), entrySync: [] as unknown[] }))
 vi.mock('electron', () => ({
   app: { getPath: () => join(env.root, 'userData') },
   ipcMain: { handle: (ch: string, fn: (...a: unknown[]) => unknown) => { env.handlers.set(ch, fn) } },
@@ -21,7 +22,7 @@ vi.mock('electron', () => ({
 }))
 vi.mock('./forsionHome', () => ({ isDevMode: () => false, forsionHomeDir: () => join(env.root, 'home') }))
 vi.mock('./amadeus/settings', () => ({
-  readConfig: async () => ({ lastVault: join(env.root, 'Vault'), localVault: join(env.root, 'Vault'), entrySync: [] }),
+  readConfig: async () => ({ lastVault: join(env.root, 'Vault'), localVault: join(env.root, 'Vault'), entrySync: env.entrySync }),
   currentCloudAccountId: () => null,
 }))
 vi.mock('./amadeus/cloudPaths', () => ({
@@ -37,6 +38,10 @@ let ipc: Ipc
 const call = async <T = any>(ch: string, ...args: unknown[]): Promise<T> => env.handlers.get(ch)!({}, ...args) as Promise<T>
 const userData = () => join(env.root, 'userData')
 const cfgFile = () => join(userData(), 'remotesync.json')
+const h8 = (x: string): string => createHash('sha256').update(x).digest('hex').slice(0, 8)
+/** runNow 的基线文件名:remotesync-state/<hash8(真实库根|指纹)>.json(mac 的临时目录 /var 是 /private/var 的软链)。 */
+const baselineName = (fp: string, root = realpathSync.native(join(env.root, 'Vault'))): string => `${h8(`${root}|${fp}`)}.json`
+const leak = (o: unknown): string => JSON.stringify(o).replace('"QQQ"', 'fixture-secret-value') // 不带引号的值:V8 的 JSON 报错会带出这一截原文
 
 async function boot(): Promise<Ipc> {
   vi.resetModules()
@@ -48,6 +53,7 @@ async function boot(): Promise<Ipc> {
 
 beforeEach(() => {
   env.root = mkdtempSync(join(tmpdir(), 'forsion-rs-seal-'))
+  env.entrySync = []
   mkdirSync(join(env.root, 'Vault'), { recursive: true })
   mkdirSync(join(env.root, 'Remote'), { recursive: true })
   mkdirSync(userData(), { recursive: true })
@@ -141,7 +147,10 @@ describe('archiving the legacy remotesync', () => {
     const bytes = JSON.stringify(original(), null, 2)
     writeFileSync(cfgFile(), bytes, { mode: 0o600 })
     mkdirSync(join(userData(), 'remotesync-state'))
-    writeFileSync(join(userData(), 'remotesync-state', 'abcd1234.json'), '{"version":1,"fingerprint":"x","entries":{}}')
+    const fp = 'webdav:https://dav.example.test/remote.php/team/vault'
+    const mine = baselineName(fp)
+    writeFileSync(join(userData(), 'remotesync-state', mine), JSON.stringify({ version: 1, fingerprint: fp, entries: {} }))
+    writeFileSync(join(userData(), 'remotesync-state', 'abcd1234.json'), '{"version":1,"fingerprint":"x","entries":{}}') // 用户以前同步过的别的根 × 去处:留着
     await boot()
     ipc.legacyRemoteSync.extendLoaded(true)
     await expect(ipc.legacyRemoteSync.archive(join(env.root, 'archive'))).rejects.toThrow('legacy-not-sealed')
@@ -151,8 +160,8 @@ describe('archiving the legacy remotesync', () => {
     const now = JSON.parse(readFileSync(cfgFile(), 'utf8'))
     expect(now).toEqual({ ...original(), intervalMin: 0, syncOnStart: false })
     expect(statSync(cfgFile()).mode & 0o777).toBe(0o600)
-    expect(readdirSync(join(userData(), 'remotesync-state'))).toEqual([])
-    expect(readFileSync(join(env.root, 'archive', 'remotesync-state', 'abcd1234.json'), 'utf8')).toContain('"fingerprint":"x"')
+    expect(readdirSync(join(userData(), 'remotesync-state'))).toEqual(['abcd1234.json'])
+    expect(readFileSync(join(env.root, 'archive', 'remotesync-state', mine), 'utf8')).toContain(fp)
     expect(out.copied).toHaveLength(1)
     expect(out.moved).toHaveLength(1)
     // 重跑:档案里那份原件不被改过的内容盖掉
@@ -161,6 +170,66 @@ describe('archiving the legacy remotesync', () => {
     expect(readFileSync(join(env.root, 'archive', 'remotesync.json'), 'utf8')).toBe(bytes)
     expect((await call<any>('remotesync:get')).config).toMatchObject({ intervalMin: 0, syncOnStart: false })
     expect(JSON.parse(readFileSync(join(userData(), 'sync-targets.json'), 'utf8')).legacy).toMatchObject({ holder: 'v2', archived: true })
+  })
+
+  it('penzor (its fingerprint needs a whoami round-trip): moves only this root\'s penzor baselines for this vault, recognised by their own recorded fingerprint', async () => {
+    writeFileSync(cfgFile(), JSON.stringify({ backend: 'penzor', intervalMin: 5, penzor: { vault: 'notes' } }))
+    const sd = join(userData(), 'remotesync-state')
+    mkdirSync(sd)
+    const put = (fp: string, root?: string): string => { const n = baselineName(fp, root); writeFileSync(join(sd, n), JSON.stringify({ version: 1, fingerprint: fp, entries: {} })); return n }
+    const mine = put('penzor:https://cloud.test|u:1|notes')
+    const keep = [put('penzor:https://cloud.test|u:1|default'), put('penzor:https://cloud.test|u:1|notes', '/elsewhere/Vault'), put('webdav:https://dav.test/x')]
+    await boot()
+    ipc.legacyRemoteSync.extendLoaded(true)
+    await ipc.legacyRemoteSync.seal()
+    const out = await ipc.legacyRemoteSync.archive(join(env.root, 'archive'))
+    expect(out.moved.map((p) => basename(p))).toEqual([mine])
+    expect(readdirSync(sd).sort()).toEqual([...keep].sort())
+  })
+
+  it('archive keeps the gate shut while it waits for a legacy round that started after the hand-back, and moves that round\'s baseline', async () => {
+    writeFileSync(join(userData(), 'sync-targets.json'), JSON.stringify({ version: 1, targets: {}, legacy: { holder: 'v2', archived: false } }))
+    writeFileSync(cfgFile(), JSON.stringify({ backend: 'slow', intervalMin: 0 }))
+    await boot()
+    const slow = await slowBackend()
+    await new Promise((r) => setTimeout(r, 10))
+    ipc.legacyRemoteSync.extendLoaded(false) // Extend 没装载:这次启动交还给 remotesync
+    const round = call<any>('remotesync:run')
+    await slow.entered
+    const archiving = ipc.legacyRemoteSync.archive(join(env.root, 'archive'))
+    await new Promise((r) => setTimeout(r, 20))
+    expect((await call<any>('remotesync:get')).seal.blocked).toBe(true)
+    slow.release()
+    expect((await round).ok).toBe(true)
+    const out = await archiving
+    expect(out.moved.map((p) => basename(p))).toEqual([baselineName('slow:remote')])
+  })
+
+  it('a credential saved while the archive rewrites remotesync.json is not lost (one write queue for the file)', async () => {
+    writeFileSync(cfgFile(), JSON.stringify(original(), null, 2), { mode: 0o600 })
+    await boot()
+    ipc.legacyRemoteSync.extendLoaded(true)
+    await ipc.legacyRemoteSync.seal()
+    await call('remotesync:get')
+    const realRead = fsp.readFile.bind(fsp) as (...a: unknown[]) => Promise<unknown>
+    let saving: Promise<unknown> | null = null
+    const spy = vi.spyOn(fsp, 'readFile').mockImplementation((async (p: unknown, ...rest: unknown[]) => {
+      const out = await realRead(p, ...rest)
+      if (!saving && String(p) === cfgFile()) {
+        // 归档刚读完旧文件:设置页(或 OAuth 回调)这时存下新凭据。不在这里等它 —— 有写队列时它排在归档后面
+        saving = call('remotesync:set', { webdav: { ...original().webdav, password: 'fixture-new-secret' } })
+        await new Promise((r) => setTimeout(r, 30))
+      }
+      return out
+    }) as never)
+    try {
+      await ipc.legacyRemoteSync.archive(join(env.root, 'archive'))
+      await saving
+    } finally { spy.mockRestore() }
+    const now = JSON.parse(readFileSync(cfgFile(), 'utf8'))
+    expect(now.webdav.password).toBe('fixture-new-secret')
+    expect(now).toMatchObject({ intervalMin: 0, syncOnStart: false })
+    expect(JSON.parse(readFileSync(join(env.root, 'archive', 'remotesync.json'), 'utf8')).webdav.password).toBe('fixture-secret-value')
   })
 
   it('imports credentials into sync-targets (0600) once per source; the Extend-facing view carries no credentials', async () => {
@@ -213,5 +282,90 @@ describe('reading the legacy config strictly', () => {
     await boot()
     expect(await ipc.legacyRemoteSync.view()).toBeNull()
     expect(existsSync(cfgFile())).toBe(false)
+  })
+})
+
+describe('saving the legacy config', () => {
+  it('a failed move-aside of an unreadable config stops the save: the old file is not truncated and nothing is cached', async () => {
+    writeFileSync(cfgFile(), '{"backend":"webdav","webdav":{"password":"fixture-secret-value"')
+    await boot()
+    await call('remotesync:get')
+    chmodSync(userData(), 0o555) // 改名要目录可写,覆盖写已有文件不要
+    try {
+      await expect(call('remotesync:set', { backend: 'folder', folder: { path: join(env.root, 'Remote') } })).rejects.toThrow()
+    } finally { chmodSync(userData(), 0o755) }
+    expect(readFileSync(cfgFile(), 'utf8')).toContain('fixture-secret-value')
+    expect((await call<any>('remotesync:get')).config.backend).toBe('off')
+  })
+})
+
+describe('credential-bearing files never leak into errors or logs', () => {
+  it('a corrupt remotesync.json or sync-targets file surfaces fixed codes on the Extend seam, the renderer IPC and the gate log', async () => {
+    writeFileSync(cfgFile(), leak({ backend: 'webdav', webdav: { address: 'https://dav.test', password: 'QQQ' } }))
+    writeFileSync(join(userData(), 'sync-targets.json'), leak({ version: 1, targets: { t: { kind: 's3', label: 'x', section: { secretAccessKey: 'QQQ' } } } }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await boot()
+      const { registerSyncTargetsIpc } = await import('./syncTargets')
+      registerSyncTargetsIpc()
+      await new Promise((r) => setTimeout(r, 10))
+      const errs: string[] = []
+      const grab = async (p: Promise<unknown>): Promise<void> => { try { await p; errs.push('resolved') } catch (e) { errs.push(String((e as Error)?.message)) } }
+      await grab(ipc.legacyRemoteSync.view())
+      await grab(ipc.legacyRemoteSync.section())
+      await grab(call('remotesync:targets:list'))
+      await grab(call('remotesync:targets:save', { kind: 's3', section: { endpoint: 'https://s3.test', bucket: 'b', accessKeyID: 'k', secretAccessKey: 's' } }))
+      errs.push((await call<any>('remotesync:targets:check', 't')).error)
+      expect([...errs, ...warn.mock.calls.map((c) => c.map(String).join(' '))].join('\n')).not.toContain('fixture-sec')
+      expect(errs).toEqual(['remotesync-config-unparseable', 'remotesync-config-unparseable', 'sync-targets-unparseable', 'sync-targets-unparseable', 'sync-targets-unparseable'])
+    } finally { warn.mockRestore() }
+  })
+})
+
+describe('sync targets keep their identity', () => {
+  it('saving an existing target with another location or account is refused; the same location may update its credentials', async () => {
+    await boot()
+    const { saveSyncTarget } = await import('./syncTargets')
+    const file = (): any => JSON.parse(readFileSync(join(userData(), 'sync-targets.json'), 'utf8'))
+    const s3 = { endpoint: 'https://s3.test', bucket: 'bucket-a', prefix: 'vault', accessKeyID: 'k1', secretAccessKey: 'fixture-secret-1' }
+    const a = await saveSyncTarget({ kind: 's3', section: s3 })
+    await expect(saveSyncTarget({ id: a.id, kind: 's3', section: { ...s3, bucket: 'bucket-b' } })).rejects.toThrow('target-location-changed')
+    await expect(saveSyncTarget({ id: a.id, kind: 's3', section: { ...s3, prefix: 'other' } })).rejects.toThrow('target-location-changed')
+    await saveSyncTarget({ id: a.id, kind: 's3', section: { ...s3, accessKeyID: 'k2', secretAccessKey: 'fixture-secret-2' } }) // 换钥匙 = 同一个桶
+    expect(file().targets[a.id].section).toMatchObject({ bucket: 'bucket-a', secretAccessKey: 'fixture-secret-2' })
+    const dav = { address: 'https://dav.test/remote.php', username: 'fixture-user-a', password: 'p1', baseDir: 'v' }
+    const d = await saveSyncTarget({ kind: 'webdav', section: dav })
+    await expect(saveSyncTarget({ id: d.id, kind: 'webdav', section: { ...dav, username: 'fixture-user-b' } })).rejects.toThrow('target-location-changed')
+    await expect(saveSyncTarget({ id: d.id, kind: 'webdav', section: { ...dav, address: 'https://other.test/remote.php' } })).rejects.toThrow('target-location-changed')
+    await saveSyncTarget({ id: d.id, kind: 'webdav', section: { ...dav, password: 'p2' } })
+    expect(file().targets[d.id].section.password).toBe('p2')
+    const dbx = { appKey: 'fixture-app', refreshToken: 'r1', accountId: 'dbid:a', baseDir: 'v' }
+    const x = await saveSyncTarget({ kind: 'dropbox', section: dbx })
+    await expect(saveSyncTarget({ id: x.id, kind: 'dropbox', section: { ...dbx, accountId: 'dbid:b' } })).rejects.toThrow('target-location-changed')
+    await saveSyncTarget({ id: x.id, kind: 'dropbox', section: { ...dbx, refreshToken: 'r2' } })
+    mkdirSync(join(env.root, 'Remote2'))
+    const f = await saveSyncTarget({ kind: 'folder', section: { path: join(env.root, 'Remote') } })
+    await expect(saveSyncTarget({ id: f.id, kind: 'folder', section: { path: join(env.root, 'Remote2') } })).rejects.toThrow('target-location-changed')
+  })
+})
+
+describe('entry ignores', () => {
+  it('compare physical roots: a vault registered through a symlink counts, a missing one does not, an unresolvable one counts (pause rather than guess)', async () => {
+    const link = join(env.root, 'link-to-Vault')
+    symlinkSync(join(env.root, 'Vault'), link)
+    const locked = join(env.root, 'locked')
+    mkdirSync(join(locked, 'Inner'), { recursive: true })
+    env.entrySync = [
+      { vaultRoot: link + '/', cloudName: 'V', entries: [{ path: 'Notes/a.md', kind: 'page' }, { path: 'Shared', kind: 'folder' }] },
+      { vaultRoot: join(env.root, 'gone'), cloudName: 'G', entries: [{ path: 'gone.md', kind: 'page' }] },
+      { vaultRoot: join(locked, 'Inner'), cloudName: 'L', entries: [{ path: 'locked.md', kind: 'page' }] },
+    ]
+    writeFileSync(cfgFile(), JSON.stringify({ backend: 'folder', intervalMin: 0, folder: { path: join(env.root, 'Remote') } }))
+    await boot()
+    chmodSync(locked, 0o000)
+    try {
+      const view = await ipc.legacyRemoteSync.view()
+      expect(view?.entryIgnores).toEqual(['Notes/a.md', 'Notes/a.fd/', 'Shared/', 'locked.md', 'locked.fd/'])
+    } finally { chmodSync(locked, 0o755) }
   })
 })

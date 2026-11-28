@@ -124,3 +124,27 @@ it('content-touched never writes the owner and mirrors human/ only while content
   expect(readFileSync(file, 'utf8')).toBe(owned);
   expect(state.mirror).toHaveBeenCalledTimes(1);
 });
+
+it('the old body keeps the old file shape and the old answer: owner only, no contentOwns, {ok:true}', async () => {
+  const file = join(agentsDir(), '.cloudsync-default.json');
+  const on = await put({ enabled: true, expectedAccount: origin + '::alpha' });
+  expect(on.status).toBe(200);
+  expect(await on.json()).toEqual({ ok: true });
+  const entry = JSON.parse(readFileSync(file, 'utf8')).accounts[alpha];
+  expect(entry).toMatchObject({ enabled: true, owner: 'content' });
+  expect(entry).not.toHaveProperty('contentOwns');
+  expect(contentSyncOwnership(alpha)).toEqual({ human: true, agents: true }); // 老文件读作两位
+  const off = await put({ enabled: false });
+  expect(await off.json()).toEqual({ ok: true });
+  const after = JSON.parse(readFileSync(file, 'utf8')).accounts[alpha];
+  expect(after).not.toHaveProperty('owner');
+  expect(after).not.toHaveProperty('contentOwns');
+});
+
+it('a new-body change already on disk is not reported as failed when only the mirror step fails', async () => {
+  state.mirror.mockRejectedValueOnce(new Error('mirror down'));
+  const r = await put({ human: true });
+  expect(r.status).toBe(200);
+  expect(await r.json()).toMatchObject({ ok: true, human: true, agents: false });
+  expect(contentSyncOwnership(alpha)).toEqual({ human: true, agents: false });
+});

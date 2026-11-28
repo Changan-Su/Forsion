@@ -94,33 +94,74 @@ async function loadConfig(): Promise<RemoteSyncConfig> {
   return cache
 }
 
-/** 严格读(接手用,契约实现期修订 H-1 第 1 条):没有文件 = null;读不了 / 不是 JSON 对象就抛 —— 读失败 ≠ 没配置。 */
-async function readLegacyConfigStrict(): Promise<{ raw: string; cfg: RemoteSyncConfig } | null> {
-  let raw: string
-  try { raw = await fs.readFile(configFile(), 'utf8') } catch (e) {
+/** 严格读(接手用,契约实现期修订 H-1 第 1 条):没有文件 = null;读不了 / 不是 JSON 对象就抛 —— 读失败 ≠ 没配置。
+ *  文件里有凭据:抛的是固定错误码(会进 Extend 的日志、回渲染层),JSON.parse 的原始报错带一截原文,不进 message 也不挂 cause。
+ *  bytes = 读到的原样字节(归档复制用它,和改写的底是同一次读)。 */
+async function readLegacyConfigStrict(): Promise<{ bytes: Buffer; raw: string; cfg: RemoteSyncConfig } | null> {
+  let bytes: Buffer
+  try { bytes = await fs.readFile(configFile()) } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return null
-    throw e
+    throw new Error('remotesync-config-unreadable')
   }
-  const parsed = JSON.parse(raw) as unknown
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('remotesync config is not an object')
-  return { raw, cfg: { ...DEFAULT_CONFIG, ...(parsed as RemoteSyncConfig) } }
+  const raw = bytes.toString('utf8')
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { throw new Error('remotesync-config-unparseable') }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('remotesync-config-malformed')
+  return { bytes, raw, cfg: { ...DEFAULT_CONFIG, ...(parsed as RemoteSyncConfig) } }
 }
 
-async function saveConfig(patch: Partial<RemoteSyncConfig>): Promise<RemoteSyncConfig> {
-  const next = { ...(await loadConfig()), ...patch }
-  cache = next
-  await fs.mkdir(app.getPath('userData'), { recursive: true }).catch(() => {})
-  if (loadBroken) {
-    // 读不了的那份原样挪开留着(里面可能有凭据),再写新的
-    await fs.rename(configFile(), `${configFile()}.unreadable-${Date.now()}`).catch(() => {})
-    loadBroken = false
-  }
-  // ponytail: 凭据明文落 userData(与 amadeus-config 同一惯例);要更强上 safeStorage
-  await fs.writeFile(configFile(), JSON.stringify(next, null, 2), 'utf8')
-  return next
+/** remotesync.json 的写一条队列:设置页 / OAuth 回调的 saveConfig 与接手时的归档改写排在一起,
+ *  不会出现「归档读了旧文件 → 这边存下新凭据 → 归档把改过的旧文件 rename 回去」丢掉新凭据。 */
+let configQueue: Promise<unknown> = Promise.resolve()
+function inConfigQueue<T>(fn: () => Promise<T>): Promise<T> {
+  const work = configQueue.then(fn)
+  configQueue = work.catch(() => {})
+  return work
+}
+
+function saveConfig(patch: Partial<RemoteSyncConfig>): Promise<RemoteSyncConfig> {
+  return inConfigQueue(async () => {
+    const next = { ...(await loadConfig()), ...patch }
+    await fs.mkdir(app.getPath('userData'), { recursive: true }).catch(() => {})
+    if (loadBroken) {
+      // 读不了的那份原样挪开留着(里面可能有凭据),再写新的。挪不开(文件已经不在除外)就不写:覆盖写会把它截掉
+      try { await fs.rename(configFile(), `${configFile()}.unreadable-${Date.now()}`) } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw new Error('remotesync-config-move-aside-failed')
+      }
+      loadBroken = false
+    }
+    // ponytail: 凭据明文落 userData(与 amadeus-config 同一惯例);要更强上 safeStorage
+    await fs.writeFile(configFile(), JSON.stringify(next, null, 2), 'utf8')
+    cache = next // 写成了才进缓存:写失败时界面别显示一份没存下的配置
+    return next
+  })
 }
 
 interface BuiltRemote { remote: RemoteFs; fingerprint: string; maxFileBytes?: number }
+
+/** 内置五个后端的基线指纹(runNow 的基线文件 = remotesync-state/<hash8(根|指纹)>.json)。只看配置、不出网、不要凭据齐全;
+ *  认不出(不是内置后端、认身份的字段缺了)= null。buildRemote 与接手归档共用这一份,别分叉。 */
+function builtinFingerprint(cfg: RemoteSyncConfig): string | null {
+  switch (cfg.backend) {
+    case 'folder': { const p = cfg.folder?.path?.trim(); return p ? `folder:${p}` : null }
+    case 's3': { const s3 = cfg.s3; return s3?.endpoint && s3.bucket ? `s3:${s3.endpoint}/${s3.bucket}/${normPrefix(s3.prefix)}` : null }
+    case 'webdav': { const wd = cfg.webdav; return wd?.address ? `webdav:${wd.address}/${wd.baseDir ?? 'forsion-vault'}` : null }
+    case 'dropbox': {
+      const d = cfg.dropbox
+      const key = dbxAppKey(d)
+      // 指纹绑账号:换 Dropbox 账号 = 基线作废走首次合流,绝不带旧基线做删除判定
+      return key ? `dropbox:${d?.accountId || key}|${(d?.baseDir ?? '').trim() || '/'}` : null
+    }
+    case 'gdrive': {
+      const g = cfg.gdrive
+      const client = gdriveClient(g)
+      // 指纹绑「客户端 × 账号 × 目录」:drive.file 只看得到本客户端建的文件,换客户端 = 远端可见集整个变了,
+      // 必须作废基线走首次合流,否则旧基线会把「看不见」当成「被删」
+      return client.clientId ? `gdrive:${client.clientId}|${g?.accountId || ''}|${gdriveBaseSegs(g?.baseDir).join('/')}` : null
+    }
+    default: return null
+  }
+}
 
 /** Dropbox / Google Drive 出网走 Chromium 网络栈(认系统代理 / PAC / SOCKS):Node 全局 fetch 不认系统代理,
  *  国内开系统代理(非 TUN)时连不上。net.fetch 读响应体途中不理 abort、默认带 cookie,由 abortableFetch 补齐。 */
@@ -130,17 +171,17 @@ async function buildRemote(cfg: RemoteSyncConfig): Promise<BuiltRemote | { error
   if (cfg.backend === 'folder') {
     const p = cfg.folder?.path?.trim()
     if (!p) return { error: 'no folder path' }
-    return { remote: createDirRemote(p), fingerprint: `folder:${p}` }
+    return { remote: createDirRemote(p), fingerprint: builtinFingerprint(cfg)! }
   }
   if (cfg.backend === 's3') {
     const s3 = cfg.s3
     if (!s3?.endpoint || !s3.bucket || !s3.accessKeyID || !s3.secretAccessKey) return { error: 's3 config incomplete' }
-    return { remote: createS3Remote(s3), fingerprint: `s3:${s3.endpoint}/${s3.bucket}/${normPrefix(s3.prefix)}` }
+    return { remote: createS3Remote(s3), fingerprint: builtinFingerprint(cfg)! }
   }
   if (cfg.backend === 'webdav') {
     const wd = cfg.webdav
     if (!wd?.address) return { error: 'webdav config incomplete' }
-    return { remote: createWebdavRemote(wd), fingerprint: `webdav:${wd.address}/${wd.baseDir ?? 'forsion-vault'}` }
+    return { remote: createWebdavRemote(wd), fingerprint: builtinFingerprint(cfg)! }
   }
   if (cfg.backend === 'dropbox') {
     const d = cfg.dropbox
@@ -148,8 +189,7 @@ async function buildRemote(cfg: RemoteSyncConfig): Promise<BuiltRemote | { error
     if (!key || !d?.refreshToken) return { error: 'dropbox-not-connected' }
     return {
       remote: createDropboxRemote({ appKey: key, refreshToken: d.refreshToken, baseDir: d.baseDir, fetch: remoteFetch }),
-      // 指纹绑账号:换 Dropbox 账号 = 基线作废走首次合流,绝不带旧基线做删除判定
-      fingerprint: `dropbox:${d.accountId || key}|${(d.baseDir ?? '').trim() || '/'}`,
+      fingerprint: builtinFingerprint(cfg)!,
     }
   }
   if (cfg.backend === 'gdrive') {
@@ -158,9 +198,7 @@ async function buildRemote(cfg: RemoteSyncConfig): Promise<BuiltRemote | { error
     if (!client.clientId || !g?.refreshToken) return { error: 'gdrive-not-connected' }
     return {
       remote: createGdriveRemote({ ...client, refreshToken: g.refreshToken, baseDir: g.baseDir, fetch: remoteFetch }),
-      // 指纹绑「客户端 × 账号 × 目录」:drive.file 只看得到本客户端建的文件,换客户端 = 远端可见集整个变了,
-      // 必须作废基线走首次合流,否则旧基线会把「看不见」当成「被删」
-      fingerprint: `gdrive:${client.clientId}|${g.accountId || ''}|${gdriveBaseSegs(g.baseDir).join('/')}`,
+      fingerprint: builtinFingerprint(cfg)!,
     }
   }
   if (cfg.backend === 'off') return { error: 'backend off' }
@@ -197,12 +235,20 @@ export async function resolveLocalSyncRoot(): Promise<{ root: string } | { error
   return { root: r }
 }
 
-/** entrySync 绑定路径 → 忽略规则(双引擎不抢管辖)。 */
+/** entrySync 绑定路径 → 忽略规则(双引擎不抢管辖)。库根按物理路径比(realpath:解开符号链接、mac 上纠正大小写,
+ *  同 contentSyncHost.canonRoot 的口径):经软链登记的库也认得出。条目库根解析不了时:不存在(ENOENT / ENOTDIR)= 不可能是
+ *  这个(在的)根;别的错(没权限、链接打转)= 不知道,当成同一个、让开它的条目(接手据此暂停),不猜。 */
 async function entrySyncIgnores(root: string): Promise<string[]> {
   const am = await readAmadeusConfig()
+  const here = await canon(root)
   const out: string[] = []
   for (const v of am.entrySync ?? []) {
-    if (path.resolve(v.vaultRoot) !== path.resolve(root)) continue
+    let same: boolean
+    try { same = (await fs.realpath(v.vaultRoot)) === here } catch (e) {
+      const code = (e as NodeJS.ErrnoException)?.code
+      same = code !== 'ENOENT' && code !== 'ENOTDIR'
+    }
+    if (!same) continue
     for (const e of v.entries ?? []) {
       if (e.kind === 'folder') out.push(`${e.path}/`)
       else out.push(e.path)
@@ -575,6 +621,40 @@ function legacyGate(): LegacyGate {
   return gate
 }
 
+/** 接手归档要挪的基线:remotesync-state/ 里**这个根 × 这个指纹**那份(runNow 的文件名 = hash8(根|指纹).json)。
+ *  - 后端 off:没有当前的去处,一份都不挪;
+ *  - 认不出根(库不在 / 云镜像)→ 抛 legacy-root-unavailable(不记 archived:交还后从零基线跑的前提就是基线已挪走);
+ *  - 内置后端:指纹只看配置(builtinFingerprint,不出网),按文件名直接认;
+ *  - 外置后端(penzor 的指纹要 whoami 出网,这里不调它的工厂)或内置但认身份的字段缺了:按每个基线文件里记的指纹认 ——
+ *    文件名正是 hash8(这个根|它记的指纹) 才算这个根的,再要后端前缀一致(penzor 再要库名一致;同一个根、同一个库、
+ *    不同账号的也挪:宁可多挪,挪走 = 交还后首次合流、不做删除判定)。读不了 / 解析不了的基线引擎本来就当空的用,不挪。 */
+async function legacyBaselines(cfg: RemoteSyncConfig, stateDir: string): Promise<string[]> {
+  if (cfg.backend === 'off') return []
+  const rooted = await resolveLocalSyncRoot()
+  if ('error' in rooted) throw new Error('legacy-root-unavailable')
+  let names: string[] = []
+  try { names = (await fs.readdir(stateDir)).filter((n) => n.endsWith('.json')) } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return []
+    throw e
+  }
+  const exact = builtinFingerprint(cfg)
+  if (exact) {
+    const want = `${hash8(`${rooted.root}|${exact}`)}.json`
+    return names.includes(want) ? [want] : []
+  }
+  const penzorVault = cfg.backend === 'penzor' ? (typeof cfg.penzor?.vault === 'string' ? cfg.penzor.vault : 'default').trim() || 'default' : null
+  const out: string[] = []
+  for (const name of names) {
+    let fp: unknown
+    try { fp = (JSON.parse(await fs.readFile(path.join(stateDir, name), 'utf8')) as { fingerprint?: unknown })?.fingerprint } catch { continue }
+    if (typeof fp !== 'string' || `${hash8(`${rooted.root}|${fp}`)}.json` !== name) continue
+    if (!fp.startsWith(`${cfg.backend}:`)) continue
+    if (penzorVault !== null && !fp.endsWith(`|${penzorVault}`)) continue
+    out.push(name)
+  }
+  return out
+}
+
 /** 封口三态给设置页(契约 §3.9):v2-holds = 这次启动新同步持有写权、旧入口拦着;imported = 接手过、现在交还着(只能手动、从零基线跑);
  *  user-off = 用户自己关着(没选后端);active = 照旧在用。 */
 function legacySealView(cfg: RemoteSyncConfig): LegacyGateState & { state: 'v2-holds' | 'imported' | 'user-off' | 'active' } {
@@ -654,54 +734,60 @@ export const legacyRemoteSync = {
   },
   seal: (): Promise<void> => legacyGate().seal(),
   unseal: (): Promise<void> => legacyGate().unseal(),
-  /** 只在持有时:remotesync.json 原样复制进档案,原文件只改 intervalMin=0 / syncOnStart=false,remotesync-state/ 的基线挪进档案。幂等。 */
+  /** 只在持有时:remotesync.json 原样复制进档案,原文件只改 intervalMin=0 / syncOnStart=false,remotesync-state/ 里
+   *  **这个根 × 这个指纹**的基线挪进档案(契约 H-1 第 2 条;用户以前同步过的别的根 / 去处的基线留着)。幂等。
+   *  整段在封口闸的锁里跑(gate.exclusive):闸关着、没有在途的一轮,中途来的 unseal 排在后面;
+   *  读 remotesync.json 和改写它在同一个写队列里(saveConfig 排在前或后,不会被改写盖掉)。锁的顺序:闸 → 配置队列,别反过来。 */
   async archive(archiveDir: string): Promise<{ copied: string[]; moved: string[] }> {
     if (typeof archiveDir !== 'string' || !path.isAbsolute(archiveDir)) throw new Error('bad-archive-dir')
-    const st = legacyGate().state()
-    if (st.hold !== 'v2') throw new Error('legacy-not-sealed')
-    await legacyGate().idle()
-    if (running) throw new Error('already-running')
-    await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 })
-    const copied: string[] = []
-    const moved: string[] = []
-    const strict = await readLegacyConfigStrict()
-    if (strict) {
-      const dest = path.join(archiveDir, path.basename(configFile()))
-      // 只复制一次:重跑时档案里那份是改之前的原件,不能被已经关了自动同步的新内容盖掉
-      try { await fs.copyFile(configFile(), dest, fs.constants.COPYFILE_EXCL); copied.push(dest) } catch (e) {
-        if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') throw e
+    return legacyGate().exclusive(async (g) => {
+      if (running) throw new Error('already-running')
+      const copied: string[] = []
+      const moved: string[] = []
+      const stateDir = path.join(app.getPath('userData'), 'remotesync-state')
+      const pick = await inConfigQueue(async () => {
+        const strict = await readLegacyConfigStrict()
+        if (!strict) throw new Error('no-legacy-config')
+        // 先认出要挪哪份基线(认不出根就抛,什么都不动):不能一边改了原文件一边留着认不出的基线还记 archived
+        const names = await legacyBaselines(strict.cfg, stateDir)
+        await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 })
+        const dest = path.join(archiveDir, path.basename(configFile()))
+        // 只复制一次:重跑时档案里那份是改之前的原件,不能被已经关了自动同步的新内容盖掉。复制的是这次严格读到的那份字节
+        try { await fs.writeFile(dest, strict.bytes, { mode: 0o600, flag: 'wx' }); copied.push(dest) } catch (e) {
+          if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') throw e
+        }
+        await fs.chmod(dest, 0o600).catch(() => {})
+        if ((strict.cfg.intervalMin ?? 0) !== 0 || strict.cfg.syncOnStart) {
+          const obj = JSON.parse(strict.raw) as Record<string, unknown>
+          obj.intervalMin = 0
+          obj.syncOnStart = false
+          const file = configFile()
+          const mode = (await fs.stat(file)).mode & 0o777
+          const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
+          await fs.writeFile(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8', mode })
+          await fs.rename(tmp, file)
+          cache = { ...DEFAULT_CONFIG, ...(obj as unknown as RemoteSyncConfig) }
+          loadBroken = false
+          resetTimer(cache)
+        }
+        return names
+      })
+      if (pick.length) await fs.mkdir(path.join(archiveDir, 'remotesync-state'), { recursive: true, mode: 0o700 })
+      for (const name of pick) {
+        const from = path.join(stateDir, name)
+        let to = path.join(archiveDir, 'remotesync-state', name)
+        if (await fs.access(to).then(() => true, () => false)) to = `${to}.${Date.now()}`
+        try { await fs.rename(from, to) } catch (e) {
+          if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') continue
+          if ((e as NodeJS.ErrnoException)?.code !== 'EXDEV') throw e
+          await fs.copyFile(from, to, fs.constants.COPYFILE_EXCL)
+          await fs.unlink(from)
+        }
+        moved.push(to)
       }
-      await fs.chmod(dest, 0o600).catch(() => {})
-      if ((strict.cfg.intervalMin ?? 0) !== 0 || strict.cfg.syncOnStart) {
-        const obj = JSON.parse(strict.raw) as Record<string, unknown>
-        obj.intervalMin = 0
-        obj.syncOnStart = false
-        const file = configFile()
-        const mode = (await fs.stat(file)).mode & 0o777
-        const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
-        await fs.writeFile(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8', mode })
-        await fs.rename(tmp, file)
-        cache = { ...DEFAULT_CONFIG, ...(obj as unknown as RemoteSyncConfig) }
-        resetTimer(cache)
-      }
-    }
-    const stateDir = path.join(app.getPath('userData'), 'remotesync-state')
-    let names: string[] = []
-    try { names = await fs.readdir(stateDir) } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e }
-    if (names.some((n) => n.endsWith('.json'))) await fs.mkdir(path.join(archiveDir, 'remotesync-state'), { recursive: true, mode: 0o700 })
-    for (const name of names.filter((n) => n.endsWith('.json'))) {
-      const from = path.join(stateDir, name)
-      let to = path.join(archiveDir, 'remotesync-state', name)
-      if (await fs.access(to).then(() => true, () => false)) to = `${to}.${Date.now()}`
-      try { await fs.rename(from, to) } catch (e) {
-        if ((e as NodeJS.ErrnoException)?.code !== 'EXDEV') throw e
-        await fs.copyFile(from, to, fs.constants.COPYFILE_EXCL)
-        await fs.unlink(from)
-      }
-      moved.push(to)
-    }
-    await legacyGate().markArchived(archiveDir)
-    return { copied, moved }
+      await g.markArchived(archiveDir)
+      return { copied, moved }
+    })
   },
 }
 

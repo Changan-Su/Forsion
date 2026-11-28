@@ -1,4 +1,5 @@
 import { contentSyncOwned, maskAmadeusConfig, type OwnershipRead } from '../contentSyncHost'
+import { onQuitProceeding } from '../syncQuitGate'
 import { readExternalPdf, writeExternalPdfAnnotations, exportExternalPdfCopy } from './externalPdf'
 import { constants as fsConstants, promises as fs, readdirSync, readFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
@@ -171,7 +172,9 @@ const offTangu = ctx.tangu?.subscribe(() => { /* 重画你的 UI */ })
 return () => { offTangu?.() }
 `
 
-export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory: AmadeusSyncFactory | null = null): {
+/** quitHeld:这一次 before-quit 正被同步门禁拦着问用户(main.ts 递 syncGateChain 在不在)。旧引擎的退出钩子那次不停同步,
+ *  放行时才停;「取消退出」= 旧引擎一直在跑(syncQuitGate.onQuitProceeding)。缺省恒假 = 和原来的 app.once 一样。 */
+export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory: AmadeusSyncFactory | null = null, quitHeld: () => boolean = () => false): {
   getVaultRoot: () => string | null
   resolveSharedAsset: (vaultRel: string) => string | null
   restartSync: () => Promise<void>
@@ -1244,7 +1247,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     awaitPendingVaultWrites: async () => { while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites]) },
     relatedClosure: (rootRel, kind) => index.relatedClosure(rootRel, kind),
     notifyAll,
-    onBeforeQuit: (cb) => { app.once('before-quit', cb); return () => { app.removeListener('before-quit', cb) } },
+    onBeforeQuit: (cb) => onQuitProceeding(app, quitHeld, cb),
     log: (m) => console.warn(m),
   }) ?? null
   cloud?.start() // 云镜像同步独立于活动 vault,应用启动即拉起(未登录/显式停用时安静待命)

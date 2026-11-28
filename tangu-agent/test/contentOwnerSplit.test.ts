@@ -139,6 +139,17 @@ describe('content owner: three machines hand human over and back', () => {
     });
   }
 
+  it('while content owns human, an unreadable owner file does not let one agent\'s shared grant sync human/', async () => {
+    const { cloud, scope } = await seed('shared');
+    setContentSyncOwnership(scope, { human: true });
+    writeFileSync(join(agentsDir(), '.cloudsync-default.json'), '{"accounts":');
+    expect(agentSyncPermission('writer', scope, 'human')).toMatchObject({ enabled: false, shared: false });
+    cloud.calls.length = 0;
+    writeFileSync(process.env.FORSION_DEFAULT_CALENDAR!, CAL(['r1', 'r2', 'r9']));
+    await runAgentFilesSync(cloud, 'u');
+    expect(humanCalls(cloud)).toEqual([]);
+  });
+
   it('an unreadable owner file is not read as "nobody owns it" and is not overwritten', async () => {
     const { scope } = await seed('master');
     const file = join(agentsDir(), '.cloudsync-default.json');

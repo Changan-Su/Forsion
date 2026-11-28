@@ -4077,9 +4077,11 @@ app.whenReady().then(async () => {
       return (await dialog.showMessageBox(mainWindow, options)).response === 1
     },
     restart: async (install) => {
+      // 没人登记退出检查(老 Extend / 兼容模式)= 原来的顺序一字不变:先关 Unit 再问。登记了才挪到两道问询之后(Codex 评审)
+      const gated = syncQuitGate.has()
       // 装更新前先关掉这台电脑上在跑的文件夹 Unit(同一份安装,文件被它们占着):最多等 15 秒,还有没关的就不装、提示一声。
       // 放在 isQuitting 之前:挡下来时这一份照常能用。
-      if (install && localUnitsHost) {
+      if (!gated && install && localUnitsHost) {
         const left = await localUnitsHost.quitRunningForInstall(15_000)
         if (left !== 0) { await showInstallBlocked(mainWindow, left); return { ok: false } }
       }
@@ -4090,6 +4092,15 @@ app.whenReady().then(async () => {
         await Promise.all([contentFlush.quit(), editorQuitSave.quit()])
         if (!(await syncQuitGate.run())) { quitGuards.reset(); contentFlush.reset(); editorQuitSave.reset(); return }
         syncGatePassed = true
+      }
+      // 登记了退出检查:关 Unit 放在上面两道问询之后(用户在那儿取消时 Unit 还开着)、isQuitting 之前;挡下来时问过的都退回去
+      if (gated && install && localUnitsHost) {
+        const left = await localUnitsHost.quitRunningForInstall(15_000)
+        if (left !== 0) {
+          quitGuards.reset(); syncGatePassed = false; contentFlush.reset(); editorQuitSave.reset()
+          await showInstallBlocked(mainWindow, left)
+          return { ok: false }
+        }
       }
       // mac:先让 Squirrel.Mac 取包验签,成了才停后端;不成已退回「下载安装包」,应用照常用(见 updater.prepareInstall)
       if (install && !(await prepareInstall())) { quitGuards.reset(); syncGatePassed = false; contentFlush.reset(); editorQuitSave.reset(); return }
@@ -6474,7 +6485,8 @@ app.whenReady().then(async () => {
     },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
-  const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, devPluginRoots, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
+  // 第三个参数:同步门禁拦着这次退出时(syncGateChain 在跑),旧引擎的 before-quit 钩子不停同步(取消退出后照常在跑)
+  const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, devPluginRoots, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory, () => syncGateChain !== null)
   amadeusReadPlugins = readExternalPlugins
   amadeusDevPluginRoots = devPluginRoots
   amadeusVaultFace = vaultFace

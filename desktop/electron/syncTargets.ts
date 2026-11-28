@@ -47,6 +47,12 @@ export function targetLocation(kind: SyncTargetKind, s: Record<string, unknown>)
   }
 }
 
+/** 网盘的「账号」(位置里没编进去的那部分身份):WebDAV 的用户名(同一个地址换个用户 = 别人的那棵树)。
+ *  S3 的 accessKeyID 不算(换钥匙 = 同一个桶的凭据轮换);Dropbox / Google Drive 的账号已经在 targetLocation 里;文件夹没有账号。 */
+function targetAccount(kind: SyncTargetKind, s: Record<string, unknown>): string {
+  return kind === 'webdav' ? str(s.username) : ''
+}
+
 export function dirDefaultOf(kind: SyncTargetKind, s: Record<string, unknown>): string {
   switch (kind) {
     case 'folder': return str(s.path)
@@ -196,6 +202,11 @@ export async function saveSyncTarget(input: SaveTargetInput): Promise<SyncTarget
     const id = input.id && cur.targets[input.id] ? input.id : randomUUID()
     const prev = cur.targets[id]
     if (prev && prev.kind !== input.kind) throw new Error('target-kind-changed')
+    // 同一个 id 只能更新凭据:换了位置(桶 / 前缀 / 地址 / 目录 / 文件夹)或账号 = 另一棵远端树,
+    // 绑定会拿旧基线去对它做删除判定。要换就在设置页新建一条(新 id、新基线)
+    if (prev && (targetLocation(prev.kind, prev.section) !== targetLocation(input.kind, section) || targetAccount(prev.kind, prev.section) !== targetAccount(input.kind, section))) {
+      throw new Error('target-location-changed')
+    }
     cur.targets[id] = { kind: input.kind, label: (input.label ?? '').trim() || labelOf(input.kind, section), section, source: prev?.source ?? 'user', createdAt: prev?.createdAt ?? now, updatedAt: now }
     const t = cur.targets[id]
     return { id, kind: t.kind, label: t.label, dirDefault: dirDefaultOf(t.kind, t.section), source: t.source.startsWith('remotesync:') ? 'remotesync' as const : 'user' as const }

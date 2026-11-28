@@ -21,6 +21,9 @@ export function contentOwnsOf(entry: Partial<AccountSyncDefault> | null | undefi
   return { human: false, agents: false };
 }
 
+const nextRevision = (entry: Partial<AccountSyncDefault> | null | undefined): number =>
+  (typeof entry?.revision === 'number' && Number.isSafeInteger(entry.revision) ? entry.revision : 0) + 1;
+
 /** 改一位或两位(没给的那位照旧),revision +1(在途的同意凭 revision 作废)。总闸 enabled 原样留着。 */
 export function withContentOwns(entry: Partial<AccountSyncDefault> | null | undefined, patch: Partial<ContentOwns>): AccountSyncDefault {
   const cur = contentOwnsOf(entry);
@@ -30,8 +33,14 @@ export function withContentOwns(entry: Partial<AccountSyncDefault> | null | unde
   };
   return {
     enabled: entry?.enabled === true,
-    revision: (typeof entry?.revision === 'number' && Number.isSafeInteger(entry.revision) ? entry.revision : 0) + 1,
+    revision: nextRevision(entry),
     ...(owns.human ? { owner: 'content' as const } : {}),
     ...(owns.human || owns.agents ? { contentOwns: owns } : {}),
   };
+}
+
+/** 老 claim(true / false,老宿主 PUT {enabled}、external 模式的老 claim)写出的形状,和第 2 步之前一字不差:
+ *  开 = 只记 owner:'content'(contentOwnsOf 读作两位都是 content),关 = owner、contentOwns 都不写。新写法(contentOwns)只由新 body 写。 */
+export function withLegacyContentOwner(entry: Partial<AccountSyncDefault> | null | undefined, enabled: boolean): AccountSyncDefault {
+  return { enabled: entry?.enabled === true, revision: nextRevision(entry), ...(enabled ? { owner: 'content' as const } : {}) };
 }

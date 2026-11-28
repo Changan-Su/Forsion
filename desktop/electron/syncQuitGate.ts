@@ -93,25 +93,48 @@ export function createSyncQuitGate(deps: { ui: QuitGateUi; pollMs?: number; chec
         }
         deps.ui.show(r)
         const answer = deps.ui.answer().then((a) => ({ a }))
+        // 用户的回答和整个轮询赛跑:等下一次扫描、扫描本身都和回答一起 race —— 扫描途中点了「取消退出」,
+        // 那次扫描回来就算同步完了也不退
         for (;;) {
           const won = await Promise.race([answer, sleep(deps.pollMs ?? 2000).then(() => null)])
           if (won) { deps.ui.hide(); return won.a === 'quit' }
-          r = await check()
+          const next = await Promise.race([answer, check().then((x) => ({ r: x }))])
+          if ('a' in next) { deps.ui.hide(); return next.a === 'quit' }
+          r = next.r
           if (!r || r.state === 'synced') { deps.ui.hide(); return true }
           deps.ui.show(r)
         }
       })().finally(() => { running = null })
       return running
     },
-    /** 无人值守(装更新):不弹卡;还在同步就这次不装(false)。失败的照旧装:失败要人处理,下次启动接着报。 */
+    /** 无人值守(装更新):不弹卡;还在同步就这次不装(false)。只有失败的照旧装:失败要人处理,下次启动接着报。
+     *  「还在同步」= state pending **或** pending > 0(几个检查合起来时 failed 盖过 pending,state 是 failed 也可能还有在传的)。 */
     async unattended(): Promise<boolean> {
       const r = await check()
-      return !r || r.state !== 'pending'
+      return !r || (r.state !== 'pending' && r.pending === 0)
     },
   }
 }
 
 export type SyncQuitGate = ReturnType<typeof createSyncQuitGate>
+
+interface QuitEvents {
+  on(ev: 'before-quit', fn: () => void): unknown
+  removeListener(ev: 'before-quit', fn: () => void): unknown
+}
+/** 旧引擎(Extend 里的 Amadeus 云同步,经 amadeus/ipc 的 onBeforeQuit 登记)的退出钩子:held() = 这一次 before-quit
+ *  被同步门禁拦下来问用户(main.ts 的 syncGateChain 在跑)—— 这次不调,钩子留着;放行的那次 before-quit 才调,调过即摘(同 app.once)。
+ *  门禁「取消退出」时旧引擎就一直没停过。没登记退出检查 = held() 恒假 = 第一次 before-quit 就调,和 app.once 一样。
+ *  依赖 main.ts 自己的 before-quit 监听先登记(模块顶层),这里的后登记(whenReady 里),同一次派发里先看到门禁状态。 */
+export function onQuitProceeding(events: QuitEvents, held: () => boolean, cb: () => void): () => void {
+  const on = (): void => {
+    if (held()) return
+    events.removeListener('before-quit', on)
+    cb()
+  }
+  events.on('before-quit', on)
+  return () => { events.removeListener('before-quit', on) }
+}
 
 // ── Electron 那一半:渲染层经 window.remoteSync.quitGate 订阅 / 回答(preload:remotesyncPreload.ts)──────────────
 

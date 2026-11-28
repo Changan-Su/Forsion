@@ -198,4 +198,50 @@ describe('ownership seam', () => {
     expect(readOfflineContentOwns(dir, A)).toEqual({ human: false, agents: false })
     expect(restartSync).toHaveBeenCalledOnce()
   })
+
+  it('content -> engine: an engine that saved the bit but answered 500 (its mirror step failed) is read back, not rolled back into two writers', async () => {
+    const prev: SyncOwnershipV2 = { entryRoots: ['/x/VaultA'], mirror: 'off', human: 'content' }
+    const f = fixture({ v2: prev, engine: { human: true, agents: true } })
+    f.fetchFixture.mockImplementationOnce(async (_input, init) => { f.engine!.human = JSON.parse(String(init!.body)).human; return new Response('', { status: 500 }) })
+    await f.seam.set({ ...prev, human: 'engine' }, A)
+    expect(f.engine!.human).toBe(false)
+    expect(f.stored()?.human).toBe('engine')
+  })
+
+  it('content -> engine: when the engine bit cannot be confirmed back, content stays stopped (v2 human stays engine) and the call fails', async () => {
+    const prev: SyncOwnershipV2 = { entryRoots: ['/x/VaultA'], mirror: 'off', human: 'content' }
+    const f = fixture({ v2: prev, engine: { human: true, agents: true } })
+    // 引擎每次 PUT 都落了盘却回 500,GET 也读不回:宿主不知道引擎那一位是什么
+    f.fetchFixture.mockImplementation(async (_input, init) => {
+      if (init?.method === 'PUT') f.engine!.human = JSON.parse(String(init.body)).human
+      return new Response('', { status: 500 })
+    })
+    await expect(f.seam.set({ ...prev, human: 'engine' }, A)).rejects.toThrow()
+    expect(f.stored()?.human).toBe('engine')
+    expect(f.stored()?.entryRoots).toEqual(['/x/VaultA'])
+    expect(f.host.restartSync).not.toHaveBeenCalled()
+  })
+
+  it('two set() calls in opposite directions run one after the other, so v2 and the engine bit always agree', async () => {
+    const prev: SyncOwnershipV2 = { entryRoots: ['/x/VaultA'], mirror: 'off', human: 'content' }
+    const f = fixture({ v2: prev, engine: { human: true, agents: true } })
+    await Promise.all([
+      f.seam.set({ ...prev, human: 'engine' }, A),
+      f.seam.set({ entryRoots: ['/x/VaultA', '/x/VaultB'], mirror: 'off', human: 'content' }, A),
+    ])
+    expect(f.stored()?.human === 'content').toBe(f.engine!.human === true)
+    expect(f.stored()).toEqual({ entryRoots: ['/x/VaultA', '/x/VaultB'], mirror: 'off', human: 'content' })
+  })
+
+  it('the legacy claim(bool) in external mode keeps the pre-step-2 file shape (owner only, never contentOwns)', () => {
+    const file = join(dir, 'agents/.cloudsync-default.json')
+    setOfflineContentOwner(dir, A, true)
+    const on = Object.values(JSON.parse(readFileSync(file, 'utf8')).accounts)[0] as Record<string, unknown>
+    expect(on).toMatchObject({ enabled: false, owner: 'content' })
+    expect(on).not.toHaveProperty('contentOwns')
+    setOfflineContentOwner(dir, A, false)
+    const off = Object.values(JSON.parse(readFileSync(file, 'utf8')).accounts)[0] as Record<string, unknown>
+    expect(off).not.toHaveProperty('owner')
+    expect(off).not.toHaveProperty('contentOwns')
+  })
 })

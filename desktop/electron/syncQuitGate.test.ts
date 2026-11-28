@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createRendererQuitGateUi, createSyncQuitGate, mergeQuitChecks, type QuitCheckResult, type QuitGateAnswer, type QuitGateUi } from './syncQuitGate'
+import { EventEmitter } from 'node:events'
+import { createRendererQuitGateUi, createSyncQuitGate, mergeQuitChecks, onQuitProceeding, type QuitCheckResult, type QuitGateAnswer, type QuitGateUi } from './syncQuitGate'
 
 const synced: QuitCheckResult = { state: 'synced', pending: 0, failed: [] }
 const pending = (n: number): QuitCheckResult => ({ state: 'pending', pending: n, failed: [] })
@@ -100,5 +101,47 @@ describe('sync quit gate', () => {
     expect(sent).toEqual([{ open: true, result: pending(1) }, { open: false }])
     handlers.get('remotesync:quitGate:subscribe')!({ sender }, false)
     expect(ui.available()).toBe(false)
+  })
+
+  it('"cancel" clicked while a re-check is still running wins, even if that check then comes back synced', async () => {
+    const ui = fakeUi()
+    let slow!: (r: QuitCheckResult) => void
+    let calls = 0
+    const gate = createSyncQuitGate({ ui, pollMs: 5 })
+    gate.add(() => (++calls === 1 ? Promise.resolve(pending(1)) : new Promise<QuitCheckResult>((r) => { slow = r })))
+    const run = gate.run()
+    await vi.waitFor(() => expect(calls).toBe(2)) // 卡片开着,第二次扫描还在跑
+    ui.click('cancel')
+    await new Promise((r) => setTimeout(r, 5))
+    slow(synced)
+    expect(await run).toBe(false)
+  })
+
+  it('unattended installs wait while anything is still pending, whatever the merged state says', async () => {
+    const gate = createSyncQuitGate({ ui: fakeUi() })
+    gate.add(async () => ({ state: 'failed', pending: 0, failed: [{ path: 'a.md', reason: 'too large' }] }))
+    expect(await gate.unattended()).toBe(true) // 只有失败:照旧装
+    gate.add(async () => pending(1))
+    expect((await gate.check())?.state).toBe('failed') // 合起来报 failed,但还有一件在传
+    expect(await gate.unattended()).toBe(false)
+  })
+
+  it('the old engine\'s quit hook skips a before-quit that the gate is holding and fires once when the quit goes ahead', () => {
+    const app = new EventEmitter()
+    let held = false
+    const cb = vi.fn()
+    onQuitProceeding(app, () => held, cb)
+    held = true
+    app.emit('before-quit')
+    expect(cb).not.toHaveBeenCalled() // 门禁拦着问:旧引擎接着同步
+    held = false
+    app.emit('before-quit')
+    expect(cb).toHaveBeenCalledOnce()
+    app.emit('before-quit')
+    expect(cb).toHaveBeenCalledOnce() // 同 app.once:真退时只调一次
+    const off = onQuitProceeding(app, () => false, cb)
+    off()
+    app.emit('before-quit')
+    expect(cb).toHaveBeenCalledOnce()
   })
 })

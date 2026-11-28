@@ -5,7 +5,7 @@ import { readdirSync, rmdirSync, rmSync } from 'node:fs';
 import { withMemoryDirectoryLock } from './memoryRepository.js';
 import type { AgentFilesBrain } from '../seams/cloudBrain.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
-import { contentOwnsOf, withContentOwns, type AccountSyncDefault, type ContentOwns } from '../contracts/contentSyncOwner.js';
+import { contentOwnsOf, withContentOwns, withLegacyContentOwner, type AccountSyncDefault, type ContentOwns } from '../contracts/contentSyncOwner.js';
 
 /**
  * Agents(及记忆)同步先封住(AGENT_SYNC_SEALED,开关本身在 contracts/agentSyncSeal.ts,桌面界面共用;2026-11-27 智库同步统一方案第 0 步)。
@@ -115,9 +115,13 @@ export function setContentSyncOwnership(scope: string, patch: Partial<ContentOwn
   atomicSyncWrite(agentsDir(), defaultFile(), JSON.stringify({ accounts }, null, 2)); invalidateAgentSyncOperations();
 }
 /** Exclusive ownership prevents legacy per-agent discovery from bypassing folder rules.
- *  老接口(旧 claim):两位一起改,和第 2 步之前写出的文件一个样。 */
+ *  老接口(旧 claim):两位一起改,落盘形状和第 2 步之前一字不差(开 = 只有 owner:'content',关 = 都不写;见 withLegacyContentOwner)。
+ *  读用严格读:总闸文件读不了就抛、不写(不拿一份空的盖掉别的账号)。 */
 export function setContentSyncOwner(scope:string,enabled:boolean):void {
-  setContentSyncOwnership(scope,{human:enabled,agents:enabled});
+  if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('invalid cloud account scope');
+  const accounts = readDefaultsStrict();
+  accounts[scope] = withLegacyContentOwner(accounts[scope], enabled);
+  atomicSyncWrite(agentsDir(), defaultFile(), JSON.stringify({ accounts }, null, 2)); invalidateAgentSyncOperations();
 }
 export function setAgentSyncDefault(scope: string, enabled: boolean): void {
   if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('invalid cloud account scope');
@@ -170,7 +174,11 @@ export function captureAgentSyncDefault(scope: string): () => void {
 export function agentSyncPermission(slug: string, scope: string | null, area: 'agents' | 'human' = 'agents'): Permission {
   if (!scope) return { enabled: false, shared: false };
   const permission = readPermissions(slug).accounts[scope];
-  const master = readDefaults()[scope];
+  // human/ 拿这份同意去写:总闸文件读不了 / 坏了(不是没有)= 不知道 human 归谁 = 不共享、停写,别当成「没人管」照旧同步
+  // (human 归新同步时,那份读不出来的 contentOwns 正是拦住旧通道的那一位)。agents 区照第 2 步之前的宽松读(Agents 同步第 0 步起封着)。
+  let master: AccountDefault | undefined;
+  if (area === 'human') { try { master = readDefaultsStrict()[scope]; } catch { return { enabled: false, shared: false }; } }
+  else master = readDefaults()[scope];
   const owns = contentOwnsOf(master);
   if (area === 'human' ? owns.human : owns.agents) return { enabled: false, shared: false, revision: master?.revision };
   const revision = (permission?.revision ?? 0) + (master?.revision ?? 0);

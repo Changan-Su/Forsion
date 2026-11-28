@@ -2,7 +2,7 @@
  * 宿主自己的「同步到哪」存档 userData/sync-targets(.dev).json(智库同步统一方案第 2 步 H 包,契约 §3.4、实现期修订 H-1 第 1、2 条)。
  * - targets:每条一个网盘(凭据在这里,权限 0600;**凭据只在宿主主进程里流转**,Extend 只拿 open() 递过去的句柄);
  * - legacy:旧 remotesync 的封口状态(谁持有写权、归档到哪)。
- * 读失败 ≠ 空:没有文件 = 空;读不了 / 不是这个形状就抛,调用方按「不知道」处理,也不会拿空的一份写回去盖掉凭据。
+ * 读失败 ≠ 空:没有文件 = 空;读不了 / 不是这个形状就抛(固定错误码,不带原文),调用方按「不知道」处理,也不会拿空的一份写回去盖掉凭据。
  * 不 import electron(路径由调用方给),vitest 直测。
  */
 import { promises as fs } from 'node:fs'
@@ -32,17 +32,33 @@ export interface SyncTargetsFile {
 
 const empty = (): SyncTargetsFile => ({ version: 1, targets: {} })
 
+/** 这个文件里有凭据:读 / 解析 / 形状出错一律换成固定的错误码往外抛(进日志、经 IPC 回渲染层)。
+ *  JSON.parse 的原始报错会带一截文件原文(如 `..."cessKey":abc…`),所以原报错既不进 message 也不挂 cause。 */
+export const SYNC_TARGETS_UNREADABLE = 'sync-targets-unreadable'
+export const SYNC_TARGETS_UNPARSEABLE = 'sync-targets-unparseable'
+export const SYNC_TARGETS_MALFORMED = 'sync-targets-malformed'
+
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+
+/** legacy 封口记录:缺的字段取缺省(读成「没持有 / 没归档」);在、但类型或取值不对 = 整个文件读不了(调用方按持有处理),
+ *  不能把 holder:'v1' 之类读成 null(= 已交还)。 */
+function validLegacy(l: unknown): boolean {
+  if (!isObject(l)) return false
+  if (l.holder !== undefined && l.holder !== null && l.holder !== 'v2') return false
+  if (l.archived !== undefined && typeof l.archived !== 'boolean') return false
+  if (l.archivedAt !== undefined && !(typeof l.archivedAt === 'number' && Number.isFinite(l.archivedAt))) return false
+  if (l.archiveDir !== undefined && typeof l.archiveDir !== 'string') return false
+  if (l.targetId !== undefined && l.targetId !== null && typeof l.targetId !== 'string') return false
+  return true
+}
+
 function validate(x: unknown): SyncTargetsFile {
   const f = x as SyncTargetsFile
-  if (!f || typeof f !== 'object' || Array.isArray(f) || f.version !== 1 || !f.targets || typeof f.targets !== 'object' || Array.isArray(f.targets)) {
-    throw new Error('sync-targets file is malformed')
+  if (!isObject(f) || f.version !== 1 || !isObject(f.targets)) throw new Error(SYNC_TARGETS_MALFORMED)
+  for (const t of Object.values(f.targets)) {
+    if (!isObject(t) || !SYNC_TARGET_KINDS.includes(t.kind as SyncTargetKind) || !isObject(t.section) || typeof t.label !== 'string') throw new Error(SYNC_TARGETS_MALFORMED)
   }
-  for (const [id, t] of Object.entries(f.targets)) {
-    if (!t || typeof t !== 'object' || !SYNC_TARGET_KINDS.includes(t.kind) || !t.section || typeof t.section !== 'object' || typeof t.label !== 'string') {
-      throw new Error(`sync-targets entry ${JSON.stringify(id)} is malformed`)
-    }
-  }
-  if (f.legacy !== undefined && (typeof f.legacy !== 'object' || f.legacy === null)) throw new Error('sync-targets legacy state is malformed')
+  if (f.legacy !== undefined && !validLegacy(f.legacy)) throw new Error(SYNC_TARGETS_MALFORMED)
   return f
 }
 
@@ -53,9 +69,11 @@ export function createSyncTargetsStore(file: () => string) {
     let raw: string
     try { raw = await fs.readFile(file(), 'utf8') } catch (e) {
       if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return empty()
-      throw e
+      throw new Error(SYNC_TARGETS_UNREADABLE)
     }
-    return validate(JSON.parse(raw))
+    let parsed: unknown
+    try { parsed = JSON.parse(raw) } catch { throw new Error(SYNC_TARGETS_UNPARSEABLE) }
+    return validate(parsed)
   }
 
   async function write(next: SyncTargetsFile): Promise<void> {
