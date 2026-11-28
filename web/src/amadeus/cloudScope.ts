@@ -32,16 +32,22 @@ export interface LibraryDto {
 }
 
 /** 一个桥实例当前打开的库视图。 */
-export interface CloudLibraryScope {
+export interface CloudLibraryIdentity {
   vaultId: string
   libraryId: string
   /** '' = 整库;'X/' = 原位置库,桥内路径 rel ↔ 服务端 `X/rel`。 */
   rootPrefix: string
+}
+
+export interface CloudLibraryScope extends CloudLibraryIdentity {
   /** 整库视图里不显示的前缀(原位置库、已经分走的):树、搜索、事件都滤掉。 */
   exclude: string[]
   /** 这个视图会不会碰上分库:默认库 / 原位置库会;独立库 / 别人共享的不会;老服务端(没有 /libraries)不会。 */
   movesPossible: boolean
 }
+
+export const sameLibrary = (a: CloudLibraryIdentity, b: CloudLibraryIdentity): boolean =>
+  a.vaultId === b.vaultId && a.libraryId === b.libraryId && a.rootPrefix === b.rootPrefix
 
 /** 三种写法 → HTTP 前缀 `X/`;整库 → ''。认不出的(带 `..`、空段)→ null。 */
 export function httpPrefix(raw: string | null | undefined): string | null {
@@ -71,6 +77,14 @@ export const legacyPrefixOfLibrary = (libraryId: string): string | null => {
   return m ? m[1] : null
 }
 
+/** Library ids identify both the owning vault and the exact view prefix. */
+export function libraryRootPrefix(vaultId: string, libraryId: string): string | null {
+  if (!vaultId || !libraryId) return null
+  if (vaultId === libraryId && !legacyPrefixOfLibrary(libraryId)) return ''
+  const prefix = httpPrefix(legacyPrefixOfLibrary(libraryId))
+  return prefix && libraryId === `${vaultId}:Amadeus/${prefix}` ? prefix : null
+}
+
 /** 两个键按**当时的账号**作用域求出来。桥 / collab 装的时候各取一次留着:换号以后旧账号的回调只能写回旧账号自己的键。 */
 export interface CloudLibraryKeys { library: string; vault: string }
 export const cloudLibraryKeys = (): CloudLibraryKeys => ({ library: contentStorageKey(ACTIVE_LIBRARY_KEY), vault: contentStorageKey(ACTIVE_VAULT_KEY) })
@@ -95,6 +109,10 @@ export function readCloudLibrary(keys: CloudLibraryKeys = cloudLibraryKeys()): s
   } catch {
     return null
   }
+}
+
+export function followCloudLibraryMove(from: string, to: string, keys: CloudLibraryKeys): void {
+  if (readCloudLibrary(keys) === from) rememberCloudLibrary(to, keys)
 }
 
 /** 网页深链(`?vault=&note=`,openTarget.ts)要打开的那一篇:地址里的 note 是服务端路径。桥选库时据此认出它落在某个原位置库里

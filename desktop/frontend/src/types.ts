@@ -1149,6 +1149,9 @@ declare global {
       switchLibrary?(id: string): void
       /** 文件地址:不含凭据,能不能看由服务端判。 */
       fileUrl(vaultId: string, path: string): string
+      /** Translate a wire location only when it belongs to the mounted online view. */
+      fileViewPath?(vaultId: string, path: string): string | null
+      noteLocation?(path: string): { vaultId: string; path: string } | null
       // 同步共享(owner):共享单位 = 页 + 子页面树
       pageShare(path: string): Promise<{ share: AmadeusPageShare | null; quota: AmadeusCollabQuota }>
       createPageShare(path: string, opts: { role?: 'editor' | 'viewer'; expiresDays?: number | null; password?: string | null; attachments?: boolean }): Promise<AmadeusPageShare>
@@ -1157,14 +1160,14 @@ declare global {
       setParticipantRole(id: string, userId: string, role: 'editor' | 'viewer', vaultId?: string): Promise<void>
       removeParticipant(id: string, userId: string, vaultId?: string): Promise<void>
       /** 这一页直接引用、不在共享范围里的内容(分享卡「一起共享」)。 */
-      relatedItems?(id: string): Promise<{ items: AmadeusRelatedItem[]; subpages: number }>
-      setShareItem(id: string, path: string, included: boolean): Promise<void>
+      relatedItems?(id: string, vaultId?: string): Promise<{ items: AmadeusRelatedItem[]; subpages: number }>
+      setShareItem(id: string, path: string, included: boolean, vaultId?: string): Promise<void>
       // 参与者
       sharedWithMe(): Promise<AmadeusSharedItem[]>
       leaveShare(id: string, vaultId?: string): Promise<void>
       inviteUrl(token: string): string
       // 发布(公开只读链接)
-      publishes(): Promise<{ shares: Array<{ token: string; mode: string; path: string; createdAt: string }>; quota: AmadeusCollabQuota }>
+      publishes(path?: string): Promise<{ shares: Array<{ token: string; mode: string; path: string; createdAt: string; vaultId?: string }>; quota: AmadeusCollabQuota; target?: { vaultId: string; path: string } }>
       createPublish(mode: 'page' | 'subtree', path: string): Promise<{ token: string; mode: string; path: string; url: string }>
       revokePublish(token: string): Promise<void>
       /** Public View 跨库撤销：显式带 vaultId（默认变体只作用于 own vault）。 */
@@ -1365,6 +1368,7 @@ export interface AmadeusEntrySyncState {
 
 /** 页面级同步共享(分享卡片数据源)。 */
 export interface AmadeusPageShare {
+  vaultId?: string
   id: string
   path: string
   title: string
@@ -1381,6 +1385,8 @@ export interface AmadeusPageShare {
 
 export interface AmadeusRelatedItem {
   path: string
+  vaultId?: string
+  displayPath?: string
   title: string
   kind: 'page' | 'file'
   included: boolean

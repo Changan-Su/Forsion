@@ -11,17 +11,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { activeCloudViewPath, activeCloudWirePath, createCloudAmadeusBridge, setCloudNotify, type CloudBridgeCfg } from '../../../../web/src/amadeus/cloudBridge'
+import { buildAssetUrl } from '../../../../web/src/amadeus/cloudAssets'
 import { installCloudCollab } from '../../../../web/src/amadeus/cloudCollab'
 import { cloudLibraryState, onCloudLibraryState, readCloudLibrary, rememberCloudLibrary, setPendingOpenNote, type CloudLibraryState } from '../../../../web/src/amadeus/cloudScope'
 import { cloudLibraryRoot } from '../amadeus/lib/cloudLibraryRoot'
 import { readDraft, stashDraft } from '../amadeus/unified/draftStorage'
 import { readNoteSurfaceMode, writeNoteSurfaceMode } from '../amadeus/unified/viewMemory'
 import { clearCloudAccountCache } from './cloudAccountCache'
+import { sharedEntryFor } from '../stores/sharedVaultStore'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { emptyDb } from '@amadeus-shared/db/schema'
 
 const V = 'vault-default'
 const T = 'vault-split'
+const U = 'vault-other-split'
 const LEGACY = `${V}:Amadeus/Notes/`
 const jwt = `header.${btoa(JSON.stringify({ userId: 'u' }))}.signature`
 
@@ -43,7 +46,7 @@ interface Req { method: string; vault: string | null; route: string; path?: stri
 
 /** 内存里的服务端:几个库、分库记录、钩子(某个请求到达时先做点什么,例如这时候恰好分库)。 */
 function fakeServer() {
-  const vaults = new Map<string, Map<string, Row>>([[V, new Map()], [T, new Map()]])
+  const vaults = new Map<string, Map<string, Row>>([[V, new Map()], [T, new Map()], [U, new Map()]])
   const splits: Array<{ prefix: string; to: string }> = []
   const reqs: Req[] = []
   const state = {
@@ -53,6 +56,7 @@ function fakeServer() {
     /** 删进回收站的库。 */
     deleted: new Set<string>(),
     hook: null as null | ((r: Req) => void),
+    intercept: null as null | ((r: Req) => Response | Promise<Response> | undefined),
   }
   const put = (v: string, path: string, content: string, kind: Row['kind'] = 'page', seq = 1) => vaults.get(v)!.set(path, { content, seq, kind })
   const split = (prefix: string, to: string) => {
@@ -80,6 +84,8 @@ function fakeServer() {
     const r: Req = { method, vault, route, path, body, caps, force: body?.force === true }
     reqs.push(r)
     state.hook?.(r)
+    const overridden = state.intercept?.(r)
+    if (overridden) return overridden
 
     if (!vault) {
       if (route === '/libraries') {
@@ -218,7 +224,7 @@ const ac = new Set<AbortController>()
 afterEach(() => { for (const c of ac) c.abort(); ac.clear() })
 
 /** 按 library 开桥(默认 = 原位置库 Notes,以 Notes/ 为根)。 */
-async function boot(library: string | null = LEGACY, options: Pick<CloudBridgeCfg, 'migratePluginStorage' | 'library' | 'rootPrefix'> = {}) {
+async function boot(library: string | null = LEGACY, options: Pick<CloudBridgeCfg, 'migratePluginStorage' | 'pausePluginStorageMigration' | 'library' | 'rootPrefix'> = {}) {
   if (library) rememberCloudLibrary(library)
   const ctrl = new AbortController()
   ac.add(ctrl)
@@ -347,7 +353,10 @@ describe('E1 / E2: library list and choice', () => {
     expect(info.root).toBe(cloudLibraryRoot(T, T))
     expect(info.pages).toEqual(['a.md'])
     expect(readDraft(info.root, 'a.md', 'leaf-a')?.text).toBe('unsaved changes')
-    expect(readDraft(oldRoot, 'a.md', 'leaf-a')).toBeNull()
+    expect(readDraft(oldRoot, 'a.md', 'leaf-a')?.text).toBe('unsaved changes')
+    expect(readCloudLibrary()).toBe(T)
+    srv.state.librariesStatus = 503
+    expect((await boot(null)).info.root).toBe(cloudLibraryRoot(T, T))
   })
 
   it('keeps drafts previously saved under the whole-vault root on upgrade', async () => {
@@ -378,9 +387,9 @@ describe('E1 / E2: library list and choice', () => {
     expect(next.info.root).toBe(newRoot)
     expect(migrateStorage).toHaveBeenCalledExactlyOnceWith(oldRoot, newRoot)
     expect(readDraft(newRoot, 'a.md')?.text).toBe('last edit on unload')
-    expect(readDraft(oldRoot, 'a.md')).toBeNull()
+    expect(readDraft(oldRoot, 'a.md')?.text).toBe('last edit on unload')
     expect(readNoteSurfaceMode(newRoot, 'a.md')).toBe('canvas')
-    expect(readNoteSurfaceMode(oldRoot, 'a.md')).toBeNull()
+    expect(readNoteSurfaceMode(oldRoot, 'a.md')).toBe('canvas')
   })
 
   it('uses the confirmed new root when reopening from the old legacy tree snapshot', async () => {
@@ -417,6 +426,11 @@ describe('E1 / E2: library list and choice', () => {
       stashDraft(stale.info.root, 'a.md', 'typed before the delayed reopen', '# a')
       await vi.advanceTimersByTimeAsync(0)
       expect(cloudLibraryState()).toMatchObject({ kind: 'moved', reopen: true })
+      await expect(stale.bridge.writeTextFile('a.md', 'must not cross the offline view')).rejects.toBeTruthy()
+      const asset = new URL(buildAssetUrl('other.png', null))
+      expect(asset.pathname).toContain(`/${V}/asset`)
+      expect(asset.searchParams.get('at')).toBeNull()
+      expect(srv.files(T).get('a.md')?.content).toBe('# a')
       stale.stop()
       const next = await boot(null)
       expect(readDraft(next.info.root, 'a.md')?.text).toBe('typed before the delayed reopen')
@@ -437,10 +451,18 @@ describe('E1 / E2: library list and choice', () => {
     else {
       srv.splits.length = 0
       srv.state.deleted.add(T)
+      srv.put(V, 'a.md', 'top-level content')
     }
     const migrateStorage = vi.fn(async () => {})
     const next = await boot(null, { migratePluginStorage: migrateStorage })
-    expect(next.info.root).toBe(`cloud://${T}`)
+    expect(next.info.root).toBe(scenario === 'reverted' ? `cloud://${V}` : `cloud://${T}`)
+    if (scenario === 'reverted') {
+      expect(next.info.pages).toEqual(['a.md'])
+      await expect(next.bridge.writeTextFile('a.md', 'stale editor write', {
+        base: textFingerprint('top-level content'), strictExisting: true, expectedRoot: `cloud://${T}`,
+      })).rejects.toBeTruthy()
+      expect(srv.files(V).get('a.md')?.content).toBe('top-level content')
+    }
     expect(readDraft(first.info.root, 'a.md')?.text).toBe('keep at the old root')
     expect(readDraft(next.info.root, 'a.md')).toBeNull()
     expect(migrateStorage).not.toHaveBeenCalled()
@@ -781,5 +803,221 @@ describe('B12 / E4: deleted vault', () => {
     es.onerror?.()
     await new Promise((r) => setTimeout(r, 30))
     expect(FakeES.all.length).toBe(n)
+  })
+})
+
+describe('G2a review regressions', () => {
+  it('consumes the tree move list only in the responding vault, even before its replacement tree arrives', async () => {
+    srv.put(V, 'Notes/a.md', 'legacy note')
+    srv.put(V, 'Notes/Zeta/a.md', 'nested note')
+    srv.put(V, 'Zeta/a.md', 'other library note')
+    const active = await boot()
+    srv.split('Notes/', T)
+    srv.split('Zeta/', U)
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    srv.state.intercept = (r) => r.vault === T && r.route === '/tree'
+      ? pending.then(() => Response.json({ pages: ['a.md', 'Zeta/a.md'], files: [], folders: ['Zeta'], seq: 1 })) : undefined
+    const discovery = active.bridge.readTextFile('never-seen.md')
+    try {
+      await vi.waitFor(() => expect(srv.reqs.some((r) => r.vault === T && r.route === '/tree')).toBe(true))
+      await active.bridge.writeTextFile('Zeta/a.md', 'nested edit')
+      expect(srv.files(T).get('Zeta/a.md')?.content).toBe('nested edit')
+      expect(srv.files(U).get('a.md')?.content).toBe('other library note')
+    } finally {
+      release()
+      await discovery.catch(() => {})
+    }
+    await expect(discovery).resolves.toBeNull()
+  })
+
+  it('clears a reverted move route when the whole-vault tree is refreshed', async () => {
+    srv.put(V, 'Zeta/a.md', 'other library note')
+    srv.split('Zeta/', U)
+    const whole = await boot(V)
+    expect(await whole.bridge.readTextFile('Zeta/a.md')).toBe('other library note')
+    srv.splits.length = 0
+    srv.put(V, 'Zeta/a.md', 'restored note')
+    srv.state.deleted.add(U)
+    whole.es().emit('reset', {})
+    await new Promise((resolve) => setTimeout(resolve, 320))
+    await whole.bridge.listPages()
+    await expect(whole.bridge.readTextFile('Zeta/a.md')).resolves.toBe('restored note')
+  })
+
+  it('rejects a default snapshot for a legacy deep link and rejects a wrong snapshot prefix', async () => {
+    srv.put(V, 'a.md', 'top-level content')
+    srv.put(V, 'Notes/a.md', 'legacy content')
+    await boot(V)
+    setPendingOpenNote(V, 'Notes/a.md')
+    const legacy = await boot(V)
+    expect(legacy.info.root).toBe(cloudLibraryRoot(V, LEGACY))
+    await legacy.bridge.writeTextFile('a.md', 'legacy edit')
+    expect(srv.files(V).get('a.md')?.content).toBe('top-level content')
+    expect(srv.files(V).get('Notes/a.md')?.content).toBe('legacy edit')
+
+    const key = 'amadeus_tree_snap'
+    const snap = JSON.parse(store.getItem(key)!)
+    store.setItem(key, JSON.stringify({ ...snap, prefix: 'Wrong/', tree: { ...snap.tree, pages: ['wrong.md'] } }))
+    expect((await boot(LEGACY)).info.pages).toEqual(['a.md'])
+  })
+
+  it.each(['config.json', 'preferences.md'])('rejects a first-time read of %s when a split lookup fails', async (path) => {
+    srv.put(V, 'Notes/config.json', 'saved config', 'binary')
+    srv.put(V, 'Notes/preferences.md', 'saved preferences')
+    const old = await boot()
+    srv.split('Notes/', T)
+    srv.state.intercept = (r) => r.vault === V && r.route === '/tree' ? Response.json({}, { status: 503 }) : undefined
+    await expect(old.bridge.readTextFile(path)).rejects.toMatchObject({ status: 503 })
+    srv.state.intercept = (r) => r.vault === V && r.route === '/tree' ? Response.json({}) : undefined
+    await expect(old.bridge.readTextFile(path)).rejects.toBeTruthy()
+    srv.state.intercept = null
+    expect(await old.bridge.readTextFile('preferences.md')).toBe('saved preferences')
+    expect(await old.bridge.readTextFile('missing.md')).toBeNull()
+  })
+
+  it.each(['{truncated', '', '{"code":"ACCOUNT_CHANGED"}'])('rejects an unrecognized savePage 409 body (%s) without external reload', async (body) => {
+    const active = await openedThenSplit()
+    srv.state.intercept = (r) => r.method === 'PUT' && r.vault === V ? new Response(body, { status: 409 }) : undefined
+    const blockId = Object.keys(active.page.blocks)[0]
+    await expect(active.bridge.savePage('a.md', active.page.manifest, { [blockId]: 'unsaved' })).rejects.toMatchObject({ status: 409 })
+    await flush()
+    expect(active.external).toEqual([])
+    expect(srv.files(T).get('a.md')?.content).toBe('# a\n')
+  })
+
+  it('derives the explicit legacy prefix and rejects an inconsistent or unrecognizable identity', async () => {
+    srv.put(V, 'a.md', 'top')
+    srv.put(V, 'Notes/a.md', 'legacy')
+    const config = { library: { vaultId: V, libraryId: LEGACY } }
+    const active = await boot(null, config)
+    await active.bridge.writeTextFile('a.md', 'legacy edit')
+    expect(srv.files(V).get('a.md')?.content).toBe('top')
+    expect(srv.files(V).get('Notes/a.md')?.content).toBe('legacy edit')
+    await expect(boot(null, { ...config, rootPrefix: 'Elsewhere/' })).rejects.toBeTruthy()
+    await expect(boot(null, { library: { vaultId: V, libraryId: 'invalid' } })).rejects.toBeTruthy()
+  })
+
+  it('imports previous whole-vault drafts and memory when first opening a legacy subtree', async () => {
+    const whole = cloudLibraryRoot(V, V)
+    const legacy = cloudLibraryRoot(V, LEGACY)
+    srv.put(V, 'Notes/sub/a.md', 'stored')
+    stashDraft(whole, 'Notes/sub/a.md', 'old draft', 'stored', 'leaf-a')
+    stashDraft(whole, 'Notes-archive/sub/a.md', 'unrelated', 'stored', 'leaf-b')
+    writeNoteSurfaceMode(whole, 'Notes/sub/a.md', 'canvas')
+    await boot()
+    expect(readDraft(legacy, 'sub/a.md', 'leaf-a')?.text).toBe('old draft')
+    expect(readDraft(legacy, 'sub/a.md', 'leaf-b')).toBeNull()
+    expect(readDraft(whole, 'Notes/sub/a.md', 'leaf-a')?.text).toBe('old draft')
+    expect(readNoteSurfaceMode(legacy, 'sub/a.md')).toBe('canvas')
+    expect(readNoteSurfaceMode(whole, 'Notes/sub/a.md')).toBe('canvas')
+  })
+
+  it('passes original wire paths for related items and copies existing shared links in their own vault', async () => {
+    srv.put(V, 'Notes/a.md', 'legacy')
+    await boot()
+    srv.state.intercept = (r) => {
+      if (r.route === '/page-shares/share/related') return Response.json({
+        items: [{ path: 'other.png', kind: 'file' }, { path: 'Notes/other.png', kind: 'file' }], subpages: 0,
+      })
+      if (r.route === '/shared-with-me') return Response.json({
+        items: r.caps.includes('vault-moves') ? [{ vaultId: T, path: 'report.md' }] : [{ vaultId: V, path: 'Notes/report.md' }],
+      })
+    }
+    installCloudCollab({ apiBase: 'https://cloud.test/api', getToken: () => jwt, linkBase: 'https://cloud.test' })
+    const collab = window.amadeusCollab!
+    const { items } = await collab.relatedItems!('share', V)
+    expect(items.map((item) => [item.path, item.displayPath])).toEqual([['other.png', 'other.png'], ['Notes/other.png', 'other.png']])
+    await collab.setShareItem('share', items[0].path, false, items[0].vaultId)
+    expect(srv.reqs.at(-1)).toMatchObject({ vault: V, body: { path: 'other.png', included: false } })
+    const [received] = await collab.sharedWithMe()
+    const address = new URL(collab.fileUrl(received.vaultId, received.path))
+    expect(address.searchParams.get('vault')).toBe(T)
+    expect(address.searchParams.get('note')).toBe('report.md')
+    srv.put(T, 'report.md', 'shared report')
+    const joined = await boot(T)
+    expect(joined.info.root).toBe(cloudLibraryRoot(T, T))
+    expect(await joined.bridge.readTextFile('report.md')).toBe('shared report')
+    expect(srv.reqs.filter((r) => r.route === '/shared-with-me').every((r) => r.caps.includes('vault-moves'))).toBe(true)
+  })
+
+  it('matches and opens a shared entry by its wire vault and path inside the legacy view', async () => {
+    srv.put(V, 'Notes/a.md', 'legacy')
+    await boot()
+    installCloudCollab({ apiBase: 'https://cloud.test/api', getToken: () => jwt, linkBase: 'https://cloud.test' })
+    const collab = window.amadeusCollab!
+    const entry = { vaultId: V, path: 'Notes/a.md', title: 'Notes', role: 'viewer', ownerName: null, expiresAt: null }
+    const sameName = { ...entry, path: 'a.md', title: 'Root' }
+    const otherVault = { ...entry, vaultId: U, title: 'Other' }
+    expect(sharedEntryFor({ activeVault: V, items: [sameName, otherVault, entry] }, 'a.md')).toBe(entry)
+    expect(collab.fileViewPath?.(V, 'Notes/a.md')).toBe('a.md')
+    expect(collab.fileViewPath?.(V, 'a.md')).toBeNull()
+    expect(collab.fileViewPath?.(U, 'Notes/a.md')).toBeNull()
+  })
+
+  it('completes a cached split migration after a failed asset grant and verified reconnect', async () => {
+    srv.put(V, 'Notes/a.md', 'legacy')
+    const first = await boot()
+    srv.split('Notes/', T)
+    first.es().emit('vault-moved', { prefix: 'Notes/', vaultId: T })
+    await first.bridge.listPages()
+    stashDraft(first.info.root, 'a.md', 'last edit', 'legacy')
+    first.stop()
+
+    let release!: () => void
+    const treeReady = new Promise<void>((resolve) => { release = resolve })
+    srv.state.intercept = (r) => {
+      if (r.route === '/asset-token') return Response.json({}, { status: 503 })
+      if (r.route === '/tree') return treeReady.then(() => Response.json({ pages: ['a.md'], files: [], folders: [], seq: 1 }))
+    }
+    vi.useFakeTimers()
+    try {
+      const pausePluginStorageMigration = vi.fn()
+      const migratePluginStorage = vi.fn(async () => {})
+      const booting = boot(null, { migratePluginStorage, pausePluginStorageMigration })
+      await vi.advanceTimersByTimeAsync(3_000)
+      const next = await booting
+      expect(next.info.root).toBe(cloudLibraryRoot(T, T))
+      expect(pausePluginStorageMigration).toHaveBeenCalledExactlyOnceWith(next.info.root)
+      expect(migratePluginStorage).not.toHaveBeenCalled()
+      expect(readDraft(next.info.root, 'a.md')).toBeNull()
+      await expect(next.bridge.writeTextFile('a.md', 'before scope verification')).rejects.toBeTruthy()
+      release()
+      await vi.waitFor(() => expect(readDraft(next.info.root, 'a.md')?.text).toBe('last edit'))
+      expect(migratePluginStorage).toHaveBeenCalledExactlyOnceWith(first.info.root, next.info.root)
+      expect(readDraft(first.info.root, 'a.md')?.text).toBe('last edit')
+      expect(srv.files(T).get('a.md')?.content).toBe('legacy')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('leaves a newer tab selection in place when the old tab gets the split event', async () => {
+    srv.put(V, 'Notes/a.md', 'legacy')
+    const old = await boot()
+    rememberCloudLibrary(U)
+    srv.split('Notes/', T)
+    old.es().emit('vault-moved', { prefix: 'Notes/', vaultId: T })
+    expect(readCloudLibrary()).toBe(U)
+  })
+
+  it('refreshes the new vault grant while the old vault grant is still pending', async () => {
+    srv.put(V, 'Notes/a.md', 'legacy')
+    const active = await boot()
+    // Restart the current grant on a warm restore; block just this vault's response.
+    let release!: (value: Response) => void
+    const pending = new Promise<Response>((resolve) => { release = resolve })
+    srv.state.intercept = (r) => {
+      if (r.route !== '/asset-token') return
+      return r.vault === V ? pending : Response.json({ token: 'fixture-grant-t', ttlSec: 60 })
+    }
+    const restore = active.bridge.restoreVault()
+    await vi.waitFor(() => expect(srv.reqs.filter((r) => r.route === '/asset-token' && r.vault === V)).toHaveLength(2))
+    srv.split('Notes/', T)
+    active.es().emit('vault-moved', { prefix: 'Notes/', vaultId: T })
+    await vi.waitFor(() => expect(new URL(buildAssetUrl('a.png', null)).searchParams.get('at')).toBe('fixture-grant-t'))
+    release(Response.json({ token: 'fixture-grant-v', ttlSec: 60 }))
+    await restore
+    const url = new URL(buildAssetUrl('a.png', null))
+    expect(url.pathname).toContain(`/${T}/asset`)
+    expect(url.searchParams.get('at')).toBe('fixture-grant-t')
   })
 })

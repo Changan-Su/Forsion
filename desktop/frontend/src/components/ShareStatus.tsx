@@ -66,7 +66,7 @@ function ShareStatusTarget({ path, refreshKey, onOpen }: ShareStatusProps) {
     let alive = true
     // pageShare/publishes 都要 owner;非 owner(参与者页)会 404 → 静默不显示。
     void collab.pageShare(path).then((r) => alive && setShared(!!r.share)).catch(() => alive && setShared(false))
-    void collab.publishes().then((r) => alive && setPub(publishStateFor(path, r.shares))).catch(() => alive && setPub({ kind: 'none' }))
+    void collab.publishes(path).then((r) => alive && setPub(publishStateFor(path, r.shares, r.target))).catch(() => alive && setPub({ kind: 'none' }))
     return () => { alive = false }
   }, [collab, path, refreshKey])
 

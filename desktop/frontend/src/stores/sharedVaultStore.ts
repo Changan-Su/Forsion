@@ -44,10 +44,12 @@ const covers = (root: string, path: string): boolean => path === root || path.st
 
 /** 这一页属于哪条共享;所有者自己的页面没有。path 是编辑器里的路径(桌面 = 镜像内路径)。 */
 export function sharedEntryFor(s: Pick<SharedVaultState, 'items' | 'activeVault'>, path: string): AmadeusSharedItem | null {
+  const locate = typeof window === 'undefined' ? undefined : window.amadeusCollab?.noteLocation
+  const wire = locate ? locate(path) : { vaultId: s.activeVault, path }
   for (const it of s.items) {
     if (it.localPath) {
       if (path.startsWith(it.localPath.slice(0, it.localPath.lastIndexOf('/') + 1))) return it
-    } else if (it.vaultId === s.activeVault && (covers(it.path, path) || it.items?.some((x) => covers(x, path)))) return it
+    } else if (wire && it.vaultId === wire.vaultId && (covers(it.path, wire.path) || it.items?.some((x) => covers(x, wire.path)))) return it
   }
   return null
 }

@@ -23,6 +23,7 @@ beforeEach(() => {
     const account = token === jwt('a') ? 'a' : 'b'
     const url = new URL(input)
     let data: unknown = {}
+    if (url.pathname.endsWith('/libraries')) return Response.json({}, { status: 404 })
     if (url.pathname.endsWith('/vaults')) data = { vaults: [{ id: `${account}-vault` }] }
     else if (url.pathname.endsWith('/tree')) data = { pages: [`${account}-private.md`], files: [], folders: [], seq: 1 }
     else if (url.pathname.endsWith('/file')) data = { path: url.searchParams.get('path'), content: `# ${account} private note`, seq: 1, hash: 'hash' }

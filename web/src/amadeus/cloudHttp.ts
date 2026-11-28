@@ -26,8 +26,9 @@ export const is409 = (e: unknown): boolean => e instanceof HttpError && e.status
 const codeOf = (e: unknown): unknown => (e instanceof HttpError ? (e.body as { code?: unknown } | null)?.code : undefined)
 /** 写回的 409 VAULT_MOVED(声明了 vault-moves 才会收到;没声明的旧客户端拿 423):`{code, vaultId, prefix:'X/'}`。 */
 export const isVaultMoved = (e: unknown): boolean => is409(e) && codeOf(e) === 'VAULT_MOVED'
-/** 真正的「云端那边更新了 / 名字被占了」:409 且不是 VAULT_MOVED。 */
-export const isConflict409 = (e: unknown): boolean => is409(e) && codeOf(e) !== 'VAULT_MOVED'
+/** Only an operation's documented conflict codes are safe to recover from. */
+export const isConflict409 = (e: unknown, ...codes: Array<'CONFLICT' | 'EXISTS'>): boolean =>
+  is409(e) && codes.some((code) => code === codeOf(e))
 /** 库被删进回收站:410 VAULT_DELETED(所有按库的路由)。 */
 export const isVaultDeleted = (e: unknown): boolean => e instanceof HttpError && e.status === 410 && codeOf(e) === 'VAULT_DELETED'
 

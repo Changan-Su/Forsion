@@ -3,6 +3,7 @@
  * 第一次打开走邀请卡(设了查看密码先输密码);已加入或所有者不用再同意;同意后到文件页。
  * 复用 Forsion 的 token,index.html 的首帧脚本已把主题、背景、明暗写到根元素上。
  */
+import { CLOUD_CONTENT_CAPS } from './amadeus/cloudScope'
 import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { getApiBase, getToken } from './webShim'
@@ -80,7 +81,7 @@ function InviteApp({ token, account }: { token: string; account: InvitePageOptio
 
   useEffect(() => {
     void account.request(`${api}/amadeus/invites/${encodeURIComponent(token)}`, {
-      headers: { Authorization: `Bearer ${account.getToken()}` },
+      headers: { Authorization: `Bearer ${account.getToken()}`, 'X-Content-Caps': CLOUD_CONTENT_CAPS },
     }).then(async (r) => {
       if (r.status === 404) { setGone(true); return }
       if (!r.ok) { setErr(translate('invite.loadFailed', { status: r.status })); return }
@@ -94,7 +95,7 @@ function InviteApp({ token, account }: { token: string; account: InvitePageOptio
     setBusy(true)
     void account.request(`${api}/amadeus/invites/${encodeURIComponent(token)}/accept`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${account.getToken()}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${account.getToken()}`, 'X-Content-Caps': CLOUD_CONTENT_CAPS, 'Content-Type': 'application/json' },
       body: JSON.stringify(info?.needPassword ? { password: pw } : {}),
     }).then(async (r) => {
       if (!r.ok) {

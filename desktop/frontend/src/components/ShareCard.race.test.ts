@@ -79,6 +79,26 @@ async function click(label: string) {
 const urls = () => [...host.querySelectorAll('input[readonly]')].map((n) => (n as HTMLInputElement).value)
 
 describe('sharing UI keeps asynchronous results with their original note', () => {
+  it('revoke uses the token for the exact vault and server path of a legacy note', async () => {
+    const revokePublishIn = vi.fn(async () => {})
+    const revokePublish = vi.fn(async () => {})
+    Object.assign(window.amadeusCollab!, { revokePublishIn, revokePublish })
+    await render('a.md')
+    await act(async () => {
+      reads[0].result.resolve({ share: null, quota })
+      lists[0].resolve({ quota, target: { vaultId: 'vault', path: 'Notes/a.md' }, shares: [
+        { vaultId: 'vault', path: 'a.md', token: 'root-publication', mode: 'page', createdAt: '' },
+        { vaultId: 'other-vault', path: 'Notes/a.md', token: 'other-publication', mode: 'page', createdAt: '' },
+        { vaultId: 'vault', path: 'Notes/a.md', token: 'legacy-publication', mode: 'page', createdAt: '' },
+      ] })
+    })
+    await click('share.tabPublish')
+    expect(urls()).toEqual(['/published/legacy-publication'])
+    await click('share.unpublish')
+    expect(revokePublishIn).toHaveBeenCalledExactlyOnceWith('vault', 'legacy-publication')
+    expect(revokePublish).not.toHaveBeenCalled()
+  })
+
   it('late sharing and publishing responses for the old path cannot replace the new path', async () => {
     await render('A.md'); await render('folder/A.md')
     await resolveRead(1, 'folder/A.md'); await resolveRead(0, 'A.md')

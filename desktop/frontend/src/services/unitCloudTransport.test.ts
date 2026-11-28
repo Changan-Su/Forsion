@@ -46,6 +46,7 @@ beforeEach(() => {
     if (url.pathname === '/web/unit/account') return ['a', 'b'].includes(user || '')
       ? json({ userId: user, username: user, role: 'user', tenantId: `personal:${user}`, workspaceId: `personal:${user}` }) : json({}, 401)
     if (url.pathname === '/web/unit/config') return json({ config: { modelId: 'visitor-model' } })
+    if (url.pathname.endsWith('/libraries')) return Response.json({}, { status: 404 })
     if (url.pathname.endsWith('/vaults')) return json({ vaults: [{ id: `${user}-vault` }] })
     if (url.pathname.endsWith('/tree')) return json({ pages: ['private.md'], files: [{ path: 'Calendar.db', size: 100 }], folders: [], seq: 1 })
     if (url.pathname.endsWith('/asset-token')) return json({ token: `${user}-asset`, ttlSec: 600 })

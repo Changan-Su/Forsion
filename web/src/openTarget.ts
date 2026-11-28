@@ -41,7 +41,7 @@ export async function openTargetWhenReady({ vault, note }: OpenTarget): Promise<
   const active = await window.amadeusCollab?.activeVaultId().catch(() => null)
   if (active && active !== vault) { useApp.getState().toast(translate('deeplink.noteDenied'), true); return }
   // 服务端路径 → 当前库视图里的路径(原位置库以 X/ 为根);不在这个视图里 = 打不开
-  const viewNote = activeCloudViewPath(note)
+  const viewNote = activeCloudViewPath(note, vault)
   if (viewNote === null) { useApp.getState().toast(translate('deeplink.noteDenied'), true); return }
   note = viewNote
   // Space 与文件清单都是异步到位的。手机壳没有 Dockview,whenWorkspaceReady 等不到,这里统一短间隔重试。

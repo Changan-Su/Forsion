@@ -45,6 +45,7 @@ beforeEach(() => {
     const url = new URL(input)
     const method = init?.method ?? 'GET'
     const end = url.pathname.split('/').pop()
+    if (end === 'libraries') return Response.json({}, { status: 404 })
     if (end === 'vaults') return json(200, { vaults: [{ id: 'v1' }] })
     if (end === 'tree' && treeDown) return json(500, { error: 'boom' })
     if (end === 'tree') return json(200, { pages: [...rows.keys()].sort(), files: [], folders: [], seq: 1 })

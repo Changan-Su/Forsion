@@ -127,13 +127,57 @@ describe('Amadeus note view memory', () => {
     expect(readNotePageStyle(to, rel).wide).toBe(true)
     expect(recallViewport(noteMemoryId(to, rel))).toEqual(vp)
     expect(data.get(FOLD_PREFIX + noteMemoryId(to, rel))).toBe('["h1:Title#0"]')
-    expect(readNoteCaret(from, rel)).toBeNull()
-    expect(recallViewport(noteMemoryId(from, rel))).toBeUndefined()
+    expect(readNoteCaret(from, rel)).toEqual(caret)
+    expect(recallViewport(noteMemoryId(from, rel))).toEqual(vp)
     expect(readNoteSurfaceMode(from, 'conflict.md')).toBe('canvas')
     expect(readNoteSurfaceMode(to, 'conflict.md')).toBe('doc')
     expect(readDocumentScroll(from, 'conflict.md')).toBe(500)
     expect(readDocumentScroll(to, 'conflict.md')).toBe(130)
     flushNoteViews()
+  })
+
+  it('keeps 300 migrated live positions and their sources after the next scroll flush', async () => {
+    vi.resetModules()
+    const memory = await import('./viewMemory')
+    const from = 'cloud://vault/vault:Amadeus/Bulk/'
+    const to = 'cloud://bulk'
+    const source = Object.fromEntries(Array.from({ length: 300 }, (_, n) =>
+      [memory.noteMemoryId(from, `${n}.md`), { s: n + 1, u: n + 1 }]))
+    data.set('amx.noteView.v1', JSON.stringify(source))
+    memory.migrateNoteMemoryRoot(from, to)
+    memory.writeDocumentScroll(to, '0.md', 999)
+    memory.flushNoteViews()
+    vi.resetModules()
+    const reopened = await import('./viewMemory')
+    expect(reopened.readDocumentScroll(to, '0.md')).toBe(999)
+    expect(Array.from({ length: 299 }, (_, n) => reopened.readDocumentScroll(to, `${n + 1}.md`))).toEqual(
+      Array.from({ length: 299 }, (_, n) => n + 2))
+    expect(JSON.parse(data.get('amx.noteView.v1')!)).toEqual(source)
+  })
+
+  it('copies positions without replacing another tab’s shared view table update', async () => {
+    vi.resetModules()
+    const memory = await import('./viewMemory')
+    const from = 'cloud://vault/vault:Amadeus/Views/'
+    const to = 'cloud://views'
+    const id = memory.noteMemoryId(from, 'a.md')
+    const unrelated = memory.noteMemoryId('/other', 'other.md')
+    const initial = { [id]: { s: 50, u: 1 } }
+    const newer = { ...initial, [unrelated]: { c: { a: 5, h: 6, t: 'updated' }, u: 2 } }
+    data.set('amx.noteView.v1', JSON.stringify(initial))
+    const getItem = localStorage.getItem
+    let concurrentWrite = false
+    localStorage.getItem = (key) => {
+      const value = getItem(key)
+      if (key === 'amx.noteView.v1' && !concurrentWrite) {
+        concurrentWrite = true
+        data.set(key, JSON.stringify(newer))
+      }
+      return value
+    }
+    memory.migrateNoteMemoryRoot(from, to)
+    expect(JSON.parse(data.get('amx.noteView.v1')!)).toEqual(newer)
+    expect(memory.readDocumentScroll(to, 'a.md')).toBe(50)
   })
 
   it('keeps invalid note records and a corrupt view table in place', () => {

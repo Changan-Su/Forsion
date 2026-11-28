@@ -96,6 +96,7 @@ beforeEach(() => {
     const p = url.pathname
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : {}
+    if (url.pathname.endsWith('/libraries')) return Response.json({}, { status: 404 })
     if (p.endsWith('/vaults')) return json({ vaults: [{ id: 'v1' }] })
     if (p.endsWith('/tree')) {
       trees++

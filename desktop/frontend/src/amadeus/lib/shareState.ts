@@ -7,6 +7,7 @@ export interface PublishRow {
   mode: string // 'page' | 'subtree'
   path: string
   createdAt?: string
+  vaultId?: string
 }
 
 export type PublishState =
@@ -25,10 +26,12 @@ export function publishCovers(pub: PublishRow, path: string): boolean {
 
 /** page 的发布态:直接发布 / 被祖先(文件夹 subtree 或父页 .fd)覆盖 / 未发布。
  *  直接 = 任何 root 恰为本页的发布(优先);否则取第一条覆盖本页的祖先发布。 */
-export function publishStateFor(path: string, publishes: PublishRow[]): PublishState {
-  const direct = publishes.find((p) => p.path === path)
+export function publishStateFor(path: string, publishes: PublishRow[], target?: { vaultId: string; path: string }): PublishState {
+  const wirePath = target?.path ?? path
+  const inVault = (row: PublishRow): boolean => !target || row.vaultId === target.vaultId
+  const direct = publishes.find((p) => inVault(p) && p.path === wirePath)
   if (direct) return { kind: 'direct', token: direct.token }
-  const anc = publishes.find((p) => publishCovers(p, path))
+  const anc = publishes.find((p) => inVault(p) && publishCovers(p, wirePath))
   if (anc) return { kind: 'inherited', via: anc.path, viaMode: anc.mode === 'subtree' ? 'subtree' : 'page', token: anc.token }
   return { kind: 'none' }
 }

@@ -159,25 +159,36 @@ const test = async (name, fn) => {
     assert.deepEqual([...fs.files], snapshot)
     state.root = newRoot
     assert.equal(await call({ op: 'readText', vault: newRoot, path: 'nested/file.txt' }), 'queued')
-    assert.equal(text(fs, `${from}/nested/file.txt`), undefined)
+    assert.equal(text(fs, `${from}/nested/file.txt`), 'queued')
     assert.equal(text(fs, `${from}/collision.txt`), 'old')
     assert.equal(text(fs, `${to}/collision.txt`), 'new')
     assert.equal(text(fs, `${ROOT}/app.txt`), 'app')
     assert.equal(text(fs, unrelated), 'local')
+    await call({ op: 'remove', vault: newRoot, path: 'collision.txt' })
+    await call({ op: 'remove', vault: newRoot, path: 'nested/file.txt' })
+    await host.migrateVaultRoot(oldRoot, newRoot)
+    assert.equal(await call({ op: 'readText', vault: newRoot, path: 'collision.txt' }), null)
+    assert.equal(await call({ op: 'readText', vault: newRoot, path: 'nested/file.txt' }), null)
   })
 
   await test('分库遇到读取、目标状态或换名失败时保留原件，下次可重试', async () => {
     const oldRoot = 'cloud://vault/vault:Amadeus/Work/'
     const newRoot = 'cloud://split'
-    const { fs, host } = setup({ root: oldRoot })
+    const { fs, host, state, call } = setup({ root: oldRoot })
     const from = `${ROOT}/vaults/${storageVaultKey(oldRoot)}`
     const to = `${ROOT}/vaults/${storageVaultKey(newRoot)}`
     const paths = ['read.txt', 'stat.txt', 'rename.txt']
     for (const p of paths) await put(fs, `${from}/${p}`, p)
+    host.pauseVaultMigration(newRoot)
+    state.root = newRoot
+    await assert.rejects(call({ op: 'readText', vault: newRoot, path: 'read.txt' }), /Vault changed/)
     fs.failRead.add(`${from}/read.txt`)
     fs.failStat.add(`${to}/stat.txt`)
     fs.renameHook = (_, dest) => dest === `${to}/rename.txt`
-    await host.migrateVaultRoot(oldRoot, newRoot)
+    await assert.rejects(host.migrateVaultRoot(oldRoot, newRoot))
+    state.root = newRoot
+    await assert.rejects(call({ op: 'readText', vault: newRoot, path: 'read.txt' }), /Vault changed/)
+    await assert.rejects(call({ op: 'write', vault: newRoot, path: 'read.txt', data: 'default' }), /Vault changed/)
     for (const p of paths) {
       assert.equal(text(fs, `${from}/${p}`), p)
       assert.equal(text(fs, `${to}/${p}`), undefined)
@@ -188,9 +199,29 @@ const test = async (name, fn) => {
     fs.renameHook = null
     await host.migrateVaultRoot(oldRoot, newRoot)
     for (const p of paths) {
-      assert.equal(text(fs, `${from}/${p}`), undefined)
+      assert.equal(text(fs, `${from}/${p}`), p)
       assert.equal(text(fs, `${to}/${p}`), p)
     }
+  })
+
+  await test('分库开始前的首次插件写入完成后才枚举目录', async () => {
+    const oldRoot = 'cloud://vault/vault:Amadeus/Notes/'
+    const newRoot = 'cloud://split'
+    let release
+    const waiting = new Promise((resolve) => { release = resolve })
+    const { fs, state, host, call } = setup({ root: oldRoot, vaultRoot: async (state) => {
+      await waiting
+      return state.root
+    } })
+    const first = call({ op: 'write', vault: oldRoot, path: 'prefs.json', data: 'first write' })
+    const moving = host.migrateVaultRoot(oldRoot, newRoot)
+    assert.deepEqual([...fs.files], [])
+    release()
+    await first
+    await moving
+    state.root = newRoot
+    assert.equal(await call({ op: 'readText', vault: newRoot, path: 'prefs.json' }), 'first write')
+    assert.equal(text(fs, `${ROOT}/vaults/${storageVaultKey(oldRoot)}/prefs.json`), 'first write')
   })
 
   await test('越界路径一律拒(..、`/` / `\\` 开头、盘符、空、NUL),跟应用那一层不许写 vaults/;坏插件 id 拒', async () => {

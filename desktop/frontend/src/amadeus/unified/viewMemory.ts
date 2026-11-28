@@ -7,7 +7,7 @@
 
 import { forgetViewport, migrateViewportKeys, recallViewport, rememberViewport } from './canvasKit/viewport'
 import { legacyWinRel } from '../lib/vaultFiles'
-import { localStorageKeys, moveLocalStorageEntry } from '../lib/localStorageMigration'
+import { localStorageKeys, NOTE_VIEW_LIMIT, rootMigration, type RootMigration } from '../lib/localStorageMigration'
 
 export type NoteSurfaceMode = 'doc' | 'canvas'
 
@@ -38,7 +38,7 @@ export function writeNoteSurfaceMode(vaultRoot: string | null | undefined, path:
 
 export function readDocumentScroll(vaultRoot: string | null | undefined, path: string): number {
   const id = noteMemoryId(vaultRoot, path)
-  return docScroll.get(id) ?? live(views()[id])?.s ?? 0
+  return docScroll.get(id) ?? live(viewOf(id))?.s ?? 0
 }
 
 export function writeDocumentScroll(vaultRoot: string | null | undefined, path: string, top: number): void {
@@ -65,7 +65,8 @@ export interface NoteCaret {
 }
 interface NoteView { s?: number; c?: NoteCaret; u: number; /** 删除标记(改名 / 移动搬走后留下) */ d?: 1 }
 const VIEW_KEY = 'amx.noteView.v1'
-const VIEW_CAP = 300
+const MIGRATED_VIEW_PREFIX = 'amx.noteView.migrated:'
+const pendingMigratedViews = new Map<string, NoteView>()
 let viewCache: Record<string, NoteView> | null = null
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -89,25 +90,50 @@ const live = (v: NoteView | undefined): NoteView | undefined => (v && !v.d ? v :
 /** 把盘上更新的条目(含别的窗口留下的删除标记)并进本窗缓存;本窗更新的留着等防抖落盘。 */
 function syncViews(): void {
   const mine = views()
-  for (const [id, v] of Object.entries(loadViews() ?? {})) if (!mine[id] || (mine[id].u ?? 0) < (v.u ?? 0)) mine[id] = v
+  for (const [id, v] of Object.entries(loadViews() ?? {})) if (!mine[id] || (mine[id].u ?? 0) < (v?.u ?? 0)) mine[id] = v
 }
 function persistViews(): void {
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null }
+  for (const [id, value] of pendingMigratedViews) {
+    const disk = loadMigratedView(id)
+    if (!disk) continue
+    try {
+      if (disk.u <= value.u) localStorage.setItem(MIGRATED_VIEW_PREFIX + id, JSON.stringify(value))
+      pendingMigratedViews.delete(id)
+    } catch { /* Keep the pending position on a failed write. */ }
+  }
   const mine = views()
   const merged = loadViews()
   if (!merged) return
   for (const [id, v] of Object.entries(mine)) if (!merged[id] || (merged[id].u ?? 0) <= v.u) merged[id] = v
-  const ids = Object.keys(merged)
-  if (ids.length > VIEW_CAP) {
-    ids.sort((x, y) => (merged[y].u ?? 0) - (merged[x].u ?? 0))
-    for (const id of ids.slice(VIEW_CAP)) delete merged[id]
-  }
+  const ids = Object.keys(merged).sort((x, y) => (merged[y]?.u ?? 0) - (merged[x]?.u ?? 0))
+  const liveIds = ids.filter((id) => merged[id]?.d !== 1)
+  const tombstones = ids.filter((id) => merged[id]?.d === 1)
+  for (const id of [...liveIds.slice(NOTE_VIEW_LIMIT), ...tombstones.slice(NOTE_VIEW_LIMIT)]) delete merged[id]
   viewCache = merged
   try { localStorage.setItem(VIEW_KEY, JSON.stringify(merged)) } catch { /* 私有模式 / 配额:本次会话的进程内记忆仍然有效 */ }
 }
+/** Migrated positions use independent keys. Copying a library never rewrites the shared view table. */
+function loadMigratedView(id: string): NoteView | null | undefined {
+  try {
+    const raw = localStorage.getItem(MIGRATED_VIEW_PREFIX + id)
+    if (raw === null) return null
+    const v = JSON.parse(raw) as NoteView
+    return isStoredNoteView(v) || v?.d === 1 ? v : undefined
+  } catch { return undefined }
+}
+
+function viewOf(id: string): NoteView | undefined {
+  return pendingMigratedViews.get(id) ?? views()[id] ?? loadMigratedView(id) ?? undefined
+}
+
+function storeView(id: string, value: NoteView): void {
+  if (!(id in views()) && loadMigratedView(id) !== null) pendingMigratedViews.set(id, value)
+  else views()[id] = value
+}
+
 function touchView(id: string, patch: Partial<NoteView>): void {
-  const all = views()
-  all[id] = { ...live(all[id]), ...patch, u: Date.now() }
+  storeView(id, { ...live(viewOf(id)), ...patch, u: Date.now() })
   if (!persistTimer) persistTimer = setTimeout(persistViews, 500)
 }
 if (typeof window !== 'undefined') {
@@ -124,7 +150,7 @@ export function flushNoteViews(): void {
 }
 
 export function readNoteCaret(vaultRoot: string | null | undefined, path: string): NoteCaret | null {
-  const c = live(views()[noteMemoryId(vaultRoot, path)])?.c
+  const c = live(viewOf(noteMemoryId(vaultRoot, path)))?.c
   return c && Number.isInteger(c.a) && Number.isInteger(c.h) && typeof c.t === 'string' ? c : null
 }
 
@@ -148,12 +174,12 @@ export function remapNoteViewMemory(vaultRoot: string | null | undefined, oldPat
   }
   // 滚动 / 光标表:先并进盘上的(别的窗口可能刚写过这一篇),搬到新键,旧键换成删除标记,**当场**读盘 → 合并 → 写回。
   syncViews()
-  const kept = live(views()[oldId])
+  const kept = live(viewOf(oldId))
   if (kept) {
     const { u: _u, d: _d, ...carry } = kept
     touchView(newId, carry)
   }
-  views()[oldId] = { d: 1, u: Date.now() }
+  storeView(oldId, { d: 1, u: Date.now() })
   persistViews()
   const vp = recallViewport(oldId) // 画布视口(会话级,键同口径;V-15)
   if (vp) {
@@ -311,14 +337,14 @@ function isStoredNoteView(v: NoteView | undefined): boolean {
   })
 }
 
-/** Move per-note memory before an editor mounts on the new library root. */
-export function migrateNoteMemoryRoot(from: string, to: string): void {
+/** Copy per-note memory before an editor mounts on the new library root. */
+export function migrateNoteMemoryRoot(from: string, to: string, pathPrefix = '', migration: RootMigration = rootMigration(to)): void {
   if (from === to) return
   const remap = (id: string): string | null => {
     try {
       const pair: unknown = JSON.parse(id)
-      return Array.isArray(pair) && pair.length === 2 && pair[0] === from && typeof pair[1] === 'string'
-        ? noteMemoryId(to, pair[1]) : null
+      return Array.isArray(pair) && pair.length === 2 && pair[0] === from && typeof pair[1] === 'string' && pair[1].startsWith(pathPrefix) && pair[1].length > pathPrefix.length
+        ? noteMemoryId(to, pair[1].slice(pathPrefix.length)) : null
     } catch { return null }
   }
   const stores: Array<[string, (raw: string) => boolean]> = [
@@ -332,48 +358,39 @@ export function migrateNoteMemoryRoot(from: string, to: string): void {
     if (!store) continue
     const [prefix, isValid] = store
     const id = remap(key.slice(prefix.length))
-    if (id) moveLocalStorageEntry(key, prefix + id, isValid)
+    if (id) migration.copy(key, prefix + id, () => {
+      const raw = localStorage.getItem(key)
+      return raw !== null && isValid(raw) ? raw : null
+    })
   }
   migrateViewportKeys(remap)
-  migrateNoteViews(remap)
+  migrateNoteViews(remap, migration)
 }
 
-function migrateNoteViews(remap: (id: string) => string | null): void {
-  let raw: string | null
-  let disk: Record<string, NoteView> | null
-  try {
-    raw = localStorage.getItem(VIEW_KEY)
-    disk = parseViews(raw)
-  } catch { return }
+function migrateNoteViews(remap: (id: string) => string | null, migration: RootMigration): void {
+  const disk = loadViews()
   if (!disk) return
-  const sources = { ...disk }
-  for (const [id, value] of Object.entries(viewCache ?? {})) {
-    if (!(id in sources) || ((isStoredNoteView(sources[id]) || sources[id]?.d === 1) && value.u > sources[id].u)) sources[id] = value
+  const ids = new Set([...Object.keys(disk), ...Object.keys(viewCache ?? {}), ...pendingMigratedViews.keys()])
+  for (const key of localStorageKeys()) {
+    if (key.startsWith(MIGRATED_VIEW_PREFIX)) ids.add(key.slice(MIGRATED_VIEW_PREFIX.length))
   }
-  const moved: Array<[string, string]> = []
-  for (const [id, value] of Object.entries(sources)) {
+  for (const id of ids) {
     const next = remap(id)
-    if (!next || next in sources || docScroll.has(next) || !isStoredNoteView(value)) continue
-    disk[next] = value
-    // A stale window may still hold the original view in memory. Keep the same tombstone used by path moves.
-    disk[id] = { d: 1, u: Math.max(Date.now(), value.u + 1) }
-    moved.push([id, next])
-  }
-  if (!moved.length) return
-  try {
-    if (localStorage.getItem(VIEW_KEY) !== raw) return
-    localStorage.setItem(VIEW_KEY, JSON.stringify(disk))
-  } catch { return }
-  for (const [id, next] of moved) {
-    if (viewCache) {
-      viewCache[next] = disk[next]
-      viewCache[id] = disk[id]
-    }
-    const scroll = docScroll.get(id)
-    if (scroll !== undefined) {
-      docScroll.set(next, scroll)
-      docScroll.delete(id)
-    }
+    if (!next) continue
+    const key = MIGRATED_VIEW_PREFIX + id
+    const dest = MIGRATED_VIEW_PREFIX + next
+    migration.copy(key, dest, () => {
+      const migrated = loadMigratedView(id)
+      if (migrated === undefined) return null
+      const cached = pendingMigratedViews.get(id) ?? viewCache?.[id]
+      const stored = migrated ?? disk[id]
+      const value = !stored || (isStoredNoteView(stored) && cached && cached.u > stored.u) ? cached : stored
+      return isStoredNoteView(value) ? JSON.stringify(value) : null
+    }, () => {
+      const current = parseViews(localStorage.getItem(VIEW_KEY))
+      if (!current) throw new Error('Invalid note view storage')
+      return next in current || next in (viewCache ?? {}) || docScroll.has(next) || pendingMigratedViews.has(next)
+    })
   }
 }
 

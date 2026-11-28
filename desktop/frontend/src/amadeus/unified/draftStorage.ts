@@ -1,6 +1,6 @@
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { legacyWinRel } from '../lib/vaultFiles'
-import { localStorageKeys, moveLocalStorageEntry } from '../lib/localStorageMigration'
+import { localStorageKeys, rootMigration, type RootMigration } from '../lib/localStorageMigration'
 
 export interface UnsavedDraft {
   text: string
@@ -107,13 +107,17 @@ export function clearDraft(vaultRoot: string | null | undefined, path: string, o
   } catch { /* 同 stashDraft */ }
 }
 
-/** Preserve the relative path and slot exactly when the whole cloud library moves. */
-export function migrateDraftRoot(from: string, to: string): void {
+/** Copy matching paths and slots, preserving the source as a recovery copy. */
+export function migrateDraftRoot(from: string, to: string, pathPrefix = '', migration: RootMigration = rootMigration(to)): void {
   if (from === to) return
-  const prefix = draftBase(from, '')
+  const prefix = draftBase(from, pathPrefix)
   for (const key of localStorageKeys()) {
     if (!key.startsWith(prefix)) continue
     const suffix = key.slice(prefix.length)
-    moveLocalStorageEntry(key, draftBase(to, suffix), (raw) => parseDraft(raw, null) !== null)
+    if (!suffix) continue
+    migration.copy(key, draftBase(to, suffix), () => {
+      const raw = localStorage.getItem(key)
+      return raw !== null && parseDraft(raw, null) ? raw : null
+    })
   }
 }

@@ -31,7 +31,6 @@ export function migrateViewportKeys(remap: (key: string) => string | null): void
     const next = remap(key)
     if (!next || viewports.has(next)) continue
     viewports.set(next, viewport)
-    viewports.delete(key)
   }
 }
 
