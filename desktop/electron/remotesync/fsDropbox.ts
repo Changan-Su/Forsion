@@ -14,6 +14,15 @@
 import { createHash, randomBytes } from 'node:crypto'
 import http from 'node:http'
 import type { RemoteEntity, RemoteFs } from './types'
+import { defineMainMessages, mt } from '../mainI18n'
+
+// 回调口回给浏览器的页面文案(取当时的界面语言)
+defineMainMessages({
+  'main.remotesync.authPageStale': {
+    zh: 'Forsion：这个授权页已过期，请用最新打开的那个。',
+    en: 'Forsion: this authorization page is out of date. Use the latest one.',
+  },
+})
 
 export interface DropboxConfig {
   /** Dropbox App Key(client_id;PKCE 无 secret)。 */
@@ -126,7 +135,7 @@ export function dropboxCallbackServer(
       // 缺省不开 = 旧设置页的行为一字不变
       if (opts.ignoreStateMismatch && 'error' in r && r.error === 'state-mismatch') {
         res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end(page('Forsion:这个授权页已过期,请用最新打开的那个 / This authorization page is out of date. Use the latest one.'))
+        res.end(page(mt('main.remotesync.authPageStale')))
         return
       }
       res.writeHead('code' in r ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8' })
