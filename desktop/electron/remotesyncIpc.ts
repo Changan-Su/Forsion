@@ -3,7 +3,7 @@
  * 配置持久化(userData/remotesync[.dev].json)+ 定时调度 + IPC + 同步根解析。
  *
  * 边界约定(见 remotesync/README.md):
- *  - 同步根 = Amadeus 本地库(localVault);云镜像目录一律拒绝(那是云端模式引擎的管辖);
+ *  - 同步根 = Amadeus 钉住的库(syncVault),未钉住时回落到本机库;云镜像目录一律拒绝;
  *  - 按条目云同步(entrySync)绑定的路径自动加入忽略 —— 双引擎不许抢管辖同一批文件;
  *  - 本地删除注入系统回收站(shell.trashItem),兜底 fs.rm。
  */
@@ -660,6 +660,23 @@ function legacyGate(): LegacyGate {
     log: (m) => console.warn(m),
   })
   return gate
+}
+
+/** 封口和归档都早于 Extend 接手完成。没有完成信号时，只允许没有旧同步配置或历史痕迹的设备挪钉子。 */
+export async function withUnusedLegacyRemoteSync<T>(work: () => Promise<T>): Promise<T | 'legacy-remotesync-not-paused'> {
+  const result = await legacyGate().exclusiveIfUnused(() => inConfigQueue(async () => {
+    try {
+      const stored = await syncTargetsStore.read()
+      if (stored.legacy || Object.values(stored.targets).some((target) => target.source?.startsWith('remotesync:'))) return undefined
+      const file = path.basename(configFile())
+      const files = await fs.readdir(app.getPath('userData'))
+      if (files.some((name) => name === file || name.startsWith(`${file}.`) || name === 'remotesync-state')) return undefined
+    } catch {
+      return undefined // 无法确认没有旧配置或旧基线
+    }
+    return work()
+  }))
+  return result ?? 'legacy-remotesync-not-paused'
 }
 
 /** 接手归档要挪的基线:remotesync-state/ 里**这个根 × 这个指纹**那份(runNow 的文件名 = hash8(根|指纹).json)。

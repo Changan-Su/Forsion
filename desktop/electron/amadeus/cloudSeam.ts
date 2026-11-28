@@ -21,7 +21,7 @@ export interface AmadeusSyncHostDeps {
   readConfig(accountId?: string | null): Promise<AmadeusConfig>
   writeConfig(patch: Partial<AmadeusConfig>, accountId?: string | null): Promise<void>
   updateConfig(update: (config: AmadeusConfig) => boolean | void | Promise<boolean | void>, accountId?: string | null): Promise<AmadeusConfig>
-  /** 收养 2.9.9 前无主绑定;renameShadow 由 Extend 提供(shadow 文件住在 Extend)。 */
+  /** 收养 2.9.9 前无主绑定;宿主先核旧 shadow 身份，Extend 的 renameShadow 保留已有的账号基线。 */
   adoptLegacyCloudState(accountId: string | null, renameShadow: (from: string, to: string) => Promise<unknown>): Promise<boolean>
   // 云目录(与宿主 restoreVault / 远程同步根校验同一份实现:cloudPaths.ts)
   cloudVaultDir(accountId?: string | null): string
