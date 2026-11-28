@@ -11,7 +11,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
-import { OverlayAt, accountMenuRows, openPanel, nativeSheetPresenter, runNativeSheetMenu, type Droplet, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { OverlayAt, accountMenuRows, openPanel, nativeSheetPresenter, rectAnchor, runNativeSheetMenu, type Droplet, type SheetMenuItem, type SheetMenuSection, type TextAnchor } from '@lcl/engine'
 import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Backpack, Gift } from 'lucide-react'
 import type { AuthAccountInfo, AuthStatusInfo } from '../types'
 import { registerMessages, useI18n } from '../i18n'
@@ -89,7 +89,7 @@ export const AccountCard: React.FC<{
   const [auth, setAuth] = useState<AuthStatusInfo | null>(null)
   const [loggingIn, setLoggingIn] = useState(false)
   const [imgError, setImgError] = useState(false)
-  const [menu, setMenu] = useState<{ x: number; y: number; anchorTop: number } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; anchorTop: number; anchor: TextAnchor; anchorEl: HTMLElement } | null>(null)
   const [quota, setQuota] = useState<AccountQuotaView | null>(null)
   const [quotaErr, setQuotaErr] = useState(false)
   const [rewards, setRewards] = useState<AccountRewards>(emptyAccountRewards)
@@ -229,7 +229,8 @@ export const AccountCard: React.FC<{
     // 往哪边开、高度封多少都交给 OverlayAt(下面 menuEl):先试锚点下方,放不下翻到上方 —— 侧栏底部的账号卡往上开,
     // Chat 头像资料卡里点「账号」(锚在消息头像上)锚在顶上时往下开。别在这里自己拿窗口高度算(overlayPlacement.guard)。
     // 原来一律往上开、Unit 段高度按锚点上方算:锚在顶上时只剩几十 px,菜单被压扁、各行叠在一起。
-    setMenu({ x: r.left, y: r.bottom + 4, anchorTop: r.top })
+    // 锚点每次现量(rectAnchor):开着菜单缩放 / 拉高窗口时头像会挪,按打开那一刻的快照重算会翻到下方压住挪过去的头像(Codex 评审)。
+    setMenu({ x: r.left, y: r.bottom + 4, anchorTop: r.top, anchor: rectAnchor(el, () => el.getBoundingClientRect()), anchorEl: el })
     setQuotaOpen(false) // 同 09-28 前:每次打开从收起的一行摘要起步
     setConfirmCard(false)
     setQuotaErr(false)
@@ -263,6 +264,17 @@ export const AccountCard: React.FC<{
     void d.retract().then(() => { if (drop.current === d) setMenu(null) })
   }
   const menuOpen = !!menu
+  // 这一次的锚点随菜单关掉 / 换锚点一起作废(监听由 OverlayAt 退订时就摘了,这里只是不让旧对象再被读)。
+  // 锚点那个节点没了(开着菜单用键盘切 Ribbon 展开态、设备页换成远程面、Chat 里那条消息被移除)→ 直接收起:
+  // 不然面板只是藏起来(data-anchor-hidden),菜单还算开着,点新头像的第一下只会把它关掉(Codex 评审)。
+  // 只是滚出可见区不收:那是 OverlayAt 跟随的「藏起、回来原样出现」。
+  const menuAnchorObj = menu?.anchor
+  const menuAnchorEl = menu?.anchorEl
+  useEffect(() => {
+    if (!menuAnchorObj || !menuAnchorEl) return
+    const off = menuAnchorObj.subscribe(() => { if (!menuAnchorEl.isConnected) setMenu((m) => (m?.anchor === menuAnchorObj ? null : m)) })
+    return () => { off(); menuAnchorObj.dispose() }
+  }, [menuAnchorObj, menuAnchorEl])
   // 匿名遥测 v3:头像菜单里的额度详情展开 = 额度提示露出一次(展开 / 收起来回点各算一次;同一次展开里重渲染不算)
   const quotaShown = menuOpen && quotaOpen
   useEffect(() => { if (quotaShown) quotaPromptTelemetry('avatar-menu', 'shown') }, [quotaShown])
@@ -630,6 +642,8 @@ export const AccountCard: React.FC<{
       x={menu.x}
       y={menu.y}
       anchorTop={menu.anchorTop}
+      anchor={menu.anchor}
+      gap={4}
       prefer="below"
       boundary={units ? document.documentElement : undefined}
       margin={8}

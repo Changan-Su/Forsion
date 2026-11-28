@@ -67,7 +67,9 @@ export function clampMenu(
   let hi = Math.min(vw, boundRight ?? vw)
   if (hi - lo < w + 2 * margin) { lo = 0; hi = vw }
   const left = Math.max(lo + margin, Math.min(center ? x - w / 2 : alignEnd ? x - w : x, hi - w - margin))
-  const fits = (t: number): boolean => t >= margin && t + h <= vh - margin
+  // 半像素容差:h 常是「那一侧的可用高度」本身(useClampedMenu 带 boundary 时按它封顶),两边各自做加减会差出 1e-13,
+  // 严格比较就判成两侧都放不下、掉进下面的夹取 —— 夹在首选侧,压住锚点(账号面板 110% 缩放下实测,Codex 评审)
+  const fits = (t: number): boolean => t >= margin - 0.5 && t + h <= vh - margin + 0.5
   const below = y
   const above = anchorTop - h
   const order = prefer === 'above' ? [above, below] : [below, above]
@@ -236,11 +238,13 @@ export function useClampedMenu(xOpt: number, yOpt: number, opts: AnchorOpts & Fo
       const bottom = Math.min(window.innerHeight, rect?.bottom ?? window.innerHeight)
       const vw = Math.max(0, right - left), vh = Math.max(0, bottom - top)
       const availableWidth = Math.max(0, vw - 2 * margin)
-      const maxHeight = boundary
-        ? Math.max(0, Math.min(vh - 2 * margin, Math.max((anchorTop ?? y) - top - margin, bottom - y - margin))) / z
+      // 上限先留在视口 px 里比:除以 z 再乘回来会多出浮点尾数,offsetHeight 又是取整的 —— 都会让「刚好放得下」判成放不下
+      const maxHeightV = boundary
+        ? Math.max(0, Math.min(vh - 2 * margin, Math.max((anchorTop ?? y) - top - margin, bottom - y - margin)))
         : undefined
+      const maxHeight = maxHeightV === undefined ? undefined : maxHeightV / z
       const wV = Math.min(el.offsetWidth * z, availableWidth)
-      const hV = Math.min(el.offsetHeight * z, maxHeight === undefined ? Infinity : maxHeight * z)
+      const hV = Math.min(el.offsetHeight * z, maxHeightV ?? Infinity)
       const place = { anchorTop: anchorTop === undefined ? undefined : anchorTop - top, prefer, flip, center, alignEnd, margin, boundLeft: bL === undefined ? undefined : bL - left, boundRight: bR === undefined ? undefined : bR - left }
       const v = clampMenu(x - left, y - top, wV, hV, vw, vh, place)
       // keep:按钉住那一截的高度贴锚点,其余往远离锚点的一侧长(⋯ 展开时那一行不跳,方案 B §7.5)
