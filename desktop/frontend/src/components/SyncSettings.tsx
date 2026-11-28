@@ -239,6 +239,9 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   authRef.current = auth
   const sumRef = useRef<HTMLDivElement>(null)
   const reqRef = useRef(0) // 预演请求号:晚回来的旧回包不再替换当前的卡(Codex P1-4)
+  // 回包到了再按此刻的绑定判占着的那条能不能停(useCallback 的闭包里那份 data 可能是旧的,Codex 第五轮 P1)
+  const dataRef = useRef(data)
+  dataRef.current = data
 
   useEffect(() => { ensureVaultSyncSubscribed(); if (!data.device?.name) void deviceName().then(setDevice) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const deviceLabel = data.device?.name || device
@@ -312,7 +315,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       }
     }
     setPending(null)
-    say(p.root, crossKindError(p, err, t, r.ok ? undefined : withHolder(data, r.inUseBy)))
+    say(p.root, crossKindError(p, err, t, r.ok ? undefined : withHolder(dataRef.current, r.inUseBy)))
     return false
   }, [t])
 
@@ -465,7 +468,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     // 成功不另起一行提示:行里的状态就会变成「同步中…」,提示留着反倒在同步完以后还挂着
     if (r.ok) say(p.root, null)
     else {
-      const text = crossKindError(p, r.error, t, withHolder(data, r.inUseBy))
+      const text = crossKindError(p, r.error, t, withHolder(dataRef.current, r.inUseBy))
       say(p.root, k4 ? `${text} ${t('ssync.err.moveHalf')}` : text)
     }
     refreshVaultSync()
@@ -525,10 +528,10 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
               const b = bindingOf(r.root)
               if (!on) {
                 if (pending?.root === r.root) { ++reqRef.current; setPending(null) }
-                if (b) { const res = await vaultSync.setEnabled(b.id, false); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, withHolder(data, res.inUseBy))); refreshVaultSync(); await reload() }
+                if (b) { const res = await vaultSync.setEnabled(b.id, false); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, withHolder(dataRef.current, res.inUseBy))); refreshVaultSync(); await reload() }
                 return
               }
-              if (b) { const res = await vaultSync.setEnabled(b.id, true); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, withHolder(data, res.inUseBy))); await reload(); return }
+              if (b) { const res = await vaultSync.setEnabled(b.id, true); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, withHolder(dataRef.current, res.inUseBy))); await reload(); return }
               await startOpen(r.root, r.name, { mode: 'all' }, [])
             }}
             onScope={(b, next, added) => void changeScope(b, next, added)}
@@ -544,7 +547,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
             onNewVault={(b) => void (async () => {
               // 改名后「当成新库上云」:引擎回 next: preview → 按新文件夹名预演一个新库,汇总卡确认了才建、换过去(旧库原样留着)
               const res = await vaultSync.renameAnswer(b.id, 'newVault')
-              if (!res.ok) { say(r.root, syncErrorText(res.error, t, r.name, withHolder(data, res.inUseBy))); return }
+              if (!res.ok) { say(r.root, syncErrorText(res.error, t, r.name, withHolder(dataRef.current, res.inUseBy))); return }
               await runPreview({ root: b.root, name: r.name, kind: 'new', bindingId: b.id, target: { kind: 'penzor', candidate: CREATE_CANDIDATE }, scope: b.scope, added: [], preview: null })
             })()}
             reload={reload} say={(text) => say(r.root, text)} onRecovery={() => setRecKey((k) => k + 1)} />
@@ -773,7 +776,7 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
             const r = await vaultSync.takeoverRevert(row.root, take.source)
             const code = r.ok ? '' : (/([a-z][a-z0-9_]+)\s*$/.exec(r.error)?.[1] ?? r.error)
             // 封着的 D 点退回会被拒,码就是 reason 本身(H):照「为什么封着、怎么解开」说
-            say(r.ok ? null : take.source === 'remotesync' && D_HOLD.has(code) ? dHoldText({ ...take, reason: code as TakeoverHoldReason }, dArchived, t, data) : syncErrorText(r.error, t, row.name, withHolder(data, r.inUseBy)))
+            say(r.ok ? null : take.source === 'remotesync' && D_HOLD.has(code) ? dHoldText({ ...take, reason: code as TakeoverHoldReason, inUseBy: r.inUseBy ?? (code === take.reason ? take.inUseBy : undefined) }, dArchived, t, data) : syncErrorText(r.error, t, row.name, withHolder(data, r.inUseBy)))
             await reload()
           })()}>{t('ssync.act.revert')}</button>}
         </div>

@@ -21,7 +21,11 @@ export function syncErrorText(err: string, t: T, name = '', inUseBy?: { name: st
   if (code === 'legacy_rename_unavailable') return t('ssync.act.renameCloudLegacy')
   if (code === 'target-location-changed') return t('ssync.targetChanged')
   if (code === 'takeover_in_progress') return t('ssync.err.takeoverBusy')
+  // 退回(契约 H-14):在途那一轮先跑完;接手已完成不能退;旧同步的配置读不了 / 它的库文件夹找不到时不知道封口归谁,拒绝
   if (code === 'takeover_round_running') return t('ssync.err.takeoverRoundRunning')
+  if (code === 'nothing_to_revert') return t('ssync.err.nothingToRevert')
+  if (code === 'legacy_config_unreadable') return t('ssync.err.legacyConfigUnreadable')
+  if (code === 'legacy_root_unavailable') return t('ssync.err.legacyRootUnavailable')
   if (code === 'binding_not_found') return t('ssync.err.bindingGone')
   if (code === 'deletes_changed') return t('ssync.err.deletesChanged')
   if (code === 'binding_not_running') return t('ssync.err.notRunning')

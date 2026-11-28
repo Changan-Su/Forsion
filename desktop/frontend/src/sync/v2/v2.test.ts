@@ -215,7 +215,11 @@ describe('Codex 评审返修(第 2 步 U)', () => {
     const tk = syncErrorText('remote_dir_in_use', t, '研究笔记', { name: '归档', takeover: true })
     expect(tk).toBe(t('ssync.err.remoteDirInUseTakeover', { name: '归档' }))
     expect(tk).not.toContain('停止同步')
-    expect(syncErrorText('takeover_round_running', t)).toBe(t('ssync.err.takeoverRoundRunning'))
+    // 退回的拒绝码(契约 H-14)
+    for (const [code, key] of [['takeover_round_running', 'ssync.err.takeoverRoundRunning'], ['nothing_to_revert', 'ssync.err.nothingToRevert'], ['legacy_config_unreadable', 'ssync.err.legacyConfigUnreadable'], ['legacy_root_unavailable', 'ssync.err.legacyRootUnavailable']] as const) {
+      expect(syncErrorText(`Error invoking remote method 'vaultsync:takeoverRevert': Error: ${code}`, t)).toBe(t(key))
+      expect(t(key)).not.toBe(key)
+    }
     for (const k of ['ssync.reason.remote_dir_in_use_legacy', 'ssync.note.overlapsLegacyAnon']) expect(t(k)).not.toBe(k)
     for (const k of ['ssync.reason.remote_dir_in_use_takeover', 'ssync.note.overlapsLegacy', 'ssync.dhold.heldInUseTakeover', 'ssync.dhold.heldPrimaryTakeover', 'ssync.dhold.archivedInUseTakeover', 'ssync.dhold.archivedPrimaryTakeover']) {
       expect(t(k, { name: '归档' })).not.toBe(k)
