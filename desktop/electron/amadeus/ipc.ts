@@ -20,7 +20,7 @@ export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, looseConfigReadFailed, readConfig, readSyncOwnershipV2, updateConfig, updateLocalVaultConfig, writeConfig, type AmadeusConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, looseConfigReadFailed, quarantineCorruptConfig, readConfig, readSyncOwnershipV2, updateConfig, updateLocalVaultConfig, writeConfig, type AmadeusConfig } from './settings'
 import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
@@ -397,6 +397,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     if (listed) shell.showItemInFolder(listed.root)
   })
 
+  let bootRestoreDone = false // 只有启动那一下(第一次真去读配置的 restoreVault)才会把内容坏了的配置挪到一边
   handle(IPC.restoreVault, async (_e, reuseActive?: boolean) => {
     // A new View window shares the mounted vault. Do not switch the global root or restart its watcher.
     const root = reuseActive === true ? vault.getRoot() : null
@@ -404,8 +405,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       const [pages, folders] = await Promise.all([vault.listPages(), vault.listFolders()])
       return { root, pages, folders, strictExistingWrites: true }
     }
+    const atBoot = !bootRestoreDone
+    bootRestoreDone = true
     let { lastVault } = await readConfig()
     if (!lastVault && looseConfigReadFailed()) ({ lastVault } = await readConfig()) // 配置读失败过:再读一次盘
+    if (!lastVault && looseConfigReadFailed() && atBoot) {
+      // 启动时内容确定坏了(零字节 / 解析不了 / 不是对象):原样挪到一边、从空配置起;I/O 读不了的不挪,照旧拒绝
+      const moved = await quarantineCorruptConfig()
+      if (moved) console.warn(`[amadeus] config at startup was unreadable content; moved aside as ${moved}, starting from an empty config`)
+      ;({ lastVault } = await readConfig())
+    }
     if (!lastVault) {
       // 读不出 ≠ 首启:不拿默认库盖掉用户选过的库(写会重读,读得到就以真底稿为底写默认库)
       if (looseConfigReadFailed()) throw new Error('amadeus-config-unreadable')

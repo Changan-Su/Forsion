@@ -66,6 +66,9 @@ async function looseReadFails(cfg: unknown = accountConfig()) {
   return settings
 }
 
+/** 配置目录里被挪到一边的坏配置(<原文件名>.corrupt-<时间戳>)。 */
+const corruptCopies = async () => (await fs.readdir(env.root)).filter((f) => f.startsWith('amadeus-config.json.corrupt-')).sort()
+
 /** registerIpc 递给 Extend 工厂的那份 deps(真接线)。 */
 async function hostDeps() {
   const { registerIpc } = await import('./ipc')
@@ -266,17 +269,82 @@ describe('ordinary writes after a failed loose read take the strict base (Codex 
     expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8'))).toEqual(accountConfig())
     vi.restoreAllMocks(); vi.resetModules(); env.handlers.clear()
     await hostDeps()
-    failReads(2) // 两次都读不到:拒绝,不写默认库(写那一步会重读,第三次读得到就会以真底稿为底盖掉)
-    await expect(invoke(IPC.restoreVault)).rejects.toThrow()
+    failReads(2) // 前两次读不到、启动挪坏文件那一步读到的是好内容:不挪,打开原库
+    expect((await invoke(IPC.restoreVault)).root).toBe(vaultA)
+    vi.restoreAllMocks()
     expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8'))).toEqual(accountConfig())
+    expect(await corruptCopies()).toEqual([])
+    vi.resetModules(); env.handlers.clear()
+    await hostDeps()
+    failReads(50) // 一直读不到(I/O,文件可能是好的):拒绝,不挪、不写默认库
+    await expect(invoke(IPC.restoreVault)).rejects.toThrow()
+    vi.restoreAllMocks()
+    expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8'))).toEqual(accountConfig())
+    expect(await corruptCopies()).toEqual([])
   })
 
-  it('a config that stays unparseable is never overwritten: restoreVault refuses instead of writing the default vault over it', async () => {
-    await fs.writeFile(cfgFile(), '{"lastVault":')
+})
+
+describe('a config whose content is definitely broken at startup is moved aside, not overwritten (H, after Codex 12b round 1)', () => {
+  const invoke = (channel: string, ...args: unknown[]) => env.handlers.get(channel)!({ sender: { id: 1 } }, ...args)
+  const defaultRoot = () => path.join(env.root, 'workspace', 'Amadeus')
+
+  it('zero bytes / null / a list / a string / a number / truncated JSON: the first restoreVault renames it to .corrupt-<time> byte for byte, logs the name only, and starts from the default vault', async () => {
+    const { IPC } = await import('@amadeus-shared/ipc')
+    for (const text of ['', '   \n', 'null', '[]', '"x"', '7', '{"lastVault":"/x/Priv']) {
+      vi.restoreAllMocks(); vi.resetModules(); env.handlers.clear()
+      for (const f of await corruptCopies()) await fs.rm(path.join(env.root, f))
+      await fs.writeFile(cfgFile(), text)
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      await hostDeps()
+      const restored = await invoke(IPC.restoreVault)
+      expect(restored.root, JSON.stringify(text)).toBe(defaultRoot())
+      const copies = await corruptCopies()
+      expect(copies, JSON.stringify(text)).toHaveLength(1)
+      expect(copies[0]).toMatch(/^amadeus-config\.json\.corrupt-[0-9TZ-]+$/)
+      expect(await fs.readFile(path.join(env.root, copies[0]), 'utf8')).toBe(text) // 不改内容
+      expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8')).lastVault).toBe(defaultRoot())
+      const lines = warn.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes('.corrupt-'))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain(copies[0])
+      expect(lines[0]).not.toContain(env.root) // 只记文件名
+      if (text.includes('Priv')) expect(lines[0]).not.toContain('Priv') // 不打内容
+    }
+  })
+
+  it('a config the startup read cannot open (EISDIR: the file itself may be fine) is refused and nothing is moved', async () => {
+    await fs.mkdir(cfgFile())
     await hostDeps()
     const { IPC } = await import('@amadeus-shared/ipc')
     await expect(invoke(IPC.restoreVault)).rejects.toThrow()
+    expect((await fs.stat(cfgFile())).isDirectory()).toBe(true)
+    expect(await corruptCopies()).toEqual([])
+  })
+
+  it('a rename that fails is refused and the broken file stays where it was', async () => {
+    await fs.writeFile(cfgFile(), 'null')
+    await hostDeps()
+    const realRename = fs.rename.bind(fs) as (a: unknown, b: unknown) => Promise<void>
+    vi.spyOn(fs, 'rename').mockImplementation((async (from: unknown, to: unknown) => {
+      if (String(from) === cfgFile()) throw Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      return realRename(from, to)
+    }) as typeof fs.rename)
+    const { IPC } = await import('@amadeus-shared/ipc')
+    await expect(invoke(IPC.restoreVault)).rejects.toThrow()
+    expect(await fs.readFile(cfgFile(), 'utf8')).toBe('null')
+    expect(await corruptCopies()).toEqual([])
+  })
+
+  it('only the first restoreVault moves anything: broken content found later is refused and left in place', async () => {
+    await fs.mkdir(cfgFile()) // 启动那一下 I/O 读不了:拒绝
+    await hostDeps()
+    const { IPC } = await import('@amadeus-shared/ipc')
+    await expect(invoke(IPC.restoreVault)).rejects.toThrow()
+    await fs.rm(cfgFile(), { recursive: true })
+    await fs.writeFile(cfgFile(), '{"lastVault":') // 运行中才发现内容坏了:照旧拒绝,不挪
+    await expect(invoke(IPC.restoreVault)).rejects.toThrow()
     expect(await fs.readFile(cfgFile(), 'utf8')).toBe('{"lastVault":')
+    expect(await corruptCopies()).toEqual([])
   })
 })
 

@@ -388,6 +388,31 @@ export function writeActiveVault(next: OnlineVaultRef | null, assert?: () => voi
   return work
 }
 
+/** 内容确定坏了:零字节 / 只有空白、解析不了、顶层不是对象。 */
+const brokenContent = (raw: string): boolean => {
+  try { const v: unknown = JSON.parse(raw); return !v || typeof v !== 'object' || Array.isArray(v) } catch { return true }
+}
+
+/** 启动那一下(restoreVault 第一次读)用:配置文件**内容确定坏了**,就原样改名到同目录的 `<原文件名>.corrupt-<时间戳>`
+ *  (不删、不改内容),缓存按 ENOENT 换成空配置,调用方照首启建默认库(断电后零字节的用户不至于一直打不开库)。
+ *  I/O 读不了(EACCES / EIO / EISDIR…,文件可能是好的)、内容其实是好的、改名失败 → 什么都不动,回 null,调用方照旧拒绝。
+ *  回挪到的文件名(只有文件名)。和其他写同一条队列。 */
+export function quarantineCorruptConfig(): Promise<string | null> {
+  const work = writes.then(async () => {
+    await settleLoading()
+    const file = configFile()
+    let raw: string
+    try { raw = await fs.readFile(file, 'utf8') } catch { return null } // 读不了 / 没有:不是「内容坏了」
+    if (!brokenContent(raw)) return null
+    const to = `${file}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`
+    try { await fs.rename(file, to) } catch { return null }
+    commitCache({})
+    return path.basename(to)
+  })
+  writes = work.then(() => {}, () => {})
+  return work
+}
+
 /** 本机侧换库:update(switchPatch)和清 activeVault 同一次落盘(用户切回本机库 = 下次不再恢复在线库)。回是否清掉了一个在线库。 */
 export function updateLocalVaultConfig(update: (config: AmadeusConfig) => void, accountId = currentCloudAccountId()): Promise<boolean> {
   const work = writes.then(async () => {
