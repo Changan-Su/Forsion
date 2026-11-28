@@ -1,4 +1,4 @@
-import { contentSyncOwned, maskAmadeusConfig, type OwnershipRead } from '../contentSyncHost'
+import { contentSyncOwned, contentSyncOwnedStrict, readMaskedAmadeusConfig } from '../contentSyncHost'
 import { onQuitProceeding } from '../syncQuitGate'
 import { readExternalPdf, writeExternalPdfAnnotations, exportExternalPdfCopy } from './externalPdf'
 import { constants as fsConstants, promises as fs, readdirSync, readFileSync } from 'node:fs'
@@ -20,7 +20,7 @@ export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, readConfig, readSyncOwnershipV2, updateConfig, updateLocalVaultConfig, writeConfig, type AmadeusConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, looseConfigReadFailed, quarantineCorruptConfig, readConfig, readSyncOwnershipV2, updateConfig, updateLocalVaultConfig, writeConfig, type AmadeusConfig } from './settings'
 import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
@@ -397,6 +397,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     if (listed) shell.showItemInFolder(listed.root)
   })
 
+  let bootRestoreDone = false // 只有启动那一下(第一次真去读配置的 restoreVault)才会把内容坏了的配置挪到一边
   handle(IPC.restoreVault, async (_e, reuseActive?: boolean) => {
     // A new View window shares the mounted vault. Do not switch the global root or restart its watcher.
     const root = reuseActive === true ? vault.getRoot() : null
@@ -404,8 +405,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       const [pages, folders] = await Promise.all([vault.listPages(), vault.listFolders()])
       return { root, pages, folders, strictExistingWrites: true }
     }
+    const atBoot = !bootRestoreDone
+    bootRestoreDone = true
     let { lastVault } = await readConfig()
-    if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区(不再落欢迎页)
+    if (!lastVault && looseConfigReadFailed()) ({ lastVault } = await readConfig()) // 配置读失败过:再读一次盘
+    if (!lastVault && looseConfigReadFailed() && atBoot) {
+      // 启动时内容确定坏了(零字节 / 解析不了 / 不是对象):原样挪到一边、从空配置起;I/O 读不了的不挪,照旧拒绝
+      const moved = await quarantineCorruptConfig()
+      if (moved) console.warn(`[amadeus] config at startup was unreadable content; moved aside as ${moved}, starting from an empty config`)
+      ;({ lastVault } = await readConfig())
+    }
+    if (!lastVault) {
+      // 读不出 ≠ 首启:不拿默认库盖掉用户选过的库(写会重读,读得到就以真底稿为底写默认库)
+      if (looseConfigReadFailed()) throw new Error('amadeus-config-unreadable')
+      return ensureDefaultVault() // 首启:自带默认工作区(不再落欢迎页)
+    }
     // A saved cloud root may belong to a previous account (or the old unowned
     // mirror). Never mount it for a different account, including signed-out boot.
     if (isManagedCloudVault(lastVault) && (!cloud || !currentCloudAccountId() || lastVault !== cloudVaultDir())) {
@@ -1232,14 +1246,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     workspaceDir: defaultWorkspaceDir,
     userDataDir: () => app.getPath('userData'),
     isDevMode,
-    // 认领遮罩(智库同步第 2 步,契约 §3.7):有 syncOwnershipV2 只滤掉接手的根;老的全局认领(.owned)或配置读不了 = 整份遮掉。磁盘上一条不动
-    readConfig: async () => {
-      const cfg = await readConfig()
-      const account = cfg.cloudAccountId ?? null
-      let own: OwnershipRead
-      try { const v2 = await readSyncOwnershipV2(account); own = v2 ? { kind: 'v2', value: v2 } : { kind: 'none' } } catch { own = { kind: 'unknown' } }
-      return maskAmadeusConfig(cfg, own, contentSyncOwned(account))
-    },
+    // 认领遮罩(智库同步第 2 步,契约 §3.7):有 syncOwnershipV2 只滤掉接手的根;老的全局认领(.owned)或配置读不了 = 整份遮掉。磁盘上一条不动。
+    // 遮罩依赖的读(这次宽松读的底稿、syncOwnershipV2、新同步状态文件的 .owned)任何一样读不出也整份遮掉(H3 清单第 6 件)
+    readConfig: () => readMaskedAmadeusConfig({
+      readConfig: () => readConfig(),
+      looseReadFailed: looseConfigReadFailed,
+      readV2: readSyncOwnershipV2,
+      legacyOwned: contentSyncOwnedStrict,
+    }),
     writeConfig, updateConfig, adoptLegacyCloudState,
     cloudVaultDir, isManagedCloudVault,
     vaultRoot: () => vault.getRoot(),

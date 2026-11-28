@@ -4,7 +4,7 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync} from
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 vi.mock('./amadeus/fs/vaultHandlers',()=>({withTextWriteLock:async(_p:string,fn:()=>Promise<void>)=>fn()}))
-import {setOfflineContentOwner,mergeSyncContent,withContentWriteLock,agentContentHooks,contentSyncOwnership,CONTENT_MERGE_FAMILIES} from './contentSyncHost'
+import {setOfflineContentOwner,mergeSyncContent,withContentWriteLock,agentContentHooks,contentSyncOwnership,CONTENT_MERGE_FAMILIES,MIRROR_RETIRE} from './contentSyncHost'
 import {createMemoryRepository} from '../../tangu-agent/src/services/memoryRepository'
 import {mergeSettingsDb,mergeTombstoneLists,parseTombstones,serializeTombstones} from '../../tangu-agent/src/contracts/agentSyncRules'
 import {cloudAccountScope,agentSyncDefault,setAgentSyncDefault} from '../../tangu-agent/src/services/cloudSyncAccount'
@@ -200,4 +200,11 @@ describe('content sync ownership at the desktop host boundary', () => {
   expect(f.host.restartSync).toHaveBeenCalledOnce()
   expect(f.fetchFixture).not.toHaveBeenCalled()
  })
+})
+it('the host declares mirrorRetire { version: 1 } on CloudHost.contentSync (H3 final interface §1: without it Extend must not retire the mirror)',()=>{
+ expect(MIRROR_RETIRE).toEqual({version:1})
+ expect(Object.isFrozen(MIRROR_RETIRE)).toBe(true)
+ const main=readFileSync(new URL('./main.ts',import.meta.url),'utf8')
+ const block=main.slice(main.indexOf('      contentSync: {'),main.indexOf('      syncTargets: createSyncTargets()'))
+ expect(block).toMatch(/\n\s+mirrorRetire: MIRROR_RETIRE,/)
 })

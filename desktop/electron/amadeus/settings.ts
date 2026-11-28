@@ -15,6 +15,9 @@ export interface AmadeusCloudSyncConfig {
   enabled?: boolean
   vaultId?: string
   deviceId?: string
+  /** false = 只停镜像(H3 定稿第 1 节,认领里 mirrorRetired 时由遮罩加上)。只出现在递给旧引擎的遮罩读数里:
+   *  宿主从不把它写进盘上的 cloudSync(persistConfig 剔掉),readConfig 也不从盘上带出来。 */
+  mirror?: boolean
 }
 
 /** 按条目云同步的注册表项(与 Extend 的 entryRegistry.EntrySyncVault 同形;引擎住在 Extend,宿主只负责落盘)。 */
@@ -36,6 +39,9 @@ export interface SyncOwnershipV2 {
   entryRoots: string[]
   mirror: 'keep' | 'off'
   human: 'engine' | 'content'
+  /** 第 3 步(H3 定稿第 1 节,宿主声明 contentSync.mirrorRetire 才认):true = 只停镜像(mirror 仍是 'keep')。盘上只存 true;
+   *  set 不给 = 沿用盘上的值,false = 撤销(删键)。 */
+  mirrorRetired?: boolean
 }
 
 export interface AmadeusConfig extends CloudAccountConfig {
@@ -62,6 +68,19 @@ interface StoredConfig extends Omit<AmadeusConfig, 'cloudAccountId'> {
 let cache: StoredConfig | null = null
 let loading: Promise<StoredConfig> | null = null
 let writes: Promise<void> = Promise.resolve()
+/** 宽松读的缓存来自一次读失败(不是 ENOENT,缓存成了 {})。标着的时候每次读都重读一次盘,读得出就换上、清掉;
+ *  普通写拿不到读得出的底稿就抛、不写(writeBase)。给旧引擎的遮罩用(contentSyncHost.readMaskedAmadeusConfig):读失败 ≠ 什么都没配。 */
+let looseLoadFailed = false
+export function looseConfigReadFailed(): boolean { return looseLoadFailed }
+/** 缓存的提交代次:每次写把缓存换掉 +1。宽松读开始时记下,读完代次变了 = 途中有写提交了,丢掉自己读到的(可能是写之前的旧文件),
+ *  不覆盖缓存、也不改 looseLoadFailed(Codex 12b 一轮第 2 条:迟到的旧读数会让已退役的镜像、已接手的根在下一次普通写后复活)。 */
+let cacheGen = 0
+/** 写把缓存换成刚落盘的那份。每个提交点都以读得出的底稿为底(严格读,或没标读失败的缓存),所以换上的是真值。 */
+function commitCache(next: StoredConfig): void {
+  cache = next
+  cacheGen++
+  looseLoadFailed = false
+}
 
 export function currentCloudAccountId(): string | null {
   const creds = loadTanguCreds()
@@ -90,15 +109,36 @@ function normalizeStored(stored: StoredConfig): StoredConfig {
   return stored
 }
 
+/** 宽松读:读不了 / 解析不了 / 不是 JSON 对象 = 缓存成 {} 并标上 looseLoadFailed(只有 ENOENT 是真的空)。
+ *  标着的时候下一次读再读一次盘(读得出就换上、清掉):文件恢复以后读和写都拿真值,不拿那份空缓存往下走。 */
 async function storedConfig(): Promise<StoredConfig> {
-  if (cache) return cache
-  if (!loading) loading = (async () => {
-    let stored: StoredConfig
-    try { stored = JSON.parse(await fs.readFile(configFile(), 'utf8')) as StoredConfig } catch { stored = {} }
-    cache = normalizeStored(stored)
-    return cache
-  })()
+  if (cache && !looseLoadFailed) return cache
+  if (!loading) {
+    const gen = cacheGen
+    loading = (async () => {
+      let stored: StoredConfig | null = null
+      try {
+        const parsed: unknown = JSON.parse(await fs.readFile(configFile(), 'utf8'))
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) stored = normalizeStored(parsed as StoredConfig)
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') stored = {}
+      }
+      if (gen !== cacheGen) return cache! // 途中有写提交了:那一写已经换上了缓存
+      if (stored) { cache = stored; looseLoadFailed = false }
+      else { cache ??= {}; looseLoadFailed = true }
+      return cache
+    })().finally(() => { loading = null })
+  }
   return loading
+}
+
+/** 普通写(writeConfig / updateConfig / 首启缺省值 / 收养)的底稿,在写队列里取(Codex 12b 一轮第 1 条):
+ *  缓存可信就用缓存;宽松读失败过就重读一次盘,只有 ENOENT 当空,读不了 / 解析不了就抛、不写 ——
+ *  不拿空缓存盖掉整份配置(库清单、账号配置、认领)。重读成功就换上缓存、清掉标记。 */
+async function writeBase(): Promise<StoredConfig> {
+  const stored = await storedConfig()
+  if (looseLoadFailed) throw new Error('amadeus-config-unreadable')
+  return stored
 }
 
 /** 严格读盘:没有文件 = {};读不了 / 不是 JSON 对象就抛。认领(syncOwnershipV2)只走这条:读失败 ≠ 没认领。
@@ -119,6 +159,7 @@ const isOwnership = (v: unknown): v is SyncOwnershipV2 => {
   const o = v as SyncOwnershipV2
   return !!o && typeof o === 'object' && Array.isArray(o.entryRoots) && o.entryRoots.every((r) => typeof r === 'string' && path.isAbsolute(r))
     && (o.mirror === 'keep' || o.mirror === 'off') && (o.human === 'engine' || o.human === 'content')
+    && (o.mirrorRetired === undefined || typeof o.mirrorRetired === 'boolean') // 不是 boolean = 读不出,不当成没退役
 }
 
 /** 这个账号的按根认领:null = 没有(走老的 .owned 全局遮罩);配置读不了、或这一项形状不对 → 抛(调用方按「不知道」处理,不当成没认领)。 */
@@ -148,7 +189,7 @@ export function writeSyncOwnershipV2(accountId: string, next: SyncOwnershipV2 | 
     const tmp = `${file}.tmp-${process.pid}`
     await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
     await fs.rename(tmp, file)
-    cache = out
+    commitCache(out) // 以严格读为底
   })
   writes = work.catch(() => {})
   return work
@@ -158,6 +199,13 @@ export async function readConfig(accountId = currentCloudAccountId()): Promise<A
   return configFrom(await storedConfig(), accountId)
 }
 
+/** cloudSync.mirror 只属于遮罩读数(见 AmadeusCloudSyncConfig):读盘不带、写盘剔掉。 */
+function withoutMirror(cs: AmadeusCloudSyncConfig | undefined): AmadeusCloudSyncConfig | undefined {
+  if (!cs || typeof cs !== 'object' || !('mirror' in cs)) return cs // 盘上坏了的(不是对象)原样给,形状由读的一方判
+  const { mirror: _mirror, ...rest } = cs
+  return rest
+}
+
 function configFrom(stored: StoredConfig, accountId: string | null): AmadeusConfig {
   const own = accountId ? stored.cloudAccounts?.[cloudAccountNamespace(accountId)] : undefined
   // Callers mutate entries while preparing changes. A snapshot prevents old
@@ -165,7 +213,7 @@ function configFrom(stored: StoredConfig, accountId: string | null): AmadeusConf
   return structuredClone({
     lastVault: stored.lastVault, localVault: stored.localVault, lastPage: stored.lastPage,
     vaults: stored.vaults, syncVault: stored.syncVault,
-    cloudSync: own?.cloudSync, entrySync: own?.entrySync ?? [], cloudAccountId: accountId,
+    cloudSync: withoutMirror(own?.cloudSync), entrySync: own?.entrySync ?? [], cloudAccountId: accountId,
   })
 }
 
@@ -180,7 +228,7 @@ type ActiveVaultMode = 'auto' | 'drop' | 'keep'
 
 /** 回这一次是否清掉了一个在线库。 */
 async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string | null, mode: ActiveVaultMode = 'auto', base?: StoredConfig): Promise<boolean> {
-  const stored = base ?? await storedConfig()
+  const stored = base ?? await writeBase()
   const { cloudSync, entrySync, cloudAccountId: _owner, ...local } = snapshot
   const next: StoredConfig = { ...stored, ...local }
   const had = next.activeVault !== undefined && next.activeVault !== null
@@ -190,7 +238,8 @@ async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string
     const key = cloudAccountNamespace(accountId)
     next.cloudAccounts = { ...stored.cloudAccounts, [key]: {
       ...stored.cloudAccounts?.[key],
-      ...('cloudSync' in snapshot ? { cloudSync: { ...stored.cloudAccounts?.[key]?.cloudSync, ...cloudSync } } : {}),
+      // 旧引擎拿遮罩读数 {...cfg.cloudSync, deviceId / vaultId / enabled} 写回:遮罩加的 mirror 不落盘
+      ...('cloudSync' in snapshot ? { cloudSync: withoutMirror({ ...stored.cloudAccounts?.[key]?.cloudSync, ...cloudSync }) } : {}),
       ...('entrySync' in snapshot ? { entrySync } : {}),
     } }
   }
@@ -199,7 +248,7 @@ async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string
   const tmp = `${file}.tmp-${process.pid}`
   await fs.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8')
   await fs.rename(tmp, file)
-  cache = next
+  commitCache(next)
   return drop
 }
 
@@ -233,7 +282,8 @@ export function adoptLegacyCloudState(
 ): Promise<boolean> {
   const work = writes.then(async () => {
     if (!accountId) return false
-    const stored = await storedConfig()
+    let stored: StoredConfig
+    try { stored = await writeBase() } catch { return false } // 读不出:这次不收养(reject 会让 refreshEntryBindings 在读配置前中断),下次再来
     const key = cloudAccountNamespace(accountId)
     const legacy = stored.legacyCloudState
     const own = stored.cloudAccounts?.[key]
@@ -268,7 +318,7 @@ export function updateConfig(
   accountId = currentCloudAccountId(),
 ): Promise<AmadeusConfig> {
   const work = writes.then(async () => {
-    const config = await readConfig(accountId)
+    const config = configFrom(await writeBase(), accountId) // 读不出就抛、不调回调:回调不拿空缓存改清单
     if (await update(config) !== false) emitActiveVaultCleared(await persistConfig(config, accountId))
     return config
   })
@@ -308,7 +358,7 @@ async function writeStored(out: StoredConfig): Promise<void> {
   const tmp = `${file}.tmp-${process.pid}`
   await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
   await fs.rename(tmp, file)
-  cache = out
+  commitCache(out) // 调用方都以严格读为底
 }
 
 /** 当前打开的在线库(只认形状,不核账号:账号由调用方比)。没有 = null;配置读不了、或这一项形状不对 → 抛(读失败 ≠ 本机库)。 */
@@ -335,6 +385,31 @@ export function writeActiveVault(next: OnlineVaultRef | null, assert?: () => voi
     await writeStored(out)
   })
   writes = work.catch(() => {})
+  return work
+}
+
+/** 内容确定坏了:零字节 / 只有空白、解析不了、顶层不是对象。 */
+const brokenContent = (raw: string): boolean => {
+  try { const v: unknown = JSON.parse(raw); return !v || typeof v !== 'object' || Array.isArray(v) } catch { return true }
+}
+
+/** 启动那一下(restoreVault 第一次读)用:配置文件**内容确定坏了**,就原样改名到同目录的 `<原文件名>.corrupt-<时间戳>`
+ *  (不删、不改内容),缓存按 ENOENT 换成空配置,调用方照首启建默认库(断电后零字节的用户不至于一直打不开库)。
+ *  I/O 读不了(EACCES / EIO / EISDIR…,文件可能是好的)、内容其实是好的、改名失败 → 什么都不动,回 null,调用方照旧拒绝。
+ *  回挪到的文件名(只有文件名)。和其他写同一条队列。 */
+export function quarantineCorruptConfig(): Promise<string | null> {
+  const work = writes.then(async () => {
+    await settleLoading()
+    const file = configFile()
+    let raw: string
+    try { raw = await fs.readFile(file, 'utf8') } catch { return null } // 读不了 / 没有:不是「内容坏了」
+    if (!brokenContent(raw)) return null
+    const to = `${file}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`
+    try { await fs.rename(file, to) } catch { return null }
+    commitCache({})
+    return path.basename(to)
+  })
+  writes = work.then(() => {}, () => {})
   return work
 }
 
