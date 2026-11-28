@@ -13,19 +13,55 @@ import { syncNow, getSyncStatus } from '../services/memorySyncService.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { getAgent, listAgents, resolveMemorySlug, isValidSlug } from '../agents/agentRegistry.js';
 import { MemoryRepositoryError } from '../services/memoryRepository.js';
-import { AGENT_SYNC_SEALED, agentSyncDefault, agentSyncIdentity, agentSyncScope, setAgentSyncDefault, setContentSyncOwner } from '../services/cloudSyncAccount.js';
+import { AGENT_SYNC_SEALED, agentSyncDefault, agentSyncIdentity, agentSyncScope, contentSyncOwnership, setAgentSyncDefault, setContentSyncOwner, setContentSyncOwnership } from '../services/cloudSyncAccount.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { mirrorLegacyHuman } from '../agents/humanFolder.js';
 import { factWithScope, runTagContext } from '../services/deviceTagContext.js';
 
 const router = Router();
-router.put('/agent/sync/content-owner',authMiddleware,async(req:AuthRequest,res)=>{
-  if(!deps().profile.capabilities.hostExec||parseRemoteOrigin(req.headers))return void res.status(403).json({detail:'Local content sync only'});
+/** 谁管落盘同步的两位记号(contracts/contentSyncOwner.ts;智库同步第 2 步,契约 §3.7 / 实现期修订 H-1 第 5 条)。只给本机宿主用。
+ *  PUT 老 body {enabled} = 两位一起(老宿主的 claim,落盘形状与回包 {ok:true} 同第 2 步之前);新 body {human?, agents?} 只改给的那位、回两位,
+ *  落了盘就回 200(镜像失败带 mirror:'failed')。GET 回两位当前值,宿主改完读回核对。
+ *  POST content-touched:新同步动过盘的通知,只把 human/ 镜像回旧位置(human 归新同步时),不写 owner(老 changed() 每次把 owner 写成 true)。 */
+function contentOwnerIdentity(req: AuthRequest, res: import('express').Response) {
+  if(!deps().profile.capabilities.hostExec||parseRemoteOrigin(req.headers)){res.status(403).json({detail:'Local content sync only'});return null;}
   const identity=agentSyncIdentity(deps().brain.agentFiles,req.user!.userId);
-  if(!identity||typeof req.body?.enabled!=='boolean')return void res.status(400).json({detail:'Account and enabled required'});
-  if(req.body.expectedAccount!==undefined&&req.body.expectedAccount!==identity.account)return void res.status(409).json({detail:'account_changed'});
-  try{setContentSyncOwner(identity.scope,req.body.enabled);await mirrorLegacyHuman();res.json({ok:true});}
-  catch(e){res.status(500).json({detail:'Content sync ownership failed'});}
+  if(!identity){res.status(400).json({detail:'Account required'});return null;}
+  const expected=req.method==='GET'?req.query.expectedAccount:req.body?.expectedAccount;
+  if(expected!==undefined&&expected!==identity.account){res.status(409).json({detail:'account_changed'});return null;}
+  return identity;
+}
+router.put('/agent/sync/content-owner',authMiddleware,async(req:AuthRequest,res)=>{
+  const legacy=typeof req.body?.enabled==='boolean';
+  const human=req.body?.human,agents=req.body?.agents;
+  const patch={...(typeof human==='boolean'?{human}:{}),...(typeof agents==='boolean'?{agents}:{})};
+  if(!legacy&&!Object.keys(patch).length)return void res.status(400).json({detail:'Account and enabled required'});
+  if(legacy&&Object.keys(patch).length)return void res.status(400).json({detail:'Use either enabled or human/agents'});
+  const identity=contentOwnerIdentity(req,res);if(!identity)return;
+  // 老 body:和第 2 步之前一样(落盘只有 owner、回 {ok:true};镜像失败照旧报 500,老宿主靠它)
+  if(legacy){
+    try{setContentSyncOwner(identity.scope,req.body.enabled);await mirrorLegacyHuman();res.json({ok:true});}
+    catch(e){res.status(500).json({detail:'Content sync ownership failed'});}
+    return;
+  }
+  // 新 body:那一位一旦落了盘就不报失败(宿主读回核对、按读回的为准);镜像 human/ 失败只记一笔,下次 content-touched / 同步再镜像
+  try{setContentSyncOwnership(identity.scope,patch);}
+  catch(e){return void res.status(500).json({detail:'Content sync ownership failed'});}
+  let mirrored=true;
+  try{await mirrorLegacyHuman();}catch(e){mirrored=false;console.warn('[content-owner] human mirror failed after the owner bit was saved:',e instanceof Error?e.message:String(e));}
+  let owns;
+  try{owns=contentSyncOwnership(identity.scope);}catch(e){return void res.status(500).json({detail:'Content sync ownership unreadable'});}
+  res.json({ok:true,...owns,...(mirrored?{}:{mirror:'failed'})});
+});
+router.get('/agent/sync/content-owner',authMiddleware,async(req:AuthRequest,res)=>{
+  const identity=contentOwnerIdentity(req,res);if(!identity)return;
+  try{res.json(contentSyncOwnership(identity.scope));}
+  catch(e){res.status(500).json({detail:'Content sync ownership unreadable'});}
+});
+router.post('/agent/sync/content-touched',authMiddleware,async(req:AuthRequest,res)=>{
+  const identity=contentOwnerIdentity(req,res);if(!identity)return;
+  try{if(contentSyncOwnership(identity.scope).human)await mirrorLegacyHuman();res.json({ok:true});}
+  catch(e){res.status(500).json({detail:'Content sync refresh failed'});}
 });
 
 async function inRequestedMemoryScope<T>(req: AuthRequest, fn: () => Promise<T>): Promise<T> {

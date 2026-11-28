@@ -1,4 +1,5 @@
-import { contentSyncOwned } from '../contentSyncHost'
+import { contentSyncOwned, maskAmadeusConfig, type OwnershipRead } from '../contentSyncHost'
+import { onQuitProceeding } from '../syncQuitGate'
 import { readExternalPdf, writeExternalPdfAnnotations, exportExternalPdfCopy } from './externalPdf'
 import { constants as fsConstants, promises as fs, readdirSync, readFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
@@ -19,7 +20,7 @@ export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig, type AmadeusConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, readConfig, readSyncOwnershipV2, updateConfig, writeConfig, type AmadeusConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
 import { externalCreations } from '../productTrust'
@@ -171,7 +172,9 @@ const offTangu = ctx.tangu?.subscribe(() => { /* 重画你的 UI */ })
 return () => { offTangu?.() }
 `
 
-export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory: AmadeusSyncFactory | null = null): {
+/** quitHeld:这一次 before-quit 正被同步门禁拦着问用户(main.ts 递 syncGateChain 在不在)。旧引擎的退出钩子那次不停同步,
+ *  放行时才停;「取消退出」= 旧引擎一直在跑(syncQuitGate.onQuitProceeding)。缺省恒假 = 和原来的 app.once 一样。 */
+export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory: AmadeusSyncFactory | null = null, quitHeld: () => boolean = () => false): {
   getVaultRoot: () => string | null
   resolveSharedAsset: (vaultRel: string) => string | null
   restartSync: () => Promise<void>
@@ -1226,7 +1229,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     workspaceDir: defaultWorkspaceDir,
     userDataDir: () => app.getPath('userData'),
     isDevMode,
-    readConfig: async () => { const cfg=await readConfig();return contentSyncOwned(currentCloudAccountId())?{...cfg,cloudSync:{...cfg.cloudSync,enabled:false},entrySync:[]}:cfg },
+    // 认领遮罩(智库同步第 2 步,契约 §3.7):有 syncOwnershipV2 只滤掉接手的根;老的全局认领(.owned)或配置读不了 = 整份遮掉。磁盘上一条不动
+    readConfig: async () => {
+      const cfg = await readConfig()
+      const account = cfg.cloudAccountId ?? null
+      let own: OwnershipRead
+      try { const v2 = await readSyncOwnershipV2(account); own = v2 ? { kind: 'v2', value: v2 } : { kind: 'none' } } catch { own = { kind: 'unknown' } }
+      return maskAmadeusConfig(cfg, own, contentSyncOwned(account))
+    },
     writeConfig, updateConfig, adoptLegacyCloudState,
     cloudVaultDir, isManagedCloudVault,
     vaultRoot: () => vault.getRoot(),
@@ -1237,7 +1247,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     awaitPendingVaultWrites: async () => { while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites]) },
     relatedClosure: (rootRel, kind) => index.relatedClosure(rootRel, kind),
     notifyAll,
-    onBeforeQuit: (cb) => { app.once('before-quit', cb); return () => { app.removeListener('before-quit', cb) } },
+    onBeforeQuit: (cb) => onQuitProceeding(app, quitHeld, cb),
     log: (m) => console.warn(m),
   }) ?? null
   cloud?.start() // 云镜像同步独立于活动 vault,应用启动即拉起(未登录/显式停用时安静待命)
