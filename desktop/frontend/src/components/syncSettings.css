@@ -1,0 +1,170 @@
+/* 设置 › 同步(智库同步第 2 步 U 包)。颜色、圆角、字号一律走主题 token;不画虚线框;滚动条不自定义(DESIGN §6)。
+ * 库行是设置面板里的宿主 block(settings-parts-block),汇总卡停在页底(sticky),跟着设置正文滚动区走。 */
+
+.ssync-page { display: flex; flex-direction: column; gap: 0; min-width: 0; }
+.ssync-faint { color: var(--text-faint); }
+.ssync-warn { color: var(--warning); }
+.ssync-error { color: var(--danger); font-size: var(--ui-font-meta); margin-top: 4px; }
+.ssync-grow { flex: 1; }
+.ssync-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ssync-link {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  color: var(--accent); font: inherit; font-size: var(--ui-font-meta);
+}
+.ssync-link:hover { text-decoration: underline; }
+.ssync-tag {
+  display: inline-flex; align-items: center; height: 18px; padding: 0 6px; flex: none;
+  border-radius: var(--radius-xs); background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+  font-size: var(--ui-font-caption);
+}
+
+/* ── 智库行 ── */
+.ssync-vault { padding: 10px 14px; border-top: var(--border-width) solid var(--border); }
+.ssync-vault:first-child { border-top: 0; }
+.ssync-vault-main { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.ssync-vault-icon { flex: none; margin-top: 3px; color: var(--text-faint); }
+.ssync-vault-id { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.ssync-vault-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ssync-vault-name { flex: none; max-width: 60%; color: var(--text); font-size: var(--ui-font-body); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssync-vault-path { min-width: 0; font-family: var(--font-mono); font-size: var(--ui-font-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssync-vault-meta { align-items: center; flex-wrap: wrap; gap: 2px 4px; font-size: var(--ui-font-meta); color: var(--text-faint); }
+.ssync-dot { color: var(--text-faint); }
+.ssync-vault-status {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0;
+  font-size: var(--ui-font-meta); color: var(--text-faint); white-space: nowrap; overflow: hidden;
+}
+.ssync-vault-status > span { overflow: hidden; text-overflow: ellipsis; }
+.ssync-vault-status.tone-accent { color: var(--text-light); }
+.ssync-vault-status.tone-warning { color: var(--warning); }
+.ssync-vault-status.tone-danger { color: var(--danger); }
+/* 「同步到 X ⌄」「范围 ⌄」:行内文字按钮(V6),不再是描边小按钮 */
+.ssync-target-btn, .ssync-scope-btn {
+  display: inline-flex; align-items: center; gap: 3px; flex: none; padding: 1px 4px; margin: 0 -2px;
+  border: 0; border-radius: var(--radius-xs);
+  background: transparent; color: var(--text-light); font: inherit; font-size: var(--ui-font-meta); cursor: pointer;
+}
+.ssync-target-btn > b, .ssync-scope-btn { font-weight: 600; }
+.ssync-target-btn:hover:not(:disabled), .ssync-scope-btn:hover:not(:disabled),
+.ssync-target-btn[aria-expanded='true'], .ssync-scope-btn[aria-expanded='true'] { background: var(--overlay-medium); color: var(--text); }
+.ssync-target-btn:disabled, .ssync-scope-btn:disabled { opacity: 0.55; cursor: default; }
+.ssync-target-menu { min-width: 240px; }
+.ssync-target-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; }
+.ssync-target-opt > .ssync-faint { font-size: var(--ui-font-caption); white-space: normal; }
+.ssync-note {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px;
+  margin-top: 6px; font-size: var(--ui-font-meta); color: var(--text-light); line-height: 1.45;
+}
+.ssync-note.ssync-faint { color: var(--text-faint); }
+.ssync-note.ssync-warn { color: var(--warning); }
+.ssync-ask { flex-direction: column; align-items: stretch; }
+.ssync-ask-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* 范围清单 */
+.ssync-scope {
+  margin-top: 8px; padding: 8px 10px;
+  border-radius: var(--radius-sm); background: var(--overlay-light, color-mix(in srgb, var(--text) 4%, transparent));
+}
+.ssync-scope-modes { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: var(--ui-font-meta); color: var(--text-light); }
+.ssync-scope-modes label, .ssync-scope-item { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.ssync-scope-list {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px 12px;
+  margin-top: 8px; max-height: 220px; overflow: auto; font-size: var(--ui-font-meta); color: var(--text);
+}
+.ssync-scope-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 等你定 / 接手卡 / 找回 / 记录 / 只在云端 */
+.ssync-held, .ssync-handover {
+  margin-top: 8px; padding: 8px 10px; border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 8%, transparent); font-size: var(--ui-font-meta);
+}
+.ssync-handover { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text-light); }
+.ssync-handover b { color: var(--text); }
+.ssync-handover p { margin: 4px 0; }
+.ssync-held-head { display: flex; align-items: center; gap: 6px; color: var(--text); }
+.ssync-held-note { margin-top: 4px; }
+.ssync-held-row, .ssync-rec-row, .ssync-cloud-row {
+  display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 28px; font-size: var(--ui-font-meta);
+}
+.ssync-held-name, .ssync-rec-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.ssync-block { padding: 8px 14px 10px; font-size: var(--ui-font-meta); }
+.ssync-block-lead { margin: 0 0 6px; }
+.ssync-block-foot { margin: 6px 0 0; font-size: var(--ui-font-caption); }
+.ssync-empty { padding: 4px 0; }
+.ssync-rec-vault { flex: none; max-width: 28%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 500; }
+.ssync-rec-time { flex: none; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.ssync-rec-sum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-light); }
+.ssync-rec-row[data-failed] .ssync-rec-sum { color: var(--warning); }
+.ssync-rec-all { margin-top: 4px; }
+.ssync-cloud-row b { color: var(--text); font-weight: 500; }
+.ssync-sealed { color: var(--text-faint); }
+.ssync-sealed-row { display: flex; align-items: center; gap: 8px; min-height: 26px; }
+.ssync-drive { padding: 4px 0 0; }
+
+/* Extend 停用 / 读不出 */
+.ssync-off {
+  display: flex; align-items: flex-start; gap: 10px; margin: 0 0 14px; padding: 12px 14px;
+  border: var(--border-width) solid color-mix(in srgb, var(--warning) 40%, var(--border)); border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warning) 7%, var(--bg-card)); color: var(--text-light); font-size: var(--ui-font-meta);
+}
+.ssync-off > svg { flex: none; margin-top: 2px; color: var(--warning); }
+.ssync-off b { color: var(--text); font-size: var(--ui-font-body); }
+.ssync-off p { margin: 4px 0 0; }
+.ssync-off-copy { flex: 1; min-width: 0; }
+.ssync-off-acts { display: flex; gap: 6px; flex: none; }
+
+/* ── 页底汇总卡(3B 的内容 + 2B 的主按钮),停在设置正文的底部 ── */
+.ssync-sum-dock { position: sticky; bottom: 0; z-index: 1; padding: 10px 0 2px; }
+.ssync-sum-note { margin: 0 0 6px 4px; font-size: var(--ui-font-meta); }
+.ssync-sum {
+  padding: 12px 14px; border: var(--border-width) solid var(--border); border-radius: var(--radius-md);
+  background: var(--bg-card); box-shadow: var(--card-shadow); font-size: var(--ui-font-meta); color: var(--text-light);
+}
+.ssync-sum-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; color: var(--text); }
+.ssync-sum-head b { font-size: var(--ui-font-body); font-weight: 600; }
+.ssync-sum-head .ssync-faint { flex-basis: 100%; padding-left: 23px; font-size: var(--ui-font-caption); }
+.ssync-sum-added { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 8px; }
+.ssync-sum-added-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.ssync-sum-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 6px; margin-top: 10px; }
+.ssync-sum-tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 6px 8px;
+  border-radius: var(--radius-sm); background: var(--overlay-light, color-mix(in srgb, var(--text) 4%, transparent));
+}
+.ssync-sum-tile b { color: var(--text); font-size: var(--ui-font-heading); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.ssync-sum-tile span { color: var(--text-faint); font-size: var(--ui-font-caption); }
+.ssync-sum-tile.is-warn b { color: var(--warning); }
+.ssync-sum-list { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.ssync-sum-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 24px; }
+.ssync-sum-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.ssync-sum-line { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.ssync-sum-foot { margin: 8px 0 0; color: var(--text-faint); font-size: var(--ui-font-caption); line-height: 1.5; }
+.ssync-sum-acts { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.ssync-sum-notsame { color: var(--text-faint); }
+.ssync-cand {
+  display: block; width: 100%; padding: 6px 8px; text-align: left; cursor: pointer;
+  border: var(--border-width) solid var(--border); border-radius: var(--radius-sm);
+  background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-meta);
+}
+.ssync-cand:hover { background: var(--overlay-medium); }
+
+/* 窄窗(设置浮窗缩窄 / 手机):库行换两行 */
+.ssync-page[data-narrow] .ssync-vault-line:first-child { flex-wrap: wrap; }
+.ssync-page[data-narrow] .ssync-vault-name { max-width: 100%; }
+
+/* ── 退出卡(5C)── */
+.ssync-quit { width: min(420px, calc(100vw - 32px)); }
+.ssync-quit .dialog-title { display: flex; align-items: center; gap: 8px; }
+.ssync-quit-list {
+  display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow: auto;
+  padding: 6px 8px; border-radius: var(--radius-sm); background: var(--overlay-light);
+  font-size: var(--ui-font-meta); color: var(--text);
+}
+.ssync-quit-row > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssync-quit-hint { margin: 0; font-size: var(--ui-font-caption); }
+
+/* 汇总卡:本机库 → 去处 */
+.ssync-sum-dest { margin: 2px 0 8px; font-size: var(--ui-font-meta); color: var(--text-light); overflow-wrap: anywhere; }
+/* 拦下的删除:先列出来再给「照删」 */
+.ssync-del-list { display: flex; flex-direction: column; gap: 2px; width: 100%; max-height: 160px; overflow: auto; margin-top: 4px; }
+.ssync-del-row { display: flex; gap: 8px; min-width: 0; font-size: var(--ui-font-caption); }
+.ssync-del-row > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssync-del-side { flex: none; color: var(--text-faint); }

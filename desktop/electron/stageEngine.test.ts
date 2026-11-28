@@ -461,6 +461,36 @@ describe('stageEngine hardening (Codex 11-20)', () => {
     expect((await fetch(`${e.url}/agent/models`, { headers: { Authorization: 'Bearer sandbox' } })).status).toBe(401)
     expect((await fetch(`${e.url}/agent/models`, { headers: { Authorization: 'Bearer stage-secret' } })).status).toBe(200)
   })
+  it('answers the CORS preflight before the token check, like the real engine, and sends no data with it', async () => {
+    // dev 的舞台渲染层在 http://localhost(vite):带 Authorization 的跨源请求先发不带令牌的 OPTIONS。回 401 = 日历「暂时读不到」
+    const e = await startStageEngine(script({}), { token: 'stage-secret', calendar: CAL })
+    engines.push(e)
+    const pre = await fetch(`${e.url}/agent/human/CALENDAR.db`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'http://localhost:5173', 'Access-Control-Request-Method': 'PUT', 'Access-Control-Request-Headers': 'authorization, content-type' },
+    })
+    expect(pre.status).toBe(204)
+    expect(pre.headers.get('access-control-allow-origin')).toBe('*')
+    expect(pre.headers.get('access-control-allow-headers')).toMatch(/Authorization/)
+    expect(pre.headers.get('access-control-allow-headers')).toMatch(/Content-Type/) // 日历的 PUT 带 JSON,少了它浏览器照样拦写
+    expect(pre.headers.get('access-control-allow-methods')).toMatch(/PUT/)
+    expect(await pre.text()).toBe('')
+    // 预检放行不等于放行请求:不带令牌照旧 401,带令牌的回应也带 CORS 头(浏览器据此把响应交给页面)
+    const denied = await fetch(`${e.url}/agent/human/CALENDAR.db`)
+    expect(denied.status).toBe(401)
+    expect(await denied.text()).not.toMatch(/Launch/)
+    const ok = await fetch(`${e.url}/agent/human/CALENDAR.db`, { headers: { Authorization: 'Bearer stage-secret' } })
+    expect(ok.status).toBe(200)
+    expect(ok.headers.get('access-control-allow-origin')).toBe('*')
+    const { version } = await ok.json() as { version: string }
+    const put = await fetch(`${e.url}/agent/human/CALENDAR.db`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer stage-secret', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: { ...CAL, rows: [] }, version }),
+    })
+    expect(put.status).toBe(200)
+    expect(put.headers.get('access-control-allow-origin')).toBe('*')
+  })
   it('refuses scripts whose shared messages expand past the cap', () => {
     const sessions = Array.from({ length: 200 }, (_, i) => ({ id: `s${i}` }))
     const messages = Array.from({ length: 150 }, (_, i) => ({ id: `m${i}`, role: 'user', content: 'hi' }))

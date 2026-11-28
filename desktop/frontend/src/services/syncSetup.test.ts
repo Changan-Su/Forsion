@@ -298,6 +298,8 @@ describe('onboarding finish with folder rules', () => {
     const calls: Array<[string, ...unknown[]]> = []
     ;(window as any).tangu.cloudInvoke = vi.fn(async (ch: string, ...a: unknown[]) => {
       calls.push([ch, ...a])
+      // 老 Extend:没有智库同步 v2 的通道(真机上 invoke 抛「not a Forsion Extend channel」→ 旧同步在管)
+      if (ch.startsWith('vaultsync:')) throw new Error(`not a Forsion Extend channel: ${ch}`)
       if (ch === 'penzor:sync:get') return { ok: true, value: { available: true } }
       if (fail && ch === fail) return { ok: false, error: 'boom' }
       if (ch === 'penzor:sync:setup') return { ok: true, value: preview }
@@ -416,6 +418,7 @@ describe('sealed agents and plugin data', () => {
     const calls: Array<[string, ...unknown[]]> = []
     ;(window as any).tangu.cloudInvoke = vi.fn(async (ch: string, ...a: unknown[]) => {
       calls.push([ch, ...a])
+      if (ch.startsWith('vaultsync:')) throw new Error(`not a Forsion Extend channel: ${ch}`) // 老 Extend
       if (ch === 'penzor:sync:get') return { ok: true, value: { available: true } }
       if (ch === 'penzor:sync:setup') return { ok: true, value: { token: 't', upload: 1, download: 0, conflicts: 0, bytes: 1 } }
       return { ok: true, value: null }
@@ -443,5 +446,23 @@ describe('sealed agents and plugin data', () => {
     request.mockClear(); request.mockResolvedValue({})
     await s.runSyncNow()
     expect(writes()).toEqual(['POST /agent/sync'])
+  })
+})
+
+// 智库同步第 2 步:问不出是哪套同步(v2 通道在但读失败)时,引导不走旧的开启流程、不记「点过了」(Codex P1-7)
+describe('onboarding finish when the sync mode is unknown', () => {
+  it('a failing v2 status leaves the decision open and never calls the old setup', async () => {
+    const calls: Array<[string, ...unknown[]]> = []
+    ;(window as any).tangu.cloudInvoke = vi.fn(async (ch: string, ...a: unknown[]) => {
+      calls.push([ch, ...a])
+      if (ch.startsWith('vaultsync:')) return { ok: false, error: 'timeout' }
+      if (ch === 'penzor:sync:get') return { ok: true, value: { available: true } }
+      return { ok: true, value: null }
+    })
+    const s = await fresh(); await s.refreshSync()
+    const out = await s.applyOnboardingSync({ notes: true, agents: false, plugins: false }, ['notes'])
+    expect(out.some((r) => !r.ok)).toBe(true)
+    expect(calls.some(([ch]) => ch === 'penzor:sync:setup')).toBe(false)
+    expect(s.getSync()?.decided).not.toBe(true)
   })
 })

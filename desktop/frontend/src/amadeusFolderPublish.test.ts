@@ -19,10 +19,10 @@ function visit(node: ts.Node): void {
 visit(source)
 if (!handler) throw new Error('Folder publish menu handler not found')
 const js = ts.transpile(`(${handler.getText(source)})`, { target: ts.ScriptTarget.ES2022 })
-const buildClick = new Function('window', 'menu', 'setMenu', 'navigator', 'useApp', 't', 'entryVaults', 'vaultRoot', 'vaultSide', 'cloudPathFor', 'openCloudSyncDialog', `return ${js}`)
+const buildClick = new Function('window', 'menu', 'setMenu', 'navigator', 'useApp', 't', 'entryVaults', 'vaultRoot', 'vaultSide', 'cloudPathFor', 'openCloudSyncDialog', 'fullSync', `return ${js}`)
 const vaults: AmadeusEntrySyncVault[] = [{ vaultRoot: '/vault', cloudName: 'Cloud notes', entries: [{ path: 'Docs', kind: 'folder' }] }]
 
-async function click(path: string, side: 'local' | 'cloud' = 'local', missing = false) {
+async function click(path: string, side: 'local' | 'cloud' = 'local', missing = false, fullSync = false) {
   const createPublish = vi.fn(async (_mode: string, _path: string) => {
     if (missing) throw { status: 404 }
     return { url: 'https://example.test/p/token' }
@@ -32,7 +32,7 @@ async function click(path: string, side: 'local' | 'cloud' = 'local', missing = 
   const window = { amadeusCollab: { createPublish }, amadeusSync: {} }
   vi.stubGlobal('window', window)
   const fn = buildClick(window, { path }, vi.fn(), { clipboard: { writeText: vi.fn(async () => {}) } },
-    { getState: () => ({ toast }) }, (key: string) => key, vaults, '/vault', side, cloudPathFor, openCloudSyncDialog)
+    { getState: () => ({ toast }) }, (key: string) => key, vaults, '/vault', side, cloudPathFor, openCloudSyncDialog, fullSync)
   fn()
   for (let i = 0; i < 8; i++) await Promise.resolve()
   return { createPublish, toast, openCloudSyncDialog }
@@ -56,5 +56,12 @@ describe('folder context-menu publishing', () => {
   it('reports an unavailable cloud folder without incorrectly declaring that the user is not its owner', async () => {
     const { toast } = await click('Docs', 'local', true)
     expect(toast).toHaveBeenCalledWith('amxv.publish.notUploaded', true)
+  })
+
+  it('智库同步完整模式:本机库不按旧注册前缀发布,只提示还没接上(Codex P1-5)', async () => {
+    const { createPublish, toast, openCloudSyncDialog } = await click('Docs', 'local', false, true)
+    expect(createPublish).not.toHaveBeenCalled()
+    expect(openCloudSyncDialog).not.toHaveBeenCalled()
+    expect(toast).toHaveBeenCalledWith('ssync.share.v2Later')
   })
 })

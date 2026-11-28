@@ -14,6 +14,9 @@ vi.mock('../stores/entrySyncStore', () => ({
   isSyncedEntry: () => false,
 }))
 vi.mock('./CloudSyncDialog', () => ({ openCloudSyncDialog: vi.fn() }))
+// 智库同步第 2 步的入口(entries → 设置落点 → syncSetup 一长串):这里只测分享卡的竞态,入口按旧同步在管画
+vi.mock('../sync/v2/entries', () => ({ entryLabel: () => '', isFullSyncNow: () => false, runEntry: vi.fn(), useV2EntrySync: () => null }))
+vi.mock('../sync/v2/mode', () => ({ useSyncMode: (pick: (s: { mode: string }) => unknown) => pick({ mode: 'legacy' }), useLegacySync: () => true }))
 vi.mock('@lcl/engine', () => ({ OverlayAt: ({ children, className }: { children: React.ReactNode; className: string }) => React.createElement('section', { className }, children) }))
 vi.mock('../i18n', () => ({ registerMessages: () => {}, translate: (key: string) => key, useI18n: () => ({ t: (key: string) => key }) }))
 
