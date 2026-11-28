@@ -2,6 +2,13 @@
 // 隔离 home 起已构建的桌面端,老配置起步(只有 lastVault / localVault,没有清单):
 //   菜单只列当前库且打勾 → 钉住的库「从清单移除」置灰 → 打开另一篇 → 新建「工作」并切过去(树为空)
 //   → 菜单两行 → 切回原库,落在离开前那篇 → 配置:syncVault 钉在第一个库、两库都进清单、lastVault 跟着切。
+// 段 A(智库同步第 3 步 U3a,先跑,单独一个隔离 home):盘上种一个形状合法的 activeVault、不登录 → 回落开的是本机库,
+//   盘上的 activeVault 还在、lastVault 是真目录;window.amadeus 是转发壳(本机桥在 amadeusLocal);插件数据的库那一层
+//   经主窗能写、hostPath 给本机路径 —— 宿主判「在线」只认渲染层的报告,不看盘(负对照:宿主改成看盘 → 这几步红);
+//   之后切走再切回:activeVault 被清掉(切本机库同一次落盘清)。
+// 段 B(坏配置,按 H3 12b #954 的语义):① 内容坏(截断的 JSON)→ 原样挪成 <原文件名>.corrupt-<时间戳>、字节一字不差,
+//   从空配置起建默认库(不是 lastVault,那份读不出来);② I/O 读不了(chmod 000)→ 宿主拒绝,配置字节没变、
+//   不挪不新写。这一包渲染层不改,② 只断言宿主不写(渲染层「当不知道开 lastVault」在第 3 批)。
 // 截图(菜单亮 / 暗、两行)落 SHOT_DIR,缺省临时目录。跑:node .claude/hooks/devlock.cjs run --vehicle=e2e -- node scripts/check-vault-menu.cjs
 const fs = require('fs'); const os = require('os'); const path = require('path')
 const electron = require('./lib/launch-electron.cjs')
@@ -13,7 +20,157 @@ const put = (file, body) => { fs.mkdirSync(path.dirname(file), { recursive: true
 let failed = 0
 const check = (ok, what, extra = '') => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}${extra ? ` — ${extra}` : ''}`); if (!ok) failed++ }
 
+/** 起一个隔离实例(老配置 cfg 种进四份配置文件),进到笔记 Space、树出来为止;run(ctx) 跑完关掉并删临时目录。 */
+async function withApp(cfgOf, run, opts = {}) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-vaultmenu-'))
+  const A = path.join(home, 'Forsion', 'Amadeus')
+  put(path.join(A, '日记.md'), '上午把周报发出去。\n')
+  put(path.join(A, '项目/路线图.md'), '## 本季度\n\n多设备同步体验\n')
+  const ud = path.join(home, 'userdata')
+  const cfgFiles = []
+  for (const d of [ud, `${ud}-dev`]) for (const f of ['amadeus-config.json', 'amadeus-config.dev.json']) {
+    cfgFiles.push(path.join(d, f)); put(path.join(d, f), cfgOf(A))
+  }
+  const readCfg = () => cfgFiles.map((f) => { try { return { f, mtime: fs.statSync(f).mtimeMs, v: JSON.parse(fs.readFileSync(f, 'utf8')) } } catch { return null } })
+    .filter(Boolean).sort((a, b) => b.mtime - a.mtime)[0].v
+  if (opts.prep) opts.prep(cfgFiles)
+  const workspace = `${home}-workspace`
+  const env = { ...process.env, TANGU_HOME: home, FORSION_WORKSPACE_DIR: workspace, TANGU_BACKEND_URL: 'http://127.0.0.1:1', TANGU_HARNESS_QUIET: '1' }
+  const app = await electron.launch({ args: [`--user-data-dir=${ud}`, '--lang=zh-CN', DESK], cwd: DESK, env })
+  try {
+    const win = await app.firstWindow()
+    await app.evaluate(({ BrowserWindow }, s) => { BrowserWindow.getAllWindows()[0].setContentSize(s.W, s.H) }, { W, H })
+    await win.waitForSelector('#root', { timeout: 30_000 }); await win.waitForTimeout(2500)
+    if (opts.noTree) { await win.waitForTimeout(6000); await run({ win, app, A, home, cfgFiles }); return }
+    for (const label of ['跳过引导', 'Skip']) { const b = win.locator(`text=${label}`).first(); if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break } }
+    await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
+    await win.evaluate(`localStorage.setItem('forsion_default_space', 'amadeus')`)
+    await win.reload({ waitUntil: 'domcontentloaded' }); await win.waitForSelector('.amx-tree .t2s-scroll', { timeout: 30_000 }); await win.waitForTimeout(2000)
+    await run({ win, app, A, home, workspace, readCfg, cfgFiles })
+  } finally {
+    await app.close().catch(() => {})
+    if (opts.cleanup) opts.cleanup(cfgFiles)
+    for (const d of [home, workspace]) fs.rmSync(d, { recursive: true, force: true })
+  }
+}
+
+// 形状合法(H3 12a 修订第 7 条)、但不属于任何登录账号的在线库:不登录时宿主 get 回 fallback,渲染层开 lastVault
+const SAVED_ONLINE = { kind: 'online', account: 'ab'.repeat(32), libraryId: 'vault-lab:Amadeus/Lab/', vaultId: 'vault-lab', prefix: 'Amadeus/Lab/', name: 'Lab' }
+
+async function segmentA() {
+  console.log('— 段 A:盘上有 activeVault、不登录 → 回落本机库,插件数据按本机库')
+  await withApp((A) => ({ lastVault: A, localVault: A, lastPage: '日记.md', activeVault: SAVED_ONLINE }), async ({ win, app, A, home, readCfg }) => {
+    const shell = await win.evaluate(() => ({ local: !!window.amadeusLocal, shell: !!window.amadeus && window.amadeus !== window.amadeusLocal, fwd: !!window.amadeusLocal && window.amadeus.listPages === window.amadeusLocal.listPages }))
+    check(shell.local && shell.shell && shell.fwd, 'A: window.amadeus 是转发壳,本机桥在 amadeusLocal、方法原样转发', JSON.stringify(shell))
+    // window.amadeus 这个键的属性跟 contextBridge 暴露的键一样(只读 / 删不掉 / 可枚举),换成壳以后插件改不了、删不掉它
+    const keys = await win.evaluate(() => {
+      const f = (k) => { const d = Object.getOwnPropertyDescriptor(window, k); return d ? { w: !!d.writable, c: !!d.configurable, e: !!d.enumerable } : null }
+      return { local: f('amadeusLocal'), shell: f('amadeus'), frozen: Object.isFrozen(window.amadeusLocal) }
+    })
+    check(!!keys.local && JSON.stringify(keys.shell) === JSON.stringify(keys.local), 'A: window.amadeus 键的属性同 contextBridge 暴露的键', JSON.stringify(keys))
+    const foot = (await win.locator('.amx-tree .t2s-foot button[aria-haspopup="menu"]').textContent())?.trim()
+    check(/Amadeus/.test(foot ?? ''), 'A: 打开的是本机库 Amadeus', foot)
+    check(await win.$$eval('.amx-tree .t2s-srow[data-sel-id="日记.md"]', (e) => e.length) === 1, 'A: 树里是本机库的笔记')
+    const read = await win.evaluate(() => window.amadeus.activeVaultGet().then((r) => r, (e) => ({ error: String(e?.message ?? e) })))
+    check(read?.ref === null && read?.fallback?.reason === 'account' && read?.fallback?.name === 'Lab', 'A: 宿主读到在线库但账号对不上 → fallback(经转发壳)', JSON.stringify(read))
+    let cfg = readCfg()
+    check(JSON.stringify(cfg.activeVault) === JSON.stringify(SAVED_ONLINE), 'A: 盘上的 activeVault 还在(回落不清)', JSON.stringify(cfg.activeVault))
+    check(cfg.lastVault === A && fs.statSync(cfg.lastVault).isDirectory(), 'A: lastVault 是本机库的真目录', cfg.lastVault)
+    // 插件数据:请求里的 vault 用主进程挂着的根本身(macOS 临时目录有 /var 与 /private/var 两种写法,别用脚本里的 A)
+    const ps = await win.evaluate(async () => {
+      const root = (await window.amadeus.restoreVault(true))?.root
+      const id = 'vaultmenu-probe'
+      const out = { root }
+      const t = async (k, f) => { try { out[k] = await f() } catch (e) { out[k] = { error: String(e?.message ?? e) } } }
+      await t('write', () => window.amadeus.pluginStorage({ id, vault: root, op: 'write', path: 'probe.txt', data: 'ok' }).then(() => true))
+      await t('read', () => window.amadeus.pluginStorage({ id, vault: root, op: 'readText', path: 'probe.txt' }))
+      await t('hostPath', () => window.amadeus.pluginStorage({ id, vault: root, op: 'hostPath', path: 'probe.txt' }))
+      await t('appHostPath', () => window.amadeus.pluginStorage({ id, op: 'hostPath', path: 'probe.txt' }))
+      return out
+    })
+    check(ps.write === true && ps.read === 'ok', 'A: 插件数据的库那一层能写能读(按本机库)', JSON.stringify({ write: ps.write, read: ps.read }))
+    const hp = typeof ps.hostPath === 'string' ? ps.hostPath : ''
+    check(!!hp && path.isAbsolute(hp) && (hp.startsWith(fs.realpathSync(home)) || hp.startsWith(home)), 'A: 库那一层的 hostPath 给本机绝对路径', JSON.stringify(ps.hostPath))
+    check(!!hp && /[\\/]vaults[\\/][0-9a-f]{16}[\\/]probe\.txt$/.test(hp) && fs.existsSync(hp) && fs.readFileSync(hp, 'utf8') === 'ok', 'A: 那个路径上就是刚写的文件', hp)
+    check(typeof ps.appHostPath === 'string' && path.isAbsolute(ps.appHostPath), 'A: 跟应用那一层的 hostPath 照旧', JSON.stringify(ps.appHostPath))
+    // 新接缝接上了、且这一包不改任何东西:主窗报 null 收下;按需迁移要主窗报过 online-capable,配置一字不动
+    const before = JSON.stringify(readCfg())
+    const wired = await win.evaluate(async () => {
+      const r = {}
+      try { r.opened = (await window.amadeusLocal.onlineOpened(null)) ?? 'ok' } catch (e) { r.opened = { error: String(e?.message ?? e) } }
+      try { r.migrate = await window.amadeus.activeVaultMigrate() } catch (e) { r.migrate = { error: String(e?.message ?? e) } }
+      return r
+    })
+    // 这个实例没有 Extend 的代发通道、主窗没报 online-capable:migrate 由宿主拒(renderer_unsupported),不迁不写
+    check(wired.opened === 'ok' && /renderer_unsupported/.test(String(wired.migrate?.error)) && JSON.stringify(readCfg()) === before, 'A: online-opened / migrate 通道在;没有代发通道时 migrate 被宿主拒、什么都不改', JSON.stringify(wired))
+    // 在线库代发通道的推送口(window.tangu.onCloudVaultEvent):Extend 注册了代发通道才有这个键;有的话主进程 send 的那一包原样到订阅者
+    const relay = await win.evaluate(() => {
+      if (typeof window.tangu?.onCloudVaultEvent !== 'function') return { present: false }
+      window.__cvPushes = []
+      window.__cvOff = window.tangu.onCloudVaultEvent((p) => window.__cvPushes.push(p))
+      return { present: true, off: typeof window.__cvOff === 'function' }
+    })
+    if (!relay.present) console.log('     (这个实例没有 Extend 的代发通道:onCloudVaultEvent 不在,跳过推送那一步)')
+    else {
+      const push = { subscriptionId: 's-1', event: { type: 'change', data: { path: 'a.md', extra: [1, { x: null }] } } }
+      check(relay.off, 'A: onCloudVaultEvent 回取消函数')
+      await app.evaluate(({ BrowserWindow }, p) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send('cloudvault:event', p) }, push)
+      await win.waitForTimeout(300)
+      const got = await win.evaluate(() => { window.__cvOff(); return window.__cvPushes })
+      check(JSON.stringify(got) === JSON.stringify([push]), 'A: cloudvault:event 原样转发给订阅者', JSON.stringify(got))
+    }
+    // 切走再切回:切本机库同一次落盘清掉 activeVault,lastVault 始终是真目录
+    const sw = await win.evaluate(async (a) => {
+      try { await window.amadeus.createVault('工作'); return { ok: true, back: (await window.amadeus.switchVault(a))?.root ?? null } } catch (e) { return { error: String(e?.message ?? e) } }
+    }, ps.root)
+    cfg = readCfg()
+    check(sw.ok && !('activeVault' in cfg), 'A: 切到「工作」再切回 → activeVault 清掉', JSON.stringify({ sw, activeVault: cfg.activeVault }))
+    check(cfg.lastVault === ps.root || cfg.lastVault === A, 'A: 切回后 lastVault = 本机库', cfg.lastVault)
+  })
+}
+
+// 截断的 JSON:内容确定坏了(解析不了)
+const BROKEN = '{"lastVault": "/tmp/somewhere", "localVault'
+
+async function segmentB() {
+  console.log('— 段 B①:配置内容坏了 → 原样挪成 .corrupt-*、从空配置起')
+  await withApp(() => BROKEN, async ({ win, A, workspace, cfgFiles }) => {
+    const moved = []
+    for (const f of cfgFiles) for (const n of fs.readdirSync(path.dirname(f))) {
+      if (n.startsWith(`${path.basename(f)}.corrupt-`)) moved.push({ f, n, body: fs.readFileSync(path.join(path.dirname(f), n), 'utf8') })
+    }
+    check(moved.length >= 1, 'B①: 用到的那份配置挪成了 <原文件名>.corrupt-*', JSON.stringify(moved.map((m) => m.n)))
+    check(moved.length >= 1 && moved.every((m) => m.body === BROKEN), 'B①: 挪走的文件逐字节就是原来的坏内容')
+    const live = moved.map((m) => { try { return JSON.parse(fs.readFileSync(m.f, 'utf8')) } catch { return null } })
+    check(moved.length >= 1 && live.every((v) => v && typeof v === 'object'), 'B①: 原位置现在是一份能解析的新配置', JSON.stringify(live))
+    const root = await win.evaluate(() => window.amadeus.restoreVault(true).then((r) => r?.root ?? null, (e) => ({ error: String(e?.message ?? e) })))
+    const real = (p) => { try { return fs.realpathSync(p) } catch { return p } }
+    check(typeof root === 'string' && fs.statSync(root).isDirectory() && real(root).startsWith(real(workspace)), 'B①: 开的是新建的默认库(真目录),不是读不出来的那份', JSON.stringify(root))
+    check(typeof root === 'string' && real(root) !== real(A), 'B①: 没把种子里的库当成 lastVault', JSON.stringify(root))
+  })
+
+  console.log('— 段 B②:配置 I/O 读不了 → 宿主拒绝,不挪不写')
+  const seeded = JSON.stringify({ lastVault: '/tmp/forsion-vaultmenu-unreadable', localVault: '/tmp/forsion-vaultmenu-unreadable' })
+  let before = []
+  await withApp(() => seeded, async ({ win, cfgFiles }) => {
+    const r = await win.evaluate(() => (window.amadeus?.restoreVault ? window.amadeus.restoreVault(true).then(() => 'ok', (e) => String(e?.message ?? e)) : 'no-bridge'))
+    check(/amadeus-config-unreadable|EACCES|permission/i.test(String(r)), 'B②: restoreVault 拒绝(读不了配置)', String(r))
+    for (const f of cfgFiles) fs.chmodSync(f, 0o600)
+    const after = cfgFiles.map((f) => fs.readFileSync(f, 'utf8'))
+    check(after.every((body, i) => body === before[i]), 'B②: 四份配置逐字节没变(没被盖)')
+    const stray = cfgFiles.flatMap((f) => fs.readdirSync(path.dirname(f)).filter((n) => n.startsWith(`${path.basename(f)}.corrupt-`)))
+    check(stray.length === 0, 'B②: 读不了的不当内容坏了挪走', JSON.stringify(stray))
+  }, {
+    noTree: true,
+    prep: (files) => { before = files.map((f) => fs.readFileSync(f, 'utf8')); for (const f of files) fs.chmodSync(f, 0o000) },
+    cleanup: (files) => { for (const f of files) { try { fs.chmodSync(f, 0o600) } catch {} } },
+  })
+}
+
 async function main() {
+  await segmentA()
+  await segmentB()
+  console.log('— 菜单走查:老配置起步')
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-vaultmenu-'))
   const A = path.join(home, 'Forsion', 'Amadeus')
   put(path.join(A, '日记.md'), '上午把周报发出去。\n')

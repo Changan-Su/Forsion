@@ -803,6 +803,9 @@ export interface OnlineVaultRef {
 }
 /** `ref` null = open the local vault. `fallback` = an online library was saved for another (or no) account. */
 export interface ActiveVaultRead { ref: OnlineVaultRef | null; fallback: null | { reason: 'account'; name: string } }
+/** Root identity of an online library: `cloud://<vaultId>/<libraryId>`. The host's plugin storage gate and the cloud
+ *  bridge build this string the same way (one function), so the vault-layer key matches on both sides. */
+export const onlineVaultRoot = (ref: Pick<OnlineVaultRef, 'vaultId' | 'libraryId'>): string => `cloud://${ref.vaultId}/${ref.libraryId}`
 
 /** One row of the bottom vault menu. `current` = open on the local side. */
 export interface LocalVaultRow {
@@ -887,6 +890,12 @@ export interface AmadeusApi {
   openOnlineResult?(r: { requestId: string; ok: boolean; code?: string }): void
   /** Main window: the forwarding bridge is installed, so the host may ask for online opens. */
   onlineCapable?(): void
+  /** Main window: which library the forwarding bridge actually has open (null = the local vault). The host gates
+   *  plugin storage on this report, never on the saved activeVault (a fallback keeps that on disk). */
+  onlineOpened?(ref: OnlineVaultRef | null): Promise<void>
+  /** Main window: migrate a legacy mirror config into activeVault on demand. Resolves the migrated ref, or null when
+   *  there was nothing to migrate; throws when the config can't be read (nothing written). */
+  activeVaultMigrate?(): Promise<OnlineVaultRef | null>
   listPages(): Promise<string[]>
   /** All non-page files (attachments/.db/…), vault-relative — for the vault tree. */
   listFiles(): Promise<string[]>
@@ -1124,5 +1133,7 @@ export interface AmadeusApi {
 declare global {
   interface Window {
     amadeus: AmadeusApi
+    /** Desktop preload's local-vault bridge; window.amadeus forwards to it (frontend amadeus/bridgeShell.ts). */
+    amadeusLocal?: AmadeusApi
   }
 }

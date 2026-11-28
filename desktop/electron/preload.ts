@@ -20,7 +20,7 @@ import { APPROVAL_OPEN_CHANNEL, type ApprovalOpenPayload } from '../shared/appro
 import { UI_APPEARANCE_CHANNEL, UI_LOCALE_CHANNEL } from '../shared/uiSync' // P1-KF
 import { PRODUCT } from './product'
 import { cloudPresent } from './cloudPresent'
-import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
+import './amadeus/preload' // Amadeus Space:暴露 window.amadeusLocal(vault IPC 桥;window.amadeus 由渲染层转发壳装),副作用导入
 import './remotesyncPreload' // 本地库远程同步:暴露 window.remoteSync,副作用导入
 import './syncRecordsPreload' // 同步记录:暴露 window.syncRecords,副作用导入
 
@@ -867,6 +867,13 @@ const api = {
     typeof channel === 'string' && cloudPresent().has(channel)
       ? ipcRenderer.invoke(channel, ...args)
       : Promise.reject(new Error(`not a Forsion Extend channel: ${String(channel)}`)),
+  /** 在线库代发通道的推送(Extend 主进程半身 e.sender.send 'cloudvault:event',订阅经 cloudInvoke('cloudvault:events:open') 开)。
+   *  原样转发、不解析不过滤;Extend 没注册代发通道就没有这个键(见下方 CLOUD_KEYS)。 */
+  onCloudVaultEvent: (cb: (push: import('../shared/cloudVaultEvents').CloudVaultPush) => void): (() => void) => {
+    const listener = (_e: unknown, push: import('../shared/cloudVaultEvents').CloudVaultPush): void => cb(push)
+    ipcRenderer.on('cloudvault:event', listener)
+    return () => { ipcRenderer.removeListener('cloudvault:event', listener) }
+  },
   /** 帮助改进 Forsion(2.13.8 起):渲染层的崩溃 / 功能使用 / 长任务计数报给主进程,主进程整形后经 CloudHost.telemetry 转给 Extend。
    *  v2(契约 §9)加了插件安装 / 前置 / 生命周期 / 激活、首启引导、上手提示、计数(count)、命令(command)、设置改动(setting)。
    *  只进不出、没有读接口。键在不在 = Extend 有没有注册 telemetry:get(见下方 CLOUD_KEYS):没有 Extend 遥测就没人收,
@@ -988,6 +995,8 @@ const CLOUD_KEYS: Record<string, string> = {
   unitsBindFrame: 'units:list',
   // 帮助改进(2.13.8 起):通道是宿主自己的 host-telemetry:report,但只在 Extend 接得住(注册了 telemetry:get)时才留
   telemetryReport: 'telemetry:get',
+  // 在线库代发通道的推送(智库同步第 3 步):推送通道是 Extend 往窗口 send 的,开订阅的那条有人接才留
+  onCloudVaultEvent: 'cloudvault:events:open',
 }
 for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent().has(channel)) delete (api as Record<string, unknown>)[k]
 if (!cloudPresent().size) delete (api as Record<string, unknown>).cloudInvoke
