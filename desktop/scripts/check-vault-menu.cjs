@@ -165,6 +165,10 @@ async function main() {
     await shotsFor('new-vault')
     await cancelDialog()
 
+    // This fixture has no connected engine to load authInfo during appStore.connect.
+    // Deliver the host's auth notification so appStore reads the fixture's auth:status.
+    const mainWindow = await app.browserWindow(win)
+    await mainWindow.evaluate((w) => w.webContents.send('auth:changed', { loggedIn: true }))
     await win.waitForFunction(() => globalThis.__forsionSyncFocus === 1)
     const settingsWindow = app.waitForEvent('window', { predicate: (w) => w !== win, timeout: 15_000 })
     await win.evaluate(() => window.tangu.openFloatingPanel({
