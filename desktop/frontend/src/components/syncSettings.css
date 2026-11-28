@@ -56,6 +56,9 @@
 }
 .ssync-note.ssync-faint { color: var(--text-faint); }
 .ssync-note.ssync-warn { color: var(--warning); }
+/* 网盘授权在途(H-9):一行说明 + Dropbox 手动授权码 + 确定 / 取消 */
+.ssync-auth { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.ssync-auth-code { flex: 1 1 180px; min-width: 0; }
 .ssync-ask { flex-direction: column; align-items: stretch; }
 .ssync-ask-acts { display: flex; flex-wrap: wrap; gap: 6px; }
 

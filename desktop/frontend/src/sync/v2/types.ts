@@ -15,6 +15,8 @@ export const VAULT_SYNC_CHANNELS = {
   setTarget: 'vaultsync:setTarget',
   run: 'vaultsync:run',
   resolve: 'vaultsync:resolve',
+  /** E-11:「全部…」{ bindingId, action, token };token = status 的 review.differsToken,对不上回 stale、一条不动。老 Extend 没有这个通道。 */
+  resolveAll: 'vaultsync:resolveAll',
   deletesConfirm: 'vaultsync:deletes:confirm',
   deletesAbandon: 'vaultsync:deletes:abandon',
   renameAnswer: 'vaultsync:rename:answer',
@@ -42,6 +44,11 @@ export type SyncDirection = 'both' | 'push' | 'pull'
 export type BindingReason =
   | 'non_default_vault' | 'no_backing_identity' | 'too_large_for_new_sync' | 'cross_namespace_rules' | 'double_engine'
   | 'root_missing' | 'root_renamed' | 'server_unsupported' | 'state_unreadable' | 'takeover_failed' | 'remote_same_root'
+  | 'remote_dir_in_use' | 'move_in_progress'
+
+/** 占着这个远端目录的那条绑定(契约 E-17):name = 库文件夹名;可能是停着的那条(停着也占着,只有停止同步才释放)。 */
+/** 谁占着这个远端目录(E-17)。bindingId = null、source = 'remotesync':被原来的网盘同步占着(E-19),name 是它本机库的文件夹名,读不出时为空串。 */
+export interface RemoteDirHolder { bindingId: string | null; name: string; source?: 'remotesync' }
 
 export type BindingTargetView =
   | { kind: 'penzor'; vaultId: string; vaultName: string | null; placement: BindingPlacement; prefix: string }
@@ -57,6 +64,10 @@ export interface BindingStatusView {
   error?: string
   notice?: 'takeover' | 'needs-choice' | 'needs-card' | 'refused'
   reason?: BindingReason
+  /** reason = remote_dir_in_use 时:谁占着这个远端目录(E-17) */
+  inUseBy?: RemoteDirHolder
+  /** 这条网盘绑定和原来的网盘同步用着同一个去处、旧同步没交给 v2(E-19):照跑,reason 不变,只是一句提示 */
+  overlapsLegacy?: { name: string; targetId: string }
 }
 
 export interface BindingView {
@@ -75,7 +86,10 @@ export interface BindingView {
   renamedFrom?: string
 }
 
-export interface TakeoverView { root: string; source: 'entry' | 'content-active' | 'content-off' | 'remotesync'; phase: string; lastError?: string; reason?: BindingReason }
+/** 接手 D(旧网盘同步)撞上占用、封着不交还时(H 的 fix/sync-takeover-d-hold):reason 是三种之一,inUseBy = 占着的那条(remote_dir_nested 可能没有);
+ *  接手收尾(done / reverted / refused)以后不再带这两项。 */
+export type TakeoverHoldReason = 'remote_dir_in_use' | 'remote_dir_nested' | 'primary_exists'
+export interface TakeoverView { root: string; source: 'entry' | 'content-active' | 'content-off' | 'remotesync'; phase: string; lastError?: string; reason?: BindingReason | TakeoverHoldReason; inUseBy?: RemoteDirHolder }
 
 export interface CloudVaultView {
   id: string
@@ -130,6 +144,8 @@ export interface VaultSyncApplyArgs { token: string; generation: string; onDiffe
 
 export interface HeldRef { bindingId: string; path: string; generation: string }
 export type HeldAction = 'local' | 'cloud' | 'both' | 'newer'
+/** E-11 第 3 条:newer 判不出的照旧放着,算进 cannotDecide。 */
+export interface VaultSyncResolveAllResult { resolved: number; cannotDecide: number; stale: number; failed: number; recoveryEventIds: string[] }
 
 export interface RecoveryEventView {
   eventId: string

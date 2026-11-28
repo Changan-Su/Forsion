@@ -187,6 +187,62 @@ describe('Codex 评审返修(第 2 步 U)', () => {
     expect(syncErrorText('takeover_in_progress', t)).toBe(t('ssync.err.takeoverBusy'))
     expect(syncErrorText('Error: binding_not_found', t)).toBe(t('ssync.err.bindingGone'))
   })
+  it('接手旧网盘同步(D)封着的那几种,每种(归档前 / 后 × 撞目录 / 撞库 / 同库另一条 × 有没有库名)都有文案', () => {
+    for (const stage of ['held', 'archived']) for (const kind of ['InUse', 'Primary', 'Nested']) for (const anon of kind === 'Nested' ? [''] : ['', 'Anon']) {
+      const key = `ssync.dhold.${stage}${kind}${anon}`
+      expect(t(key, { name: '归档' })).not.toBe(key)
+    }
+    expect(t('ssync.dhold.openOld')).not.toBe('ssync.dhold.openOld')
+  })
+  it('远端目录被别的库占着(E-17):value 里的失败带着 inUseBy 留下来;文案写出库名,和同一个库的 remote_dir_nested 分开', () => {
+    const r = normalizeReply(CH.preview, { ok: true, value: { ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: 'b2', name: '归档' } } })
+    expect(r).toEqual({ ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: 'b2', name: '归档' } })
+    expect(normalizeReply(CH.setEnabled, { ok: true, value: { ok: false, error: 'remote_dir_in_use', inUseBy: { name: 7 } } })).toEqual({ ok: false, error: 'remote_dir_in_use' })
+    const named = syncErrorText('remote_dir_in_use', t, '研究笔记', { name: '归档' })
+    expect(named).toBe(t('ssync.err.remoteDirInUse', { name: '归档' }))
+    expect(named).toContain('归档')
+    expect(syncErrorText('remote_dir_in_use', t)).toBe(t('ssync.err.remoteDirInUseAnon'))
+    expect(syncErrorText('remote_dir_nested', t)).not.toBe(syncErrorText('remote_dir_in_use', t))
+  })
+  it('E-19:原来的网盘同步占着(bindingId null + source remotesync)留下来,外层失败也留;文案按旧同步说,读不出时不带库名', () => {
+    const legacy = { bindingId: null, name: '归档', source: 'remotesync' }
+    expect(normalizeReply(CH.apply, { ok: true, value: { ok: false, error: 'remote_dir_in_use', inUseBy: legacy } })).toEqual({ ok: false, error: 'remote_dir_in_use', inUseBy: legacy })
+    expect(normalizeReply(CH.preview, { ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: 'b2', name: '研究笔记' } })).toEqual({ ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: 'b2', name: '研究笔记' } })
+    expect(normalizeReply(CH.setEnabled, { ok: true, value: { ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: 3, name: '', source: 'x' } } })).toEqual({ ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: null, name: '' } })
+    expect(syncErrorText('remote_dir_in_use', t, '研究笔记', legacy)).toBe(t('ssync.err.legacyInUse', { name: '归档' }))
+    expect(syncErrorText('remote_dir_in_use', t, '研究笔记', { ...legacy, name: '' })).toBe(t('ssync.err.legacyInUseAnon'))
+    // 占着的是接手建的那条:不叫人去停它
+    const tk = syncErrorText('remote_dir_in_use', t, '研究笔记', { name: '归档', takeover: true })
+    expect(tk).toBe(t('ssync.err.remoteDirInUseTakeover', { name: '归档' }))
+    expect(tk).not.toContain('停止同步')
+    // 退回的拒绝码(契约 H-14)
+    for (const [code, key] of [['takeover_round_running', 'ssync.err.takeoverRoundRunning'], ['nothing_to_revert', 'ssync.err.nothingToRevert'], ['legacy_config_unreadable', 'ssync.err.legacyConfigUnreadable'], ['legacy_root_unavailable', 'ssync.err.legacyRootUnavailable'], ['takeover_finished', 'ssync.err.takeoverFinished'], ['legacy_config_changed', 'ssync.err.legacyConfigChanged']] as const) {
+      expect(syncErrorText(`Error invoking remote method 'vaultsync:takeoverRevert': Error: ${code}`, t)).toBe(t(key))
+      expect(t(key)).not.toBe(key)
+    }
+    for (const k of ['ssync.reason.remote_dir_in_use_legacy', 'ssync.note.overlapsLegacyAnon']) expect(t(k)).not.toBe(k)
+    for (const k of ['ssync.reason.remote_dir_in_use_takeover', 'ssync.note.overlapsLegacy', 'ssync.dhold.heldInUseTakeover', 'ssync.dhold.heldPrimaryTakeover', 'ssync.dhold.archivedInUseTakeover', 'ssync.dhold.archivedPrimaryTakeover']) {
+      expect(t(k, { name: '归档' })).not.toBe(k)
+      expect(t(k, { name: '归档' })).not.toContain('停止同步')
+    }
+  })
+  it('换去处(含蓬洲云 ↔ 网盘 / 文件夹,E-16 附)的拒绝码各有一句人话,不落到「没做成」', () => {
+    const generic = (c: string) => t('ssync.err.generic', { error: c })
+    for (const [code, key] of [
+      ['not_signed_in', 'ssync.err.signedOut'], ['compat_mode', 'ssync.err.compatMode'],
+      ['move_in_progress', 'ssync.err.moveBusy'], ['retarget_in_progress', 'ssync.err.retargetBusy'],
+      ['unbind_in_progress', 'ssync.err.unbindBusy'], ['unbinding_in_progress', 'ssync.err.unbindBusy'],
+      ['takeover_in_progress', 'ssync.err.takeoverBusy'], ['binding_not_active', 'ssync.err.notActive'],
+      ['first_round_in_progress', 'ssync.err.firstRound'], ['backup_remote_only', 'ssync.err.backupRemoteOnly'],
+      ['already_local', 'ssync.err.alreadyLocal'], ['mirror_root', 'ssync.err.overlap'],
+      ['target-kind-unsupported', 'ssync.targetErr.target-kind-unsupported'],
+    ] as const) {
+      const text = syncErrorText(`Error invoking remote method 'vaultsync:preview': Error: ${code}`, t)
+      expect(text).toBe(t(key))
+      expect(text).not.toBe(generic(code))
+      expect(text).not.toBe(key) // 字典里有这个键
+    }
+  })
 })
 
 describe('旧流程照旧的模式(网页 / 手机没有 v2 通道 = off,旧流程是唯一那套)', () => {

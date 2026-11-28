@@ -11,7 +11,8 @@ import { useSyncRecords } from '../sync/useSyncRecords'
 import { recordSummary, failureText } from '../sync/vaultSyncText'
 import { openSyncRecords } from '../sync/SyncRecordList'
 import { vaultSync } from '../sync/v2/client'
-import type { Cadence, HeldRef, RecoveryEventView, ScopeItem, VaultSyncPreview } from '../sync/v2/types'
+import { syncErrorText } from '../sync/v2/errors'
+import type { Cadence, HeldRef, RecoveryEventView, ScopeItem, SyncDirection, VaultSyncPreview } from '../sync/v2/types'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import './syncSettingsMessages'
 
@@ -20,8 +21,10 @@ const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$
 const folderName = (root: string): string => root.split(/[\\/]/).filter(Boolean).pop() ?? root
 
 /** 页底汇总卡(方案 V9b,3B 的内容 + 2B 的主按钮):四格 + 太大,不一样的前几篇,三颗按钮。 */
-export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, onCancel }: {
+export function SummaryCard({ name, preview, busy, kind, added, dest, remote, onApply, onCancel }: {
   name: string
+  /** 去处是网盘 / 本地文件夹(换过去的卡,或网盘那一行改范围的卡):另一边说「那边」,不说「云端」 */
+  remote?: boolean
   /** 去处一句话(蓬洲云 · 哪个库);库名和去处要看得见 */
   dest?: string
   /** 这一次新加进范围的项(右键带来的那一项 + 关联闭包),标「刚勾上」 */
@@ -29,14 +32,14 @@ export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, o
   preview: VaultSyncPreview | null
   busy: boolean
   /** cloud = 云端已有(按名字对上 / 原位置);new = 新建库;scope = 已有绑定里新加的部分 */
-  kind: 'cloud' | 'new' | 'scope'
+  kind: 'cloud' | 'new' | 'scope' | 'target'
   onApply: (onDiffer: 'newer' | 'hold') => void
   onCancel: () => void
 }) {
   const { t } = useI18n()
   const [all, setAll] = useState(false)
   const [notSame, setNotSame] = useState(false)
-  const title = kind === 'scope' ? t('ssync.sum.titleScope') : kind === 'new' ? t('ssync.sum.titleNew') : t('ssync.sum.titleCloud')
+  const title = kind === 'scope' ? t(remote ? 'ssync.sum.titleScopeThere' : 'ssync.sum.titleScope') : kind === 'target' ? t('ssync.sum.titleTarget') : kind === 'new' ? t('ssync.sum.titleNew') : t('ssync.sum.titleCloud')
   if (!preview) {
     return (
       <section className="ssync-sum" aria-live="polite" data-ssync-summary="comparing">
@@ -50,7 +53,7 @@ export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, o
   const tiles: Array<[string, number, boolean]> = [
     [t('ssync.sum.same'), preview.same, false],
     [t('ssync.sum.onlyLocal'), preview.onlyLocal, false],
-    ...(preview.onlyRemote > 0 ? [[t('ssync.sum.onlyRemote'), preview.onlyRemote, false] as [string, number, boolean]] : []),
+    ...(preview.onlyRemote > 0 ? [[t(remote ? 'ssync.sum.onlyThere' : 'ssync.sum.onlyRemote'), preview.onlyRemote, false] as [string, number, boolean]] : []),
     [t('ssync.sum.differ'), differ.length, differ.length > 0],
     [t('ssync.sum.tooLarge'), preview.tooLarge.length, false],
   ]
@@ -78,7 +81,7 @@ export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, o
           {shown.map((d) => (
             <div key={d.path} className="ssync-sum-row" title={d.path}>
               <span className="ssync-sum-name">{baseName(d.path)}</span>
-              <span className={d.newer ? 'ssync-warn' : 'ssync-faint'}>{d.newer === 'local' ? t('ssync.sum.newerHere') : d.newer === 'remote' ? t('ssync.sum.newerCloud') : t('ssync.sum.newerUnknown')}</span>
+              <span className={d.newer ? 'ssync-warn' : 'ssync-faint'}>{d.newer === 'local' ? t('ssync.sum.newerHere') : d.newer === 'remote' ? t(remote ? 'ssync.sum.newerThere' : 'ssync.sum.newerCloud') : t('ssync.sum.newerUnknown')}</span>
             </div>
           ))}
           {differ.length > 3 && (
@@ -111,21 +114,40 @@ export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, o
 }
 
 /** 等你定(v2):有清单(契约 U-2)就逐篇给四个出口;没有只写计数。 */
-export function HeldReview({ bindingId, count, items, onDone }: {
+export function HeldReview({ bindingId, count, items, token, direction, onDone }: {
   bindingId: string
   count: number
   items: Array<{ path: string; newer: 'local' | 'remote' | null; ref: HeldRef }> | null
+  /** E-11 的 differsToken:有它才给「全部…」(整份名单对得上才动,对不上一条不动) */
+  token?: string
+  /** 网盘那一行的方向:只往外推(push,备份都是)只给「用本机」,只往里拉(pull)只给「用云端」;别的出口引擎回 direction_forbids(契约 E-13 第 8 条) */
+  direction?: SyncDirection
   onDone: () => void
 }) {
   const { t } = useI18n()
+  // 网盘 / 本地文件夹那一行(只有它带方向):另一边不叫「云端」
+  const remote = direction !== undefined
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
   if (!count) return null
+  // 「留较新的」判到允许的那边时引擎照做(push 时本机较新、pull 时云端较新);「全部…」照给,判不了的引擎算进 cannotDecide(Codex)
+  const actions = direction === 'push' ? (['local', 'newer'] as const) : direction === 'pull' ? (['cloud', 'newer'] as const) : (['local', 'cloud', 'both', 'newer'] as const)
+  const newerOk = (n: 'local' | 'remote' | null): boolean => !!n && (direction === 'push' ? n === 'local' : direction === 'pull' ? n === 'remote' : true)
+  const all = async (action: 'local' | 'cloud' | 'both' | 'newer'): Promise<void> => {
+    if (!token) return
+    setBusy('*'); setError(null); setNote(null)
+    const r = await vaultSync.resolveAll(bindingId, action, token)
+    setBusy(null)
+    if (!r.ok) setError(syncErrorText(r.error, t))
+    else if (r.value) setNote(t('ssync.review.allDone', { n: r.value.resolved, left: r.value.cannotDecide + r.value.stale + r.value.failed }))
+    onDone()
+  }
   const act = async (ref: HeldRef, action: 'local' | 'cloud' | 'both' | 'newer'): Promise<void> => {
     setBusy(ref.path); setError(null)
     const r = await vaultSync.resolve(ref, action)
     setBusy(null)
-    if (!r.ok) setError(r.error === 'stale' ? t('ssync.stale') : ipcErrorText(r.error))
+    if (!r.ok) setError(syncErrorText(r.error, t))
     onDone()
   }
   return (
@@ -136,15 +158,27 @@ export function HeldReview({ bindingId, count, items, onDone }: {
         <div key={h.path} className="ssync-held-row" title={h.path}>
           <FileText size={13} aria-hidden="true" />
           <span className="ssync-held-name">{baseName(h.path)}</span>
-          <span className="ssync-faint">{h.newer === 'local' ? t('ssync.sum.newerHere') : h.newer === 'remote' ? t('ssync.sum.newerCloud') : t('vsync.panel.newerUnknown')}</span>
+          <span className="ssync-faint">{h.newer === 'local' ? t('ssync.sum.newerHere') : h.newer === 'remote' ? t(remote ? 'ssync.sum.newerThere' : 'ssync.sum.newerCloud') : t('vsync.panel.newerUnknown')}</span>
           <span className="ssync-grow" />
-          {(['local', 'cloud', 'both', 'newer'] as const).map((a) => (
-            <button key={a} type="button" className="btn ghost sm" disabled={busy !== null || (a === 'newer' && !h.newer)} onClick={() => void act(h.ref, a)}>
-              {t(a === 'local' ? 'ssync.review.useLocal' : a === 'cloud' ? 'ssync.review.useCloud' : a === 'both' ? 'ssync.review.both' : 'ssync.review.newer')}
+          {actions.map((a) => (
+            <button key={a} type="button" className="btn ghost sm" disabled={busy !== null || (a === 'newer' && !newerOk(h.newer))} onClick={() => void act(h.ref, a)}>
+              {t(a === 'local' ? 'ssync.review.useLocal' : a === 'cloud' ? (remote ? 'ssync.review.useThere' : 'ssync.review.useCloud') : a === 'both' ? 'ssync.review.both' : 'ssync.review.newer')}
             </button>
           ))}
         </div>
       ))}
+      {token && !!items?.length && (
+        <div className="ssync-held-row ssync-held-all" data-ssync-held-all="">
+          <span className="ssync-faint">{t('ssync.review.all', { n: count })}</span>
+          <span className="ssync-grow" />
+          {actions.map((a) => (
+            <button key={a} type="button" className="btn ghost sm" disabled={busy !== null} onClick={() => void all(a)}>
+              {t(a === 'local' ? 'ssync.review.useLocal' : a === 'cloud' ? (remote ? 'ssync.review.useThere' : 'ssync.review.useCloud') : a === 'both' ? 'ssync.review.both' : 'ssync.review.newer')}
+            </button>
+          ))}
+        </div>
+      )}
+      {note && <div className="ssync-faint ssync-held-note" role="status">{note}</div>}
       {error && <div className="ssync-error" role="alert">{error}</div>}
     </div>
   )
@@ -257,8 +291,10 @@ export function ExtendOffNotice() {
 }
 
 /** 接手卡(方案 V10):接手完成后在同步面板顶上出一次,数字照实写。dismiss 通道 E 还没有时不画「知道了」(契约 U-1 第 2 条)。 */
-export function HandoverCard({ bindingId, items, cadence, card, onDismissed }: {
+export function HandoverCard({ bindingId, items, cadence, card, remoteLabel, onDismissed }: {
   bindingId: string
+  /** 网盘 / 本地文件夹那一行:去处名字 */
+  remoteLabel?: string
   items: number
   cadence: Cadence
   card: { adopted: number; filled: number; held: number; revived: number }
@@ -267,10 +303,14 @@ export function HandoverCard({ bindingId, items, cadence, card, onDismissed }: {
   const { t } = useI18n()
   const [canDismiss, setCanDismiss] = useState(true)
   const every = cadence.kind === 'interval' ? t('ssync.handover.every', { n: cadence.minutes }) : t('ssync.handover.manual')
+  // 网盘 / 本地文件夹那一行的接手卡(旧网盘同步交过来的,来源 D):不说「一项项开着的」「云端的位置」;只手动时不说「定时」(Codex P2)
+  const manual = cadence.kind !== 'interval'
   return (
     <div className="ssync-handover" role="status" data-ssync-handover={bindingId}>
-      <b>{t('ssync.handover.title')}</b>
-      <p>{t('ssync.handover.body', { items, cadence: every })}</p>
+      <b>{t(manual ? 'ssync.handover.titleManual' : 'ssync.handover.title')}</b>
+      <p>{manual
+        ? (remoteLabel ? t('ssync.handover.bodyRemoteManual', { label: remoteLabel }) : t('ssync.handover.bodyManual', { items }))
+        : (remoteLabel ? t('ssync.handover.bodyRemote', { label: remoteLabel, cadence: every }) : t('ssync.handover.body', { items, cadence: every }))}</p>
       <p className="ssync-faint">{t('ssync.handover.counts', { adopted: card.adopted, filled: card.filled, held: card.held })}</p>
       {card.revived > 0 && <p className="ssync-faint">{t('ssync.handover.revived', { n: card.revived })}</p>}
       {canDismiss && (
