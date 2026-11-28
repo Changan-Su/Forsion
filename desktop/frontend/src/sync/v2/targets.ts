@@ -1,13 +1,14 @@
 /**
  * 「同步到哪」的网盘 / 本地文件夹去处(智库同步第 2 步;宿主接缝 window.remoteSync.targets,契约 H-1 第 4 条、H-9)。
- * 凭据只在主进程:这里只拿去处摘要(id / 种类 / 名字 / 基础目录),Dropbox、Google Drive 的授权整条由宿主做完。
+ * 凭据只在主进程:这里只拿去处摘要(id / 种类 / 名字 / 基础目录),Dropbox 的授权整条由宿主做完。
+ * Google Drive 这一版不支持(H-10):宿主只把存档里已有的 gdrive 条目列出来,存 / 测试 / 授权都回 target-kind-unsupported。
  * 旧主进程没有 targets / authStart:列不出就当「不知道」(null),界面不给加去处的入口,不当成「没有去处」。
  */
 import type { SyncTargetSummary } from '../../types'
 import type { BindingView, PreviewTarget } from './types'
 
 export type TargetKind = SyncTargetSummary['kind']
-export type AuthKind = 'dropbox' | 'gdrive'
+export type AuthKind = 'dropbox'
 export type AuthEvent = { attempt: string; ok: true; target: SyncTargetSummary; account: string } | { attempt: string; ok: false; error: string }
 
 const api = () => (typeof window !== 'undefined' ? window.remoteSync?.targets : undefined)
@@ -53,9 +54,9 @@ export function codeOf(e: unknown): string {
 export const TARGET_ERROR_CODES = [
   'folder-overlaps-vault', 'bad-target-dir', 'target-dir-missing', 'target-config-incomplete', 'invalid-target', 'no-such-target',
   'save-failed', 'target-location-changed', 'target-not-found', 'target-kind-changed', 'bad-target-kind',
-  'no-app-key', 'no-client-id', 'loopback-unavailable', 'open-browser-failed',
+  'no-app-key', 'open-browser-failed', 'target-kind-unsupported',
   'auth-superseded', 'auth-cancelled', 'auth-timeout', 'auth-denied', 'auth-state-mismatch', 'auth-failed', 'auth-exchange-failed', 'auth-not-started',
-  'dropbox-not-connected', 'gdrive-not-connected', 'no-targets', 'no-auth',
+  'dropbox-not-connected', 'no-targets', 'no-auth',
 ] as const
 export function targetErrorKey(code: string): string {
   return (TARGET_ERROR_CODES as readonly string[]).includes(code) ? `ssync.targetErr.${code}` : 'ssync.targetErr.unknown'
@@ -72,6 +73,9 @@ export function previewTargetOf(b: BindingView): PreviewTarget {
 export function targetIdentity(t: BindingView['target']): string {
   return t.kind === 'remote' ? `remote:${t.targetId}:${t.dir}:${t.direction}` : `penzor:${t.vaultId}:${t.prefix}`
 }
+
+/** 这一版认得、但不支持的去处种类(H-10):菜单里列出来但点不了。 */
+export const isUnsupportedKind = (kind: TargetKind): boolean => kind === 'gdrive'
 
 /** 这一行此刻选的是哪个去处:'penzor' 或网盘的 targetId。 */
 export const currentTargetKey = (b: BindingView | undefined): string => (b?.target.kind === 'remote' ? b.target.targetId : 'penzor')

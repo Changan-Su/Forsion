@@ -27,7 +27,7 @@ import { addedItems, closureItems, isExcluded, mergeScope, rebaseScope, removeIt
 import type { SyncFocus } from '../sync/v2/openSyncSettings'
 import type { StatusBindingExtras } from '../sync/v2/feed'
 import { CREATE_CANDIDATE } from '../sync/v2/types'
-import { addFolderTarget, canAuth, cancelAuth, currentTargetKey, finishAuth, hasTargets, listTargets, onAuth, previewTargetOf, startAuth, targetErrorKey, targetIdentity, type AuthEvent, type AuthKind } from '../sync/v2/targets'
+import { addFolderTarget, canAuth, cancelAuth, currentTargetKey, finishAuth, hasTargets, listTargets, onAuth, isUnsupportedKind, previewTargetOf, startAuth, targetErrorKey, targetIdentity, type AuthEvent, type AuthKind } from '../sync/v2/targets'
 import type { SyncTargetSummary } from '../types'
 import type {
   BindingScope, BindingView, Cadence, PreviewTarget, ResolveCandidate, ResolveNameResult, ScopeItem, VaultSyncCompatReason,
@@ -138,6 +138,15 @@ interface Pending {
   baseTarget?: string
 }
 
+/** 跨种类换去处(蓬洲云 ↔ 网盘 / 文件夹,Extend #140、契约 E-16 附):卡上带着原来的去处身份,新去处的种类和它不同。 */
+const isCrossKind = (p: Pick<Pending, 'bindingId' | 'baseTarget' | 'target'>): boolean =>
+  !!p.bindingId && !!p.baseTarget && !p.baseTarget.startsWith(p.target.kind === 'remote' ? 'remote:' : 'penzor:')
+/** 预演 / 换去处出错的人话。从蓬洲云那一行换走时没登录:账号那本账看不到,预演回 binding_not_found、apply 回 not_signed_in,都按「要先登录」说。 */
+function crossKindError(p: Pick<Pending, 'bindingId' | 'baseTarget' | 'target' | 'name'>, err: string, t: TFn): string {
+  if (isCrossKind(p) && p.baseTarget!.startsWith('penzor:') && /(binding_not_found|not_signed_in)\s*$/.test(err)) return t('ssync.err.moveSignIn')
+  return syncErrorText(err, t, p.name)
+}
+
 /** 落点只认一次:设置层拿着同一个 focus 对象,子页切走再回来(组件重挂)不再重放一遍预演(Codex P2-4)。 */
 const consumedFocus = new WeakSet<object>()
 
@@ -236,10 +245,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       }
     }
     setPending(null)
-    // 跨种类换去处(蓬洲云 ↔ 网盘 / 文件夹):两种绑定记在两本账上,引擎这一版带 bindingId 跨过去回 binding_not_found(联调实测,契约 U-7 第 1 条);
-    // 别说成「设置变了，重新打开再试」,那是死循环
-    const crossKind = !!p.bindingId && !!p.baseTarget && !p.baseTarget.startsWith(p.target.kind === 'remote' ? 'remote:' : 'penzor:')
-    say(p.root, crossKind && /binding_not_found/.test(err) ? t('ssync.err.crossKind') : syncErrorText(err, t, p.name))
+    say(p.root, crossKindError(p, err, t))
     return false
   }, [t])
 
@@ -309,11 +315,11 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     const r = await addFolderTarget(dir)
     if (!r.ok) { say(b.root, t(targetErrorKey(r.error))); return }
     await loadTargets()
-    // 去处已经存上了:预演没出卡时说清楚,免得再选一次同一个文件夹建出第二条(蓬洲云那一行跨种类换不过去:只说存下了,不叫人「再选它」)
-    if (!(await switchTarget(b, r.target.id, r.target.label))) setMsg((m) => ({ ...m, [b.root]: [m[b.root], t(b.target.kind === 'remote' ? 'ssync.target.saved' : 'ssync.target.savedOnly', { label: r.target.label })].filter(Boolean).join(' ') }))
+    // 去处已经存上了:预演没出卡时说清楚,免得再选一次同一个文件夹建出第二条
+    if (!(await switchTarget(b, r.target.id, r.target.label))) setMsg((m) => ({ ...m, [b.root]: [m[b.root], t('ssync.target.saved', { label: r.target.label })].filter(Boolean).join(' ') }))
   }, [loadTargets, switchTarget, t])
 
-  /** 连接 / 重新授权 Dropbox、Google Drive:宿主做完 OAuth,凭据直接进 sync-targets(H-9);这里只等结果事件。 */
+  /** 连接 / 重新授权 Dropbox:宿主做完 OAuth,凭据直接进 sync-targets(H-9);这里只等结果事件。Google Drive 这一版不支持(H-10)。 */
   const authSeq = useRef(0)
   // 结果事件可能比 authStart 的回包先到(被顶掉时宿主马上发 auth-superseded):先记下,回包到了再认
   const early = useRef(new Map<string, AuthEvent>())
@@ -360,7 +366,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     if (pending.bindingId && pending.base && pending.kind !== 'scope') {
       const g = await vaultSync.get()
       const fresh = g.ok ? g.value?.bindings.find((b) => b.id === pending.bindingId) : undefined
-      if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setBusy(false); setPending(null); say(pending.root, t(fresh ? 'ssync.targetChanged' : 'ssync.err.bindingGone')); await reload(); return }
+      if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setBusy(false); setPending(null); say(pending.root, (fresh ? t('ssync.targetChanged') : crossKindError(pending, 'binding_not_found', t))); await reload(); return }
       if (JSON.stringify(fresh.scope) !== JSON.stringify(pending.base)) { setBusy(false); await runPreview({ ...pending, scope: fresh.scope, base: fresh.scope, note: t('ssync.stale') }); return }
     }
     const r = await vaultSync.apply({ token: pending.preview.token, generation: pending.preview.generation, onDiffer })
@@ -370,7 +376,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       if (pending.bindingId && pending.base) {
         const g = await vaultSync.get()
         const fresh = g.ok ? g.value?.bindings.find((b) => b.id === pending.bindingId) : undefined
-        if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setPending(null); say(pending.root, t(fresh ? 'ssync.targetChanged' : 'ssync.err.bindingGone')); await reload(); return }
+        if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setPending(null); say(pending.root, (fresh ? t('ssync.targetChanged') : crossKindError(pending, 'binding_not_found', t))); await reload(); return }
         // 换去处的卡不改范围:直接用引擎此刻的范围重比(期间别处排除的不被带回来);改范围的卡把「这次改了什么」套上去
         const scope = pending.kind === 'scope' ? rebaseScope(pending.base, pending.scope, fresh.scope) : fresh.scope
         await runPreview({ ...pending, scope, added: addedItems(fresh.scope, scope), base: fresh.scope, note: t('ssync.stale') })
@@ -382,7 +388,14 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     const p = pending
     setPending(null)
     // 成功不另起一行提示:行里的状态就会变成「同步中…」,提示留着反倒在同步完以后还挂着
-    say(p.root, r.ok ? null : syncErrorText(r.error, t, p.name))
+    if (r.ok) say(p.root, null)
+    else {
+      // 跨种类换去处在新那本账写入那一刻被准入拦下(E-16 附 K4):原来那条已经停了、新的没开。出卡时开着、现在停着 = 走到了这一步
+      const was = data.bindings.find((x) => x.id === p.bindingId)
+      const g = was?.enabled && isCrossKind(p) ? await vaultSync.get() : null
+      const now = g?.ok ? g.value?.bindings.find((x) => x.id === p.bindingId) : undefined
+      say(p.root, now && !now.enabled ? `${crossKindError(p, r.error, t)} ${t('ssync.err.moveHalf')}` : crossKindError(p, r.error, t))
+    }
     refreshVaultSync()
     await reload()
   }
@@ -684,7 +697,7 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
         </div>
       )}
       {b?.takeoverCard && (
-        <HandoverCard bindingId={b.id} items={b.scope.mode === 'some' ? b.scope.items.length : 1} cadence={data.cadence} card={b.takeoverCard} onDismissed={() => void reload()} />
+        <HandoverCard bindingId={b.id} items={b.scope.mode === 'some' ? b.scope.items.length : 1} cadence={data.cadence} card={b.takeoverCard} remoteLabel={b.target.kind === 'remote' ? b.target.label : undefined} onDismissed={() => void reload()} />
       )}
       {b && on && heldCount > 0 && <HeldReview bindingId={b.id} count={heldCount} items={held} token={v2?.review?.differsToken} direction={b.target.kind === 'remote' ? b.target.direction : undefined} onDone={() => { onRecovery(); void reload() }} />}
       {b && on && (b.status.deletesPending > 0 || deletes) && (
@@ -773,9 +786,9 @@ function ScopeEditor({ binding: b, current, entries, onScope }: {
   )
 }
 
-const AUTH_LABEL: Record<AuthKind, string> = { dropbox: 'Dropbox', gdrive: 'Google Drive' }
-/** 去处种类的叫法:网盘是品牌名(不翻译),只有本地文件夹要按语言写。 */
-const KIND_BRAND: Partial<Record<SyncTargetSummary['kind'], string>> = { s3: 'S3', webdav: 'WebDAV', ...AUTH_LABEL }
+const AUTH_LABEL: Record<AuthKind, string> = { dropbox: 'Dropbox' }
+/** 去处种类的叫法:网盘是品牌名(不翻译),只有本地文件夹要按语言写。gdrive 只在列存档里已有的那条时用到(H-10)。 */
+const KIND_BRAND: Partial<Record<SyncTargetSummary['kind'], string>> = { s3: 'S3', webdav: 'WebDAV', gdrive: 'Google Drive', ...AUTH_LABEL }
 const kindLabel = (kind: SyncTargetSummary['kind'], t: TFn): string => KIND_BRAND[kind] ?? t('ssync.target.kind.folder')
 
 /** 网盘授权在途:浏览器里登录、授权;Dropbox 回调口被占时(manual)把网页上的授权码贴回来(契约 H-9)。 */
@@ -801,7 +814,8 @@ function AuthPanel({ auth, onCancel, onCode }: { auth: AuthState; onCancel: () =
   )
 }
 
-/** 同步到:蓬洲云 · 已有的网盘 / 本地文件夹去处 · 加一个本地文件夹 · 连接 Dropbox / Google Drive(宿主做授权,H-9)。
+/** 同步到:蓬洲云 · 已有的网盘 / 本地文件夹去处 · 加一个本地文件夹 · 连接 Dropbox(宿主做授权,H-9)。
+ *  Google Drive 这一版不支持(H-10):不给连接;存档里已有的 gdrive 去处照列,但点不了。
  *  换去处先出汇总卡(引擎状态按新去处从零开始,不删任何一边,契约 E-4 第 54 行)。旧主进程没有去处接缝:网盘项灰掉、写还用原来的方式。 */
 function TargetPicker({ binding: b, targets, disabled, onPick, onAddFolder, onConnect }: {
   binding: BindingView
@@ -828,7 +842,7 @@ function TargetPicker({ binding: b, targets, disabled, onPick, onAddFolder, onCo
   const pick = (fn: () => void) => () => { setAt(null); fn() }
   const host = hasTargets()
   const auth = canAuth()
-  const reauth = b.target.kind === 'remote' && (b.target.backend === 'dropbox' || b.target.backend === 'gdrive') && auth ? b.target : null
+  const reauth = b.target.kind === 'remote' && b.target.backend === 'dropbox' && auth ? b.target : null
   const Radio = ({ on }: { on: boolean }) => <Check size={14} aria-hidden="true" style={{ visibility: on ? 'visible' : 'hidden' }} />
   return (
     <>
@@ -842,12 +856,16 @@ function TargetPicker({ binding: b, targets, disabled, onPick, onAddFolder, onCo
             <Radio on={cur === 'penzor'} />
             <span className="ssync-target-opt"><span>{t('ssync.target.penzor')}</span><span className="ssync-faint">{t('ssync.target.penzorHint')}</span></span>
           </button>
-          {(targets ?? []).map((x) => (
-            <button key={x.id} type="button" role="menuitemradio" aria-checked={cur === x.id} data-ssync-target={x.id} onClick={pick(() => onPick(x.id, x.label))}>
-              <Radio on={cur === x.id} />
-              <span className="ssync-target-opt"><span>{x.label}</span><span className="ssync-faint" title={x.dirDefault}>{kindLabel(x.kind, t)}</span></span>
-            </button>
-          ))}
+          {(targets ?? []).map((x) => {
+            const off = isUnsupportedKind(x.kind)
+            return (
+              <button key={x.id} type="button" role="menuitemradio" aria-checked={cur === x.id} data-ssync-target={x.id} disabled={off} aria-disabled={off || undefined}
+                onClick={off ? undefined : pick(() => onPick(x.id, x.label))}>
+                <Radio on={cur === x.id} />
+                <span className="ssync-target-opt"><span>{x.label}</span><span className="ssync-faint" title={x.dirDefault}>{off ? t('ssync.target.unsupportedKind', { service: kindLabel(x.kind, t) }) : kindLabel(x.kind, t)}</span></span>
+              </button>
+            )
+          })}
           {host && targets === null && (
             <button type="button" role="menuitem" disabled aria-disabled="true"><Radio on={false} /><span className="ssync-target-opt"><span className="ssync-faint">{t('ssync.target.listFailed')}</span></span></button>
           )}
@@ -857,7 +875,7 @@ function TargetPicker({ binding: b, targets, disabled, onPick, onAddFolder, onCo
               <button type="button" role="menuitem" data-ssync-target-add="folder" onClick={pick(onAddFolder)}>
                 <Radio on={false} /><span className="ssync-target-opt"><span>{t('ssync.target.addFolder')}</span></span>
               </button>
-              {auth && (['dropbox', 'gdrive'] as const).map((k) => (
+              {auth && (['dropbox'] as const).map((k) => (
                 <button key={k} type="button" role="menuitem" data-ssync-target-add={k} onClick={pick(() => onConnect(k))}>
                   <Radio on={false} /><span className="ssync-target-opt"><span>{t('ssync.target.connect', { service: AUTH_LABEL[k] })}</span></span>
                 </button>

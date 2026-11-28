@@ -24,6 +24,15 @@ export function syncErrorText(err: string, t: T, name = ''): string {
   if (code === 'binding_not_running') return t('ssync.err.notRunning')
   if (code === 'remote_dir_nested') return t('ssync.err.remoteDirNested')
   if (code === 'direction_forbids') return t('ssync.err.directionForbids')
+  // 换去处(含蓬洲云 ↔ 网盘 / 文件夹,Extend #140、契约 E-16 附)的拒绝码;not_signed_in / takeover_in_progress 用上面那两句
+  if (code === 'compat_mode') return t('ssync.err.compatMode')
+  if (code === 'move_in_progress') return t('ssync.err.moveBusy')
+  if (code === 'retarget_in_progress') return t('ssync.err.retargetBusy')
+  if (code === 'unbind_in_progress' || code === 'unbinding_in_progress') return t('ssync.err.unbindBusy')
+  if (code === 'binding_not_active') return t('ssync.err.notActive')
+  if (code === 'first_round_in_progress') return t('ssync.err.firstRound')
+  if (code === 'backup_remote_only') return t('ssync.err.backupRemoteOnly')
+  if (code === 'already_local') return t('ssync.err.alreadyLocal')
   if (OVERLAP.has(code)) return t('ssync.err.overlap')
   // 网盘 / 本地文件夹去处的宿主码(预演 open() 时抛上来的):同一套人话
   if ((TARGET_ERROR_CODES as readonly string[]).includes(code)) return t(targetErrorKey(code))

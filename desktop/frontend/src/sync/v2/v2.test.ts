@@ -187,6 +187,23 @@ describe('Codex 评审返修(第 2 步 U)', () => {
     expect(syncErrorText('takeover_in_progress', t)).toBe(t('ssync.err.takeoverBusy'))
     expect(syncErrorText('Error: binding_not_found', t)).toBe(t('ssync.err.bindingGone'))
   })
+  it('换去处(含蓬洲云 ↔ 网盘 / 文件夹,E-16 附)的拒绝码各有一句人话,不落到「没做成」', () => {
+    const generic = (c: string) => t('ssync.err.generic', { error: c })
+    for (const [code, key] of [
+      ['not_signed_in', 'ssync.err.signedOut'], ['compat_mode', 'ssync.err.compatMode'],
+      ['move_in_progress', 'ssync.err.moveBusy'], ['retarget_in_progress', 'ssync.err.retargetBusy'],
+      ['unbind_in_progress', 'ssync.err.unbindBusy'], ['unbinding_in_progress', 'ssync.err.unbindBusy'],
+      ['takeover_in_progress', 'ssync.err.takeoverBusy'], ['binding_not_active', 'ssync.err.notActive'],
+      ['first_round_in_progress', 'ssync.err.firstRound'], ['backup_remote_only', 'ssync.err.backupRemoteOnly'],
+      ['already_local', 'ssync.err.alreadyLocal'], ['mirror_root', 'ssync.err.overlap'],
+      ['target-kind-unsupported', 'ssync.targetErr.target-kind-unsupported'],
+    ] as const) {
+      const text = syncErrorText(`Error invoking remote method 'vaultsync:preview': Error: ${code}`, t)
+      expect(text).toBe(t(key))
+      expect(text).not.toBe(generic(code))
+      expect(text).not.toBe(key) // 字典里有这个键
+    }
+  })
 })
 
 describe('旧流程照旧的模式(网页 / 手机没有 v2 通道 = off,旧流程是唯一那套)', () => {

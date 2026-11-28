@@ -51,7 +51,7 @@ export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, o
   const tiles: Array<[string, number, boolean]> = [
     [t('ssync.sum.same'), preview.same, false],
     [t('ssync.sum.onlyLocal'), preview.onlyLocal, false],
-    ...(preview.onlyRemote > 0 ? [[t('ssync.sum.onlyRemote'), preview.onlyRemote, false] as [string, number, boolean]] : []),
+    ...(preview.onlyRemote > 0 ? [[t(kind === 'target' ? 'ssync.sum.onlyThere' : 'ssync.sum.onlyRemote'), preview.onlyRemote, false] as [string, number, boolean]] : []),
     [t('ssync.sum.differ'), differ.length, differ.length > 0],
     [t('ssync.sum.tooLarge'), preview.tooLarge.length, false],
   ]
@@ -79,7 +79,7 @@ export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, o
           {shown.map((d) => (
             <div key={d.path} className="ssync-sum-row" title={d.path}>
               <span className="ssync-sum-name">{baseName(d.path)}</span>
-              <span className={d.newer ? 'ssync-warn' : 'ssync-faint'}>{d.newer === 'local' ? t('ssync.sum.newerHere') : d.newer === 'remote' ? t('ssync.sum.newerCloud') : t('ssync.sum.newerUnknown')}</span>
+              <span className={d.newer ? 'ssync-warn' : 'ssync-faint'}>{d.newer === 'local' ? t('ssync.sum.newerHere') : d.newer === 'remote' ? t(kind === 'target' ? 'ssync.sum.newerThere' : 'ssync.sum.newerCloud') : t('ssync.sum.newerUnknown')}</span>
             </div>
           ))}
           {differ.length > 3 && (
@@ -123,6 +123,8 @@ export function HeldReview({ bindingId, count, items, token, direction, onDone }
   onDone: () => void
 }) {
   const { t } = useI18n()
+  // 网盘 / 本地文件夹那一行(只有它带方向):另一边不叫「云端」
+  const remote = direction !== undefined
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
@@ -154,11 +156,11 @@ export function HeldReview({ bindingId, count, items, token, direction, onDone }
         <div key={h.path} className="ssync-held-row" title={h.path}>
           <FileText size={13} aria-hidden="true" />
           <span className="ssync-held-name">{baseName(h.path)}</span>
-          <span className="ssync-faint">{h.newer === 'local' ? t('ssync.sum.newerHere') : h.newer === 'remote' ? t('ssync.sum.newerCloud') : t('vsync.panel.newerUnknown')}</span>
+          <span className="ssync-faint">{h.newer === 'local' ? t('ssync.sum.newerHere') : h.newer === 'remote' ? t(remote ? 'ssync.sum.newerThere' : 'ssync.sum.newerCloud') : t('vsync.panel.newerUnknown')}</span>
           <span className="ssync-grow" />
           {actions.map((a) => (
             <button key={a} type="button" className="btn ghost sm" disabled={busy !== null || (a === 'newer' && !newerOk(h.newer))} onClick={() => void act(h.ref, a)}>
-              {t(a === 'local' ? 'ssync.review.useLocal' : a === 'cloud' ? 'ssync.review.useCloud' : a === 'both' ? 'ssync.review.both' : 'ssync.review.newer')}
+              {t(a === 'local' ? 'ssync.review.useLocal' : a === 'cloud' ? (remote ? 'ssync.review.useThere' : 'ssync.review.useCloud') : a === 'both' ? 'ssync.review.both' : 'ssync.review.newer')}
             </button>
           ))}
         </div>
@@ -169,7 +171,7 @@ export function HeldReview({ bindingId, count, items, token, direction, onDone }
           <span className="ssync-grow" />
           {actions.map((a) => (
             <button key={a} type="button" className="btn ghost sm" disabled={busy !== null} onClick={() => void all(a)}>
-              {t(a === 'local' ? 'ssync.review.useLocal' : a === 'cloud' ? 'ssync.review.useCloud' : a === 'both' ? 'ssync.review.both' : 'ssync.review.newer')}
+              {t(a === 'local' ? 'ssync.review.useLocal' : a === 'cloud' ? (remote ? 'ssync.review.useThere' : 'ssync.review.useCloud') : a === 'both' ? 'ssync.review.both' : 'ssync.review.newer')}
             </button>
           ))}
         </div>
@@ -287,8 +289,10 @@ export function ExtendOffNotice() {
 }
 
 /** 接手卡(方案 V10):接手完成后在同步面板顶上出一次,数字照实写。dismiss 通道 E 还没有时不画「知道了」(契约 U-1 第 2 条)。 */
-export function HandoverCard({ bindingId, items, cadence, card, onDismissed }: {
+export function HandoverCard({ bindingId, items, cadence, card, remoteLabel, onDismissed }: {
   bindingId: string
+  /** 网盘 / 本地文件夹那一行:去处名字 */
+  remoteLabel?: string
   items: number
   cadence: Cadence
   card: { adopted: number; filled: number; held: number; revived: number }
@@ -297,10 +301,11 @@ export function HandoverCard({ bindingId, items, cadence, card, onDismissed }: {
   const { t } = useI18n()
   const [canDismiss, setCanDismiss] = useState(true)
   const every = cadence.kind === 'interval' ? t('ssync.handover.every', { n: cadence.minutes }) : t('ssync.handover.manual')
+  // 网盘 / 本地文件夹那一行的接手卡(旧网盘同步交过来的,来源 D):不说「一项项开着的」「云端的位置」
   return (
     <div className="ssync-handover" role="status" data-ssync-handover={bindingId}>
       <b>{t('ssync.handover.title')}</b>
-      <p>{t('ssync.handover.body', { items, cadence: every })}</p>
+      <p>{remoteLabel ? t('ssync.handover.bodyRemote', { label: remoteLabel, cadence: every }) : t('ssync.handover.body', { items, cadence: every })}</p>
       <p className="ssync-faint">{t('ssync.handover.counts', { adopted: card.adopted, filled: card.filled, held: card.held })}</p>
       {card.revived > 0 && <p className="ssync-faint">{t('ssync.handover.revived', { n: card.revived })}</p>}
       {canDismiss && (

@@ -1,6 +1,6 @@
 // 「同步到哪」的去处(网盘 / 本地文件夹)辅助:错误码取法、文案键、预演沿用的去处、读不到 ≠ 没有
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { addFolderTarget, codeOf, currentTargetKey, listTargets, previewTargetOf, targetErrorKey, TARGET_ERROR_CODES } from './targets'
+import { addFolderTarget, codeOf, currentTargetKey, isUnsupportedKind, listTargets, previewTargetOf, targetErrorKey, TARGET_ERROR_CODES } from './targets'
 import type { BindingView } from './types'
 
 const binding = (target: BindingView['target']): BindingView => ({
@@ -19,6 +19,12 @@ describe('sync targets', () => {
   it('maps known codes to their own key and never leaks an unknown code as a key', () => {
     for (const c of TARGET_ERROR_CODES) expect(targetErrorKey(c)).toBe(`ssync.targetErr.${c}`)
     expect(targetErrorKey('something-else')).toBe('ssync.targetErr.unknown')
+  })
+  it('Google Drive is listed but not supported in this version (H-10): no Drive-only codes, its rows are unsupported', () => {
+    expect(targetErrorKey('target-kind-unsupported')).toBe('ssync.targetErr.target-kind-unsupported')
+    for (const c of ['no-client-id', 'gdrive-not-connected', 'loopback-unavailable']) expect(TARGET_ERROR_CODES as readonly string[]).not.toContain(c)
+    expect(isUnsupportedKind('gdrive')).toBe(true)
+    for (const k of ['folder', 'dropbox', 's3', 'webdav'] as const) expect(isUnsupportedKind(k)).toBe(false)
   })
   it('previews a drive row against its own target, not Penzor Cloud', () => {
     const remote = binding({ kind: 'remote', targetId: 't1', backend: 'dropbox', label: 'Box', dir: 'v', direction: 'both', conditionalWrites: true })
