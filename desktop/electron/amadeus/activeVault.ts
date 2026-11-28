@@ -109,6 +109,11 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): ActiveVaultHost {
     // 不听 did-start-navigation:被 hardenNav 拦下的外链、取消的导航也会先发它,原文档其实还在用(Codex 评审 #958)。
     // 提交前旧文档报上来的照常算(它还是当前文档);提交后迟到的由 liveTop 拦(senderFrame 不再是 mainFrame)。
     wc.on('did-navigate', drop)
+    // 提交成错误页时 Electron 发 did-fail-load、不发 did-navigate:原文档也没了,一样作废。
+    // -3 = ERR_ABORTED:被 hardenNav 拦下、取消的导航也发它(没提交、原文档还在),照旧不作废(H 评 #959)
+    wc.on('did-fail-load', (_e: unknown, errorCode: number, _desc: string, _url: string, isMainFrame: boolean) => {
+      if (isMainFrame && errorCode !== -3) drop()
+    })
   }
 
   const get = async (): Promise<ActiveVaultRead> => {

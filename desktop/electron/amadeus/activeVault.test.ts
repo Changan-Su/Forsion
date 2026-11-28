@@ -474,6 +474,25 @@ describe('CloudHost.openLibrary / canOpenOnline', () => {
     expect(t.host.onlineOpened()).toBeNull()
   })
 
+  it('an error page commit (did-fail-load on the main frame, not ERR_ABORTED) drops like a new document; aborted or subframe failures do not', async () => {
+    const t = await setup({ timeoutMs: 5_000 })
+    t.capable()
+    await t.opened(refOf('A'))
+    const pending = t.host.openLibrary(refOf('A', { libraryId: 'lib-2', vaultId: 'vault-2', name: 'Lab' }))
+    let settled = false
+    void pending.then(() => { settled = true }, () => { settled = true })
+    t.state.main!.emit('did-fail-load', {}, -3, 'ERR_ABORTED', 'https://example.com/', true) // 拦下 / 取消:原文档还在
+    t.state.main!.emit('did-fail-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', 'https://x.invalid/', false) // 子框架
+    await new Promise((r) => setTimeout(r, 0))
+    expect(t.host.canOpenOnline()).toBe(true)
+    expect(t.host.onlineOpened()).toEqual(refOf('A'))
+    expect(settled).toBe(false)
+    t.state.main!.emit('did-fail-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', 'app://x', true) // 主框架提交成错误页
+    await expect(pending).rejects.toThrow('switch_failed')
+    expect(t.host.canOpenOnline()).toBe(false)
+    expect(t.host.onlineOpened()).toBeNull()
+  })
+
   it('a set still in flight from before a reload cannot confirm a new request; the reload itself fails the old one', async () => {
     const t = await setup({ timeoutMs: 5_000 })
     t.capable()
