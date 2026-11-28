@@ -666,30 +666,38 @@ function errorCode(e: unknown): string {
 
 /** 归档原件里的自动同步两项写回现在的配置(在封口闸的锁里调,配置写队列里读改写)。现在的值不是归档写下的 0 / false = 用户改过,不动。 */
 async function restoreAutoSync(): Promise<boolean> {
+  const orig = await archivedAutoSync()
+  if (!orig) return false
+  return inConfigQueue(async () => writeAutoSyncBack(await readLegacyConfigStrict(), orig.interval, orig.onStart))
+}
+
+/** 档案原件里自动同步两项(读不出 / 都是关着 = null)。在封口闸的锁里调。 */
+async function archivedAutoSync(): Promise<{ interval: number; onStart: boolean } | null> {
   const st = legacyGate().state()
-  if (!st.archived || !st.archiveDir) return false
+  if (!st.archived || !st.archiveDir) return null
   let orig: { intervalMin?: unknown; syncOnStart?: unknown }
   try { orig = JSON.parse(await fs.readFile(path.join(st.archiveDir, path.basename(configFile())), 'utf8')) } catch { throw new Error('archive-original-unreadable') }
   const interval = typeof orig?.intervalMin === 'number' && Number.isFinite(orig.intervalMin) && orig.intervalMin >= 0 ? orig.intervalMin : 0
   const onStart = orig?.syncOnStart === true
-  if (interval === 0 && !onStart) return false
-  return inConfigQueue(async () => {
-    const strict = await readLegacyConfigStrict()
-    if (!strict) return false
-    if ((strict.cfg.intervalMin ?? 0) !== 0 || strict.cfg.syncOnStart === true) return false
-    const obj = JSON.parse(strict.raw) as Record<string, unknown>
-    obj.intervalMin = interval
-    obj.syncOnStart = onStart
-    const file = configFile()
-    const mode = (await fs.stat(file)).mode & 0o777
-    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
-    await fs.writeFile(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8', mode })
-    await fs.rename(tmp, file)
-    cache = { ...DEFAULT_CONFIG, ...(obj as unknown as RemoteSyncConfig) }
-    loadBroken = false
-    resetTimer(cache)
-    return true
-  })
+  return interval === 0 && !onStart ? null : { interval, onStart }
+}
+
+/** 写回那两项。调用方占着配置写队列、给的是这一段里严格读到的那份。现在的值不是归档写下的 0 / false = 用户改过,不动。 */
+async function writeAutoSyncBack(strict: Awaited<ReturnType<typeof readLegacyConfigStrict>>, interval: number, onStart: boolean): Promise<boolean> {
+  if (!strict) return false
+  if ((strict.cfg.intervalMin ?? 0) !== 0 || strict.cfg.syncOnStart === true) return false
+  const obj = JSON.parse(strict.raw) as Record<string, unknown>
+  obj.intervalMin = interval
+  obj.syncOnStart = onStart
+  const file = configFile()
+  const mode = (await fs.stat(file)).mode & 0o777
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
+  await fs.writeFile(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8', mode })
+  await fs.rename(tmp, file)
+  cache = { ...DEFAULT_CONFIG, ...(obj as unknown as RemoteSyncConfig) }
+  loadBroken = false
+  resetTimer(cache)
+  return true
 }
 
 /** remotesync.json 里认得、这一版不支持的后端(同 syncTargetsStore 的 UNSUPPORTED_SYNC_TARGET_KINDS):归档一律拒。 */
@@ -812,8 +820,30 @@ export const legacyRemoteSync = {
   /** 交还。opts.restoreAutoSync(契约 H-8,只给接手失败到头 / 用户退回):已归档的,先在还封着的时候把档案原件里的
    *  intervalMin / syncOnStart 写回去,再交还 —— 否则首轮连败(U 盘没插)后旧自动同步也不回来,同步悄悄停了。
    *  只在现在的值仍是归档写下的那两个(0 / false)时写回,用户之后自己改过的不动;基线已挪走,旧引擎回来按首次合流跑(不删)。
-   *  写回失败只记错误码、照样交还(退回到「只能手动」,不卡在封口里)。 */
-  async unseal(opts?: { restoreAutoSync?: boolean }): Promise<void> {
+   *  写回失败只记错误码、照样交还(退回到「只能手动」,不卡在封口里)。
+   *  opts.expectKey(契约 H-13):先核再交还,见下面那段;不带 = 照旧(老 Extend)。 */
+  async unseal(opts?: { restoreAutoSync?: boolean; expectKey?: string }): Promise<void> {
+    const expectKey = typeof opts?.expectKey === 'string' ? opts.expectKey : null
+    if (expectKey !== null) {
+      // 契约 H-13:核对和交还在同一次操作里。锁的顺序同 archive:闸 → 配置写队列;remotesync:set 排在整段之前或之后,
+      // 插不进「核完、还没交还」那一下。对不上 / 文件没了 → legacy-config-changed;根认不出 → legacy-root-unavailable;
+      // 读不了配置照抛(读失败 ≠ 空)。这几种都在写回自动同步之前抛:封口和配置都不动。
+      await legacyGate().unsealChecked((handBack) => inConfigQueue(async () => {
+        const strict = await readLegacyConfigStrict()
+        if (!strict) throw new Error('legacy-config-changed')
+        const rooted = await resolveLocalSyncRoot()
+        if ('error' in rooted) throw new Error('legacy-root-unavailable')
+        if (legacyKeyOf(strict.cfg, rooted.root) !== expectKey) throw new Error('legacy-config-changed')
+        if (opts?.restoreAutoSync === true && legacyGate().state().hold === 'v2') {
+          try {
+            const orig = await archivedAutoSync()
+            if (orig) await writeAutoSyncBack(strict, orig.interval, orig.onStart)
+          } catch (e) { console.warn(`[remotesync] restore auto-sync skipped: ${errorCode(e)}`) }
+        }
+        await handBack()
+      }))
+      return
+    }
     if (opts?.restoreAutoSync === true && legacyGate().state().hold === 'v2') {
       await legacyGate().exclusive(async () => {
         try { await restoreAutoSync() } catch (e) { console.warn(`[remotesync] restore auto-sync skipped: ${errorCode(e)}`) }

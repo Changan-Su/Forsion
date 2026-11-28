@@ -452,3 +452,95 @@ describe('entry ignores', () => {
     expect(readFileSync(join(env.root, 'Remote', 'b.md'), 'utf8')).toBe('beta')
   })
 })
+
+describe('handing back with the key the takeover saw (contract H-13)', () => {
+  const original = () => ({
+    backend: 'webdav', intervalMin: 15, syncOnStart: true,
+    webdav: { address: 'https://dav.example.test/remote.php', username: 'fixture-user', password: 'fixture-secret-value', baseDir: 'team/vault' },
+  })
+  const holdOnDisk = (): unknown => JSON.parse(readFileSync(join(userData(), 'sync-targets.json'), 'utf8')).legacy?.holder
+  async function sealed(): Promise<string> {
+    writeFileSync(cfgFile(), JSON.stringify(original(), null, 2), { mode: 0o600 })
+    await boot()
+    ipc.legacyRemoteSync.extendLoaded(true)
+    await ipc.legacyRemoteSync.seal()
+    return (await ipc.legacyRemoteSync.view())!.legacyKey!
+  }
+
+  it('the key still matches: hands back; with restoreAutoSync the two fields come back from the archived original', async () => {
+    const key = await sealed()
+    await ipc.legacyRemoteSync.unseal({ expectKey: key })
+    expect(holdOnDisk()).toBeNull()
+    expect((await call<any>('remotesync:get')).seal.blocked).toBe(false)
+    // 再封、归档、带键 + restoreAutoSync 交还
+    await ipc.legacyRemoteSync.seal()
+    await ipc.legacyRemoteSync.archive(join(env.root, 'archive'), { expectKey: key })
+    expect(JSON.parse(readFileSync(cfgFile(), 'utf8'))).toMatchObject({ intervalMin: 0, syncOnStart: false })
+    await ipc.legacyRemoteSync.unseal({ restoreAutoSync: true, expectKey: key })
+    expect(JSON.parse(readFileSync(cfgFile(), 'utf8'))).toEqual(original())
+    expect(holdOnDisk()).toBeNull()
+  })
+
+  it('the config changed after the takeover read it: legacy-config-changed, still sealed, config bytes untouched (also with restoreAutoSync)', async () => {
+    const key = await sealed()
+    await ipc.legacyRemoteSync.archive(join(env.root, 'archive'), { expectKey: key })
+    const back = { ...original(), intervalMin: 0, syncOnStart: false, webdav: { ...original().webdav, baseDir: 'team/vault' } }
+    // 用户把旧同步存回了另一个目录(同一个网盘)
+    const moved = JSON.stringify({ ...back, webdav: { ...back.webdav, baseDir: 'team/other' } }, null, 2)
+    writeFileSync(cfgFile(), moved, { mode: 0o600 })
+    for (const opts of [{ expectKey: key }, { expectKey: key, restoreAutoSync: true }]) {
+      await expect(ipc.legacyRemoteSync.unseal(opts)).rejects.toThrow('legacy-config-changed')
+      expect(holdOnDisk()).toBe('v2')
+      expect(readFileSync(cfgFile(), 'utf8')).toBe(moved)
+      expect((await call<any>('remotesync:run')).errors).toEqual(['sealed'])
+    }
+    // 配置整个没了:也算对不上
+    rmSync(cfgFile())
+    await expect(ipc.legacyRemoteSync.unseal({ expectKey: key })).rejects.toThrow('legacy-config-changed')
+    expect(holdOnDisk()).toBe('v2')
+    // 不带键:照旧交还(老 Extend)
+    await ipc.legacyRemoteSync.unseal()
+    expect(holdOnDisk()).toBeNull()
+  })
+
+  it('an unreadable config is not "nothing to check": the seal stays and nothing is written', async () => {
+    const key = await sealed()
+    const broken = '{"backend":"webdav","webdav":{"password":"fixture-secret-value"'
+    writeFileSync(cfgFile(), broken)
+    const err = await ipc.legacyRemoteSync.unseal({ expectKey: key, restoreAutoSync: true }).then(() => null, (e: Error) => e)
+    expect(err?.message).toBe('remotesync-config-unparseable')
+    expect(leak(err?.message)).not.toContain('fixture-secret-value')
+    expect(holdOnDisk()).toBe('v2')
+    expect(readFileSync(cfgFile(), 'utf8')).toBe(broken)
+  })
+
+  it('a remotesync:set fired during the check waits in the same queue: the hold flips while the checked config is still on disk', async () => {
+    const key = await sealed()
+    const realRead = fsp.readFile.bind(fsp) as (...a: unknown[]) => Promise<unknown>
+    const realRename = fsp.rename.bind(fsp) as (...a: unknown[]) => Promise<unknown>
+    let saving: Promise<unknown> | null = null
+    let atHandBack: string | null = null
+    const readSpy = vi.spyOn(fsp, 'readFile').mockImplementation((async (p: unknown, ...rest: unknown[]) => {
+      const out = await realRead(p, ...rest)
+      if (!saving && String(p) === cfgFile()) {
+        // 交还正核着配置:设置页这时把旧同步存回原来的网盘目录(换了 baseDir)。有写队列时它排在交还后面
+        saving = call('remotesync:set', { webdav: { ...original().webdav, baseDir: 'team/other' } })
+        await new Promise((r) => setTimeout(r, 30))
+      }
+      return out
+    }) as never)
+    const renameSpy = vi.spyOn(fsp, 'rename').mockImplementation((async (from: unknown, to: unknown) => {
+      const out = await realRename(from, to)
+      if (String(to) === join(userData(), 'sync-targets.json') && holdOnDisk() === null && atHandBack === null) atHandBack = readFileSync(cfgFile(), 'utf8')
+      return out
+    }) as never)
+    try {
+      await ipc.legacyRemoteSync.unseal({ expectKey: key })
+      await saving
+    } finally { readSpy.mockRestore(); renameSpy.mockRestore() }
+    expect(saving).not.toBeNull()
+    expect(JSON.parse(atHandBack ?? '{}').webdav?.baseDir).toBe('team/vault') // 交还那一刻:盘上还是核过的那份
+    expect(JSON.parse(readFileSync(cfgFile(), 'utf8')).webdav.baseDir).toBe('team/other') // 存下的照样存下,排在后面
+    expect(holdOnDisk()).toBeNull()
+  })
+})

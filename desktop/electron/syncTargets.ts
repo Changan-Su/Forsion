@@ -31,8 +31,10 @@ export interface SyncTargetsSeam {
   sealLegacyRemoteSync(): Promise<void>
   /** opts.expectKey = 接手时 legacyRemoteSync() 给的 legacyKey:现在的配置对不上就抛 legacy-config-changed、什么都不动。 */
   archiveLegacyRemoteSync(archiveDir: string, opts?: { expectKey?: string }): Promise<{ copied: string[]; moved: string[] }>
-  /** opts.restoreAutoSync:已归档的先把旧自动同步两项从档案原件写回(契约 H-8,接手失败到头 / 退回时用)。 */
-  unsealLegacyRemoteSync(opts?: { restoreAutoSync?: boolean }): Promise<void>
+  /** opts.restoreAutoSync:已归档的先把旧自动同步两项从档案原件写回(契约 H-8,接手失败到头 / 退回时用)。
+   *  opts.expectKey(契约 H-13):宿主在配置写队列里核「根 × 去处」,对不上(含配置没了)抛 legacy-config-changed、根认不出抛
+   *  legacy-root-unavailable、读不了配置照抛,封口和配置都不动;对得上才交还。不带 = 照旧不核(老 Extend)。 */
+  unsealLegacyRemoteSync(opts?: { restoreAutoSync?: boolean; expectKey?: string }): Promise<void>
   vaults(): Promise<Array<{ root: string; name: string }>>
 }
 
