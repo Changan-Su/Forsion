@@ -1,6 +1,7 @@
 # 插件沙箱(Plugin Sandbox)· 接缝契约
 
-> 状态:v1(2026-10-23,方案 A);第二轮(2026-11-03):纯净沙箱、Space 列得出来、在沙箱里动手、右栏沙箱卡。
+> 状态:v1(2026-10-23,方案 A);第二轮(2026-11-03):纯净沙箱、Space 列得出来、在沙箱里动手、右栏沙箱卡;
+> 安装体验(2026-11-28,方案 A):装没装三态、确认框挂在点按钮的那扇窗上(仓根 `docs/ToBeImproved/插件沙箱安装体验方案_2026-11-28/`)。
 > 方案页与取舍见 Forsion 仓根 `docs/ToBeImproved/插件沙箱方案_2026-10-23/` 与 `插件沙箱第二轮方案_2026-11-03/`。
 > 本文件是引擎(`tangu-agent`)、桌面渲染层(`desktop/frontend`)、桌面主进程(`desktop/electron`)三方的唯一契约。
 > 线协议沿用 [phone-control.md](phone-control.md) 的 `client_cmd`(§3),这里只写插件沙箱自己的部分。
@@ -48,6 +49,9 @@ model → plugin_sandbox / plugin_sandbox_inspect(tangu-agent builtin,deferred)�
   第一行 `{hello: token}`,不对就断。之后按行 JSON:父 → 子 `{id, op, args}`(`status / screenshot / command / reload / show / quit`,
   11-03 起加 `read / click / type / press / scroll / space / files`,11-15 起加 `settings`,子进程回 `{action, image?, error?}`),
   子 → 父 `{id, ...}` 应答或事件 `{event: 'state' | 'report' | 'install' | 'reset' | 'forward'}`。不开远程调试端口。
+  11-28 起:父 → 子多 `confirmInstall`(带文案的确认框,子进程挂在沙箱主窗上弹,回 `{response}`)与三条 id 0 的通知
+  `installed {installed}` / `installResult {...SandboxInstallResult, origin}` / `yieldPinned {on}`;子 → 父事件多
+  `install {force?}`、`openHost {settings?}`、`close`(沙箱窗口回执卡上的按钮)。
   控制通道一断(父进程退出 / 崩溃),沙箱跟着退。
 
 ## 3. 工具
@@ -117,7 +121,14 @@ manifest id 不合规或是商店身份 `market-*`)。
 
 `{v:1, state, pluginId, name, version, dir, views, spaces, hiddenSpaces[{slug,reason}], setupError, blocked, mountErrors[{view,message}],
 logs[{level,text}](最近 40 条), warnCount, errorCount, loads, windowVisible,
-vault, activeSpace, notices[{level,text}](最近 8 条), dialog{kind,title}|null, filesArmed:'paths'|'cancel'|null}`(最后五个 11-03 起,老桌面不报 = 空值)
+vault, activeSpace, notices[{level,text}](最近 8 条), dialog{kind,title}|null, filesArmed:'paths'|'cancel'|null,
+installed{state,version,changed,folder}|null}`(vault 起五个 11-03 起;installed 11-28 起由父进程填,子进程不报;老桌面不报 = 空值)
+
+- `installed`:用户那份 Forsion 里这个插件的安装情况。父进程逐文件比 `<forsionHome>/plugins/<id>` 与沙箱目录的内容(sha256,
+  范围同安装:真实目录、软链跟进、跳过 node_modules / .git / .forsion / .DS_Store;超 4000 个文件或 256 MB 不比 = `unknown`):
+  `none` 没装 / `same` 装的就是这一份 / `older` 装过、之后改过(`changed` = 不同的文件数,版本号没变也按内容算)/
+  `store` 同一个 id 以别的目录名装着(`folder`,多半是商店的 `market-…`,`.installing-` / `.old-` 临时目录不算)/ `unknown`。
+  起好、保存即重载(`loads` 变了)、装完各重算一次;变了就广播(卡片)并推给沙箱窗口(顶条按钮)。引擎把它写成一行给模型。
 
 - `state`:`starting`(插件宿主还没装载落定)/ `running` / `failed`(setup 抛错或没列出来)/ `blocked`(宿主拒载)/ `stopped`;
 - `loads`:自启动以来装载了几次(保存即重载会累加);
@@ -141,9 +152,20 @@ console 与最后的挂载报错 —— client_cmd 结果 text 与工具结果�
 - **沙箱窗口**(`frontend/src/sandbox/SandboxChrome.tsx`):标题栏右侧「沙箱 · 名字 版本」胶囊 + 重置 / 报告问题 / 安装到我的 Forsion,
   首次打开垂一条说明。按钮只把意图交给父进程:报告问题 → 回到发起沙箱的那个对话,话放进输入框(用户自己决定发不发)。
 - **Coding Studio Sandbox 面板**:两档,隔离沙箱(缺省)/ 我的 Forsion(原来的开发加载器,原样保留)。
-- **安装到我的 Forsion**:先在用户那份主窗弹确认框,再把插件目录拷进 `<forsionHome>/plugins/<id>`(先拷到旁边再换,不带
-  `node_modules` / `.git` / `.forsion`;按真实目录拷,软链拷成实体;换的那一步失败就把旧的放回去);同一个插件已从商店装在别的目录名下就拒绝。
-  同意绑在确认框里那个插件上:等用户点的工夫沙箱换了插件 / manifest 换了 id,就不装。装好广播 `extensions-changed`,各窗自己重载。
+- **安装到我的 Forsion**:先确认,再把插件目录拷进 `<forsionHome>/plugins/<id>`(先拷到旁边再换,不带
+  `node_modules` / `.git` / `.forsion`;按真实目录拷,软链拷成实体;换的那一步失败就把旧的放回去);同一个插件已从商店装在别的目录名下就拒绝(code `store`)。
+  同意绑在确认框里那个插件上:等用户点的工夫沙箱换了插件 / manifest 换了 id,就不装(code `changed`)。装好广播 `extensions-changed`,各窗自己重载。
+  - **确认框挂在点按钮的那扇窗上**(11-28 方案 A):沙箱窗口顶条点的 → 父进程把文案交给子进程,子进程在沙箱主窗上弹系统框
+    (⚠️ 不画在沙箱网页里:插件代码和沙箱条同在一个渲染层,网页里的「同意」插件能自己点掉;系统框它够不着),弹着时状态 `dialog` 有值、agent 动作先拒;
+    卡片 / 右栏 / Coding Studio 点的 → 用户那份主窗上弹,主窗用 `app.focus({steal})` 抬到最前。两种都先让开置顶的东西
+    (钉住的浮动面板、插件桌面小窗,`main.ts yieldPinnedWindows`;沙箱那边经 `yieldPinned`),关掉放回去。
+    等确认的工夫沙箱没了 → 当取消,不再到主窗上问。同一时刻只开一个确认框。
+  - **装的就是这一份时不再覆盖**(code `same`,不弹框);沙箱窗口回执卡上的「重新安装」带 `force`。`older` 时按钮叫「更新」、确认框问「用沙箱里这份更新…」。
+  - **装完**:沙箱留着(插件开发一轮轮改,装完常要再对一遍)。顶条「安装」→ 灰的「已安装 ✓」,从顶条点的那次在按钮下垂回执卡
+    (在我的 Forsion 打开 / 关闭沙箱);装不上垂说明(`store` 带「打开插件设置」)。对话卡 / 右栏 / Coding Studio 读同一份 `installed`:
+    已安装 → 「在我的 Forsion 打开」(主窗切到插件的 Space,没有就开设置页,`mainAction open-plugin`)+ 打开沙箱窗口 / 关闭沙箱;
+    沙箱停了的历史卡向主进程问 `installedOf(dir)`;手机 / 网页看工具结果里存的那份。报错按 code 说人话,原文只在 `error` 时带上。
+  - 台架替用户点子进程的确认框:`FORSION_HARNESS_SANDBOX_CONFIRM=0|1`(只认开发构建,打包版不起作用)。
 
 ## 6. 不做(v1)
 
@@ -176,7 +198,7 @@ console 与最后的挂载报错 —— client_cmd 结果 text 与工具结果�
 
 - 引擎:`src/tools/builtin/pluginSandbox.test.ts`、`src/tools/clientCapabilityGate.test.ts`(plugin.* 只给桌面);
 - 桌面主进程:`desktop/electron/pluginSandbox.test.ts`(假子进程走真 socket:握手 / 令牌负对照 / 就地重载 / 闲置自动停 / 安装与同意绑定 /
-  起停排队 / spawn 失败马上报);
+  起停排队 / spawn 失败马上报;11-28 起:装没装 none → same → 不覆盖(same)/ force → older、store、临时目录与 node_modules 不算、超上限 unknown);
 - 子进程纯函数:`desktop/electron/sandboxChild.test.ts`(按键映射、files 路径门禁:软链 / `../` / 沙箱外);
 - 演示舞台:`desktop/electron/pluginStage.test.ts`(参数清洗、目录守卫、找插件、fixture 软链、只拷普通文件、同意记录、主人与互斥);
   真 Electron `npm run check:pluginstage`(确认框两次、2560×1600 PNG、Space、时钟、隔离、selector 截图、录像能解码、脚本回放、busy、负对照、close);

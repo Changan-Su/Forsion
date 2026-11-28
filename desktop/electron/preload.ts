@@ -1012,6 +1012,10 @@ if (sandboxSelf) {
     self: sandboxSelf,
     action: (a: string, note?: string) => ipcRenderer.invoke('pluginSandbox:childAction', a, note),
     changed: () => ipcRenderer.send('pluginSandbox:changed'),
+    // 用户那份 Forsion 里装没装这一份(父进程算、推过来);装的结果(顶条的回执卡 / 报错)
+    installed: () => ipcRenderer.invoke('pluginSandbox:installedNow'),
+    onInstalled: on('pluginSandbox:installed'),
+    onInstallResult: on('pluginSandbox:installResult'),
     // 演示舞台:渲染层录完的视频交给主进程落盘(只有舞台那份接这条;普通沙箱调了回 null)
     saveRecording: (bytes: ArrayBuffer, ext: string) => ipcRenderer.invoke('pluginSandbox:saveRecording', bytes, ext),
   }
@@ -1024,6 +1028,8 @@ if (sandboxSelf) {
     stop: () => ipcRenderer.invoke('pluginSandbox:stop'),
     reset: () => ipcRenderer.invoke('pluginSandbox:reset'),
     install: () => ipcRenderer.invoke('pluginSandbox:install'),
+    installedOf: (dir: string) => ipcRenderer.invoke('pluginSandbox:installedOf', dir),
+    openInstalled: (pluginId: string, settings?: boolean) => ipcRenderer.invoke('pluginSandbox:openInstalled', pluginId, settings === true),
     onChanged: on('pluginSandbox:changed'),
     onReport: on('pluginSandbox:report'),
   }

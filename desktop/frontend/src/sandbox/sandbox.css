@@ -68,7 +68,17 @@
   outline: none;
 }
 .sbx-pop textarea:focus { border-color: var(--accent); }
-.sbx-pop-actions { display: flex; justify-content: flex-end; }
+.sbx-pop-actions { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+/* 安装回执 / 没装上(11-28):挂在「安装」按钮下,同「报告问题」那块弹层;字号跟顶条一致 */
+.sbx-rcpt { font-size: var(--ui-font-meta); }
+.sbx-rcpt-head { display: flex; align-items: center; gap: 7px; font-size: var(--ui-font-body); font-weight: 600; color: var(--text); }
+.sbx-rcpt-head > svg { flex: none; }
+.sbx-rcpt-head > svg.ok { color: var(--accent-ink, var(--accent)); }
+.sbx-rcpt-head > svg.bad { color: var(--danger); }
+.sbx-rcpt-body { color: var(--text-muted); line-height: 1.55; }
+.sbx-linkbtn { margin-right: auto; padding: 0 2px; border: none; background: none; color: var(--text-faint, var(--text-muted)); font: inherit; cursor: pointer; }
+.sbx-linkbtn:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+.sbx-cbtn.is-on { background: var(--menu-hover, var(--bg-hover)); }
 .sbx-note {
   position: fixed;
   right: 16px;

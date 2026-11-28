@@ -4,10 +4,11 @@
  * 手机 / 网页没有沙箱控制面:只读结果,提示到电脑上打开。插件说的话(名字、报错、视图名)一律当纯文本渲染。
  */
 import { useEffect, useState } from 'react'
-import { AppWindow, CircleAlert, CircleCheck, Download, FlaskConical, Loader2, Play, RotateCcw, TriangleAlert } from 'lucide-react'
+import { AppWindow, CircleAlert, CircleCheck, Download, FlaskConical, Loader2, PackageCheck, Play, Power, RefreshCw, RotateCcw, Settings, SquareArrowOutUpRight, TriangleAlert } from 'lucide-react'
 import type { ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { registerMessages, useI18n } from '../../i18n'
-import { extractSandboxStatus, type SandboxStatus } from '../../../../../tangu-agent/src/contracts/pluginSandbox'
+import { extractSandboxStatus, type SandboxInstalled, type SandboxStatus } from '../../../../../tangu-agent/src/contracts/pluginSandbox'
+import { installButton, installErrorText, installedFact } from './sandboxInstall'
 import './pluginSandboxCard.css'
 
 registerMessages({
@@ -30,7 +31,6 @@ registerMessages({
   'sandbox.card.open': { zh: '打开沙箱窗口', en: 'Open sandbox window' },
   'sandbox.card.reset': { zh: '重置数据', en: 'Reset data' },
   'sandbox.card.install': { zh: '安装到我的 Forsion', en: 'Install in my Forsion' },
-  'sandbox.card.installed': { zh: '已安装到你的 Forsion', en: 'Installed in your Forsion' },
   'sandbox.card.restart': { zh: '重新启动', en: 'Start again' },
 })
 
@@ -55,26 +55,47 @@ function useLiveSandbox(): LiveSandbox | null {
   return live
 }
 
+/** 沙箱停了以后,这份插件目录装没装进用户那份(主进程比对;没在跑的沙箱没有实时状态可读)。live 变了(装完 / 停了)重问一次。 */
+function useInstalledOf(dir: string, ask: boolean, live: LiveSandbox | null): SandboxInstalled | null | undefined {
+  const api = window.tangu?.pluginSandbox
+  const [v, setV] = useState<SandboxInstalled | null | undefined>(undefined)
+  // 只在「跑没跑 / 装没装」变了时重问:状态广播很勤(切窗口都发),每张历史卡都去比一遍目录太费
+  const key = `${live?.running ?? ''}|${live?.pluginId ?? ''}|${JSON.stringify(live?.installed ?? null)}`
+  useEffect(() => {
+    if (!ask || !api?.installedOf || !dir) return
+    let alive = true
+    void api.installedOf(dir).then((r) => { if (alive) setV(r) }, () => {})
+    return () => { alive = false }
+  }, [api, dir, ask, key])
+  return ask ? v : undefined
+}
+
 export function PluginSandboxCard({ event }: { event: ToolEvent }) {
   const { t } = useI18n()
   const api = window.tangu?.pluginSandbox
   const live = useLiveSandbox()
-  const [busy, setBusy] = useState<'reset' | 'install' | 'start' | null>(null)
+  const [busy, setBusy] = useState<'reset' | 'install' | 'start' | 'stop' | null>(null)
   const [note, setNote] = useState('')
   const saved = extractSandboxStatus(event.result)
+  const mine = !!saved && !!live?.running && live.pluginId === saved.pluginId && live.dir === saved.dir
+  // 装没装:在跑的那份看实时状态;停了的问主进程;手机 / 网页只有工具结果里存的那份
+  const asked = useInstalledOf(saved?.dir ?? '', !!api && !mine, live)
   if (!saved) return null
-  const mine = !!live?.running && live.pluginId === saved.pluginId && live.dir === saved.dir
   const st: SandboxStatus = (mine && live?.status) || saved
   const state = api && live && !mine ? 'stopped' : st.state
-  const tag = { starting: t('sandbox.card.starting'), running: t('sandbox.card.running'), failed: t('sandbox.card.failed'), blocked: t('sandbox.card.blocked'), stopped: t('sandbox.card.stopped') }[state]
-  const run = async (what: 'reset' | 'install' | 'start') => {
+  const inst = mine ? (live?.installed ?? live?.status?.installed ?? null) : asked !== undefined ? asked : saved.installed
+  const done = installButton(inst) === 'done'
+  const tag = done ? (state === 'stopped' ? t('sandbox.inst.tag') : t('sandbox.inst.tagOpen'))
+    : { starting: t('sandbox.card.starting'), running: t('sandbox.card.running'), failed: t('sandbox.card.failed'), blocked: t('sandbox.card.blocked'), stopped: t('sandbox.card.stopped') }[state]
+  const run = async (what: 'reset' | 'install' | 'start' | 'stop') => {
     if (!api || busy) return
     setBusy(what); setNote('')
     try {
       if (what === 'install') {
-        const r = await api.install()
-        if (r.ok) setNote(t('sandbox.card.installed'))
-        else if (!r.cancelled && r.error) setNote(r.error)
+        // 装好以后卡片自己会从实时状态变成「已安装」,不再记一行只在内存里的字
+        setNote(installErrorText(await api.install(), t))
+      } else if (what === 'stop') {
+        await api.stop()
       } else {
         // 不带主题键:主进程用上次带来的那份(工具调用每次都带)
         const r = what === 'reset' ? await api.reset() : await api.exec('start', { dir: saved.dir }, { reveal: true })
@@ -83,6 +104,8 @@ export function PluginSandboxCard({ event }: { event: ToolEvent }) {
     } finally { setBusy(null) }
   }
   const facts: Array<{ kind: 'ok' | 'warn' | 'bad'; text: string }> = []
+  const instFact = installedFact(inst, st.name, t)
+  if (instFact) facts.push(instFact)
   if (st.blocked) facts.push({ kind: 'bad', text: st.blocked })
   if (st.setupError) facts.push({ kind: 'bad', text: st.setupError })
   for (const m of st.mountErrors.slice(0, 2)) facts.push({ kind: 'bad', text: `${m.view}: ${m.message}` })
@@ -92,6 +115,9 @@ export function PluginSandboxCard({ event }: { event: ToolEvent }) {
   for (const h of st.hiddenSpaces.slice(0, 2)) facts.push({ kind: 'warn', text: t('sandbox.card.hidden', { slug: h.slug }) })
   if (st.errorCount || st.warnCount) facts.push({ kind: st.errorCount ? 'bad' : 'warn', text: t('sandbox.card.console', { errors: st.errorCount, warns: st.warnCount }) })
   const Icon = { ok: CircleCheck, warn: TriangleAlert, bad: CircleAlert }
+  const btn = installButton(inst)
+  const spin = (w: typeof busy, icon: React.ReactNode) => (busy === w ? <Loader2 size={13} className="spin" /> : icon)
+  const openMine = <button type="button" className="primary" onClick={() => void api?.openInstalled(st.pluginId)}><SquareArrowOutUpRight size={13} />{t('sandbox.inst.open')}</button>
   return (
     <div className="t2-tasks" data-sandbox-card={event.id}>
       <div className="t2-taskcard sbx-card">
@@ -103,19 +129,28 @@ export function PluginSandboxCard({ event }: { event: ToolEvent }) {
         </div>
         {!!facts.length && (
           <div className="sbx-facts">
-            {facts.map((f, i) => { const I = Icon[f.kind]; return <div key={i} className={`sbx-fact ${f.kind}`}><I size={13} /><span>{f.text}</span></div> })}
+            {facts.map((f, i) => { const I = f === instFact && f.kind === 'ok' ? PackageCheck : f === instFact ? RefreshCw : Icon[f.kind]; return <div key={i} className={`sbx-fact ${f.kind}`}><I size={13} /><span>{f.text}</span></div> })}
           </div>
         )}
-        <div className="t2-taskcard-tldr">{api ? t('sandbox.card.about') : t('sandbox.card.elsewhere')}</div>
+        <div className="t2-taskcard-tldr">{!api ? t('sandbox.card.elsewhere') : done ? t(state === 'stopped' ? 'sandbox.inst.after.closed' : 'sandbox.inst.after.open') : t('sandbox.card.about')}</div>
         {!!note && <div className="t2-taskcard-note">{note}</div>}
         {api && (
           <div className="t2-taskcard-actions">
-            {state === 'stopped'
-              ? <button type="button" className="primary" disabled={!!busy} onClick={() => void run('start')}>{busy === 'start' ? <Loader2 size={13} className="spin" /> : <Play size={13} />}{t('sandbox.card.restart')}</button>
+            {done && state === 'stopped' ? <>
+              {openMine}
+              <button type="button" disabled={!!busy} onClick={() => void run('start')}>{spin('start', <Play size={13} />)}{t('sandbox.card.restart')}</button>
+            </> : done ? <>
+              {openMine}
+              <button type="button" onClick={() => void api.show()}><AppWindow size={13} />{t('sandbox.card.open')}</button>
+              <button type="button" disabled={!!busy} onClick={() => void run('stop')}>{spin('stop', <Power size={13} />)}{t('sandbox.inst.close')}</button>
+            </> : state === 'stopped'
+              ? <button type="button" className="primary" disabled={!!busy} onClick={() => void run('start')}>{spin('start', <Play size={13} />)}{t('sandbox.card.restart')}</button>
               : <>
                 <button type="button" className="primary" onClick={() => void api.show()}><AppWindow size={13} />{t('sandbox.card.open')}</button>
-                <button type="button" disabled={!!busy} onClick={() => void run('reset')}>{busy === 'reset' ? <Loader2 size={13} className="spin" /> : <RotateCcw size={13} />}{t('sandbox.card.reset')}</button>
-                <button type="button" disabled={!!busy} onClick={() => void run('install')}>{busy === 'install' ? <Loader2 size={13} className="spin" /> : <Download size={13} />}{t('sandbox.card.install')}</button>
+                <button type="button" disabled={!!busy} onClick={() => void run('reset')}>{spin('reset', <RotateCcw size={13} />)}{t('sandbox.card.reset')}</button>
+                {btn === 'blocked'
+                  ? <button type="button" onClick={() => void api.openInstalled(st.pluginId, true)}><Settings size={13} />{t('sandbox.inst.openSettings')}</button>
+                  : <button type="button" disabled={!!busy} onClick={() => void run('install')}>{spin('install', btn === 'update' ? <RefreshCw size={13} /> : <Download size={13} />)}{t(btn === 'update' ? 'sandbox.inst.update' : 'sandbox.card.install')}</button>}
               </>}
           </div>
         )}

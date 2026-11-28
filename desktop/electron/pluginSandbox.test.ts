@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
-import { createPluginSandbox, isSandboxRoot, readSandboxManifest, sandboxEnv, sandboxPaths, sandboxRequiredPlugins } from './pluginSandbox'
+import { createPluginSandbox, isSandboxRoot, pluginDigest, readSandboxManifest, sandboxEnv, sandboxInstalledState, sandboxPaths, sandboxRequiredPlugins } from './pluginSandbox'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'sbx-'))
 function pluginDir(id = 'reading-log'): string {
@@ -230,10 +230,52 @@ describe('控制通道', () => {
     await sbx.exec('start', { dir })
     // 确认框给用户看的是别的插件(等确认的工夫换了)→ 不拿这次同意去装
     expect((await sbx.install({ pluginId: 'other', dir })).ok).toBe(false)
-    expect(await sbx.install({ pluginId: 'reading-log', dir })).toEqual({ ok: true, pluginId: 'reading-log' })
+    expect(await sbx.install({ pluginId: 'reading-log', dir })).toMatchObject({ ok: true, pluginId: 'reading-log', installed: { state: 'same', version: '0.1.0' } })
     expect(existsSync(join(home, 'plugins/reading-log/main.js'))).toBe(true)
     expect(existsSync(join(home, 'plugins/reading-log/node_modules'))).toBe(false)
     await sbx.dispose()
+  })
+
+  it('装没装(11-28):none → 装完 same(状态 / 广播 / 推给子进程都带上)→ 再装不覆盖(code same),force 才装;改了文件 → older', async () => {
+    const home = tmp(); const dir = pluginDir()
+    const f = fakeSpawn({ states: ['running'] })
+    const seen: Array<unknown> = []
+    const sbx = createPluginSandbox({
+      forsionHome: () => home, spawn: f.spawn, appArgs: ['/app'], platform: process.platform, pid: process.pid,
+      ui: () => ({ locale: 'en', storage: {} }), onChange: (st) => seen.push(st.installed ?? null), onChildEvent: () => {}, log: () => {},
+    })
+    const started = await sbx.exec('start', { dir })
+    expect(JSON.parse(started.text!).installed).toMatchObject({ state: 'none' })
+    expect(sbx.state().installed).toMatchObject({ state: 'none' })
+    expect(f.reqs.find((r) => r.op === 'installed')?.args).toMatchObject({ installed: { state: 'none' } })
+    await sbx.install({ pluginId: 'reading-log', dir })
+    expect(sbx.state().installed).toMatchObject({ state: 'same', version: '0.1.0', changed: 0 })
+    expect(seen.some((v) => (v as { state?: string } | null)?.state === 'same')).toBe(true)
+    // 装的就是这一份:不悄悄覆盖,force 才装
+    expect(await sbx.install({ pluginId: 'reading-log', dir })).toMatchObject({ ok: false, code: 'same' })
+    expect(await sbx.install({ pluginId: 'reading-log', dir }, { force: true })).toMatchObject({ ok: true })
+    // 沙箱里改了一个、加了一个 → older,changed = 2(版本号没变也按内容算)
+    writeFileSync(join(dir, 'main.js'), 'module.exports = { v: 2 }'); writeFileSync(join(dir, 'extra.js'), '1')
+    expect(await sandboxInstalledState(home, dir, 'reading-log')).toMatchObject({ state: 'older', version: '0.1.0', changed: 2 })
+    await sbx.dispose()
+  })
+
+  it('装没装:同一个插件以别的目录名装着(商店 market-…)→ store,安装回 code store;临时目录 / 超上限 / node_modules 不算', async () => {
+    const home = tmp(); const dir = pluginDir()
+    mkdirSync(join(home, 'plugins', 'reading-log.installing-ab12'), { recursive: true })
+    writeFileSync(join(home, 'plugins', 'reading-log.installing-ab12', 'manifest.json'), JSON.stringify({ id: 'reading-log', version: '9' }))
+    expect(await sandboxInstalledState(home, dir, 'reading-log')).toMatchObject({ state: 'none' })
+    mkdirSync(join(home, 'plugins', 'market-3f2a'), { recursive: true })
+    writeFileSync(join(home, 'plugins', 'market-3f2a', 'manifest.json'), JSON.stringify({ id: 'reading-log', version: '0.0.9' }))
+    expect(await sandboxInstalledState(home, dir, 'reading-log')).toEqual({ state: 'store', version: '0.0.9', changed: 0, folder: 'market-3f2a' })
+    const sbx = sandbox(home, fakeSpawn({ states: ['running'] }))
+    await sbx.exec('start', { dir })
+    expect(await sbx.install({ pluginId: 'reading-log', dir })).toMatchObject({ ok: false, code: 'store' })
+    await sbx.dispose()
+    // node_modules 不进摘要;超过文件数上限 → null(unknown)
+    const d = await pluginDigest(dir)
+    expect([...d!.keys()].sort()).toEqual(['main.js', 'manifest.json'])
+    expect(await pluginDigest(dir, { files: 1, bytes: 1e9 })).toBeNull()
   })
 
   it('叫到前面:用户在界面上点的启动 / 重置起好后 show;agent 起的不叫', async () => {

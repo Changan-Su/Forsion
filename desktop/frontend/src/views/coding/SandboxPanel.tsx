@@ -4,7 +4,8 @@
  *    与已安装插件同权。所以「加载」按钮上方那段话不可折叠、不可关闭 —— 用户按下去之前必须看见。
  *  证据(setup 抛错 / 视图 mount 抛错 / 这个插件自己的 console)收在这里,一键带回对话。 */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { AlertCircle, AppWindow, Download, FlaskConical, Loader2, Play, RotateCcw, RotateCw, ShieldAlert, Square, Trash2 } from 'lucide-react'
+import { AlertCircle, AppWindow, Download, FlaskConical, Loader2, Play, RefreshCw, RotateCcw, RotateCw, Settings, ShieldAlert, Square, SquareArrowOutUpRight, Trash2 } from 'lucide-react'
+import { installButton, installErrorText, installedFact } from '../chat2/sandboxInstall'
 import { sandboxUiStorage } from '../../services/pluginSandboxSurface'
 import { clearDevPluginLogs, reloadDevPlugin, useDevPluginState } from '@amadeus/plugins/devSandbox'
 import { useI18n } from '../../i18n'
@@ -87,10 +88,15 @@ function IsolatedSandbox({ root, product, onPrompt, tiers }: SandboxPanelProps &
         : what === 'reset' ? await api.reset()
           : what === 'install' ? await api.install()
             : (await api.stop(), { ok: true })
-      if (!r.ok && !('cancelled' in r && r.cancelled) && r.error) setError(r.error)
+      if (what === 'install') setError(installErrorText(r, t))
+      else if (!r.ok && !('cancelled' in r && r.cancelled) && r.error) setError(r.error)
     } finally { setBusy(null) }
   }
   const spin = (k: typeof busy, icon: ReactNode) => (busy === k ? <Loader2 size={13} className="csx-spin" /> : icon)
+  // 用户那份 Forsion 里装没装这一份(11-28):已安装就不给再装,改过了叫「更新」,另装着一份就指到插件设置
+  const inst = mine ? (live?.installed ?? st?.installed ?? null) : null
+  const ib = installButton(inst)
+  const instFact = installedFact(inst, live?.name || pluginId, t)
   return <div className="csu-panel-body csu-sandbox" data-sandbox-tier="isolated" data-sandbox-state={state} data-plugin-id={pluginId}>
     <section className="csu-sandbox-head">
       {tiers}
@@ -101,6 +107,7 @@ function IsolatedSandbox({ root, product, onPrompt, tiers }: SandboxPanelProps &
       </p>}
       {st?.hiddenSpaces.map((h) => <p key={h.slug} className="csu-hint" role="status" data-sandbox-space-hidden>{t('plugins.spaceHidden.badge')} · {h.slug}: {h.reason}</p>)}
       {st?.blocked && <p className="csu-hint" role="status">{t('studio.sandbox.blockedOther', { reason: st.blocked })}</p>}
+      {instFact && <p className="csu-hint" role="status" data-sandbox-installed={inst?.state}>{instFact.text}</p>}
       <div className="csu-sandbox-actions">
         {!mine
           ? <button type="button" className="csu-primary" data-action="sandbox-iso-start" disabled={busy !== null} onClick={() => void act('start')}>
@@ -110,7 +117,9 @@ function IsolatedSandbox({ root, product, onPrompt, tiers }: SandboxPanelProps &
             <button type="button" className="csu-primary" data-action="sandbox-iso-open" onClick={() => void api.show()}><AppWindow size={13} />{t('sandbox.card.open')}</button>
             <button type="button" data-action="sandbox-iso-reset" disabled={busy !== null} onClick={() => void act('reset')}>{spin('reset', <RotateCcw size={13} />)}{t('sandbox.card.reset')}</button>
             <button type="button" data-action="sandbox-iso-stop" disabled={busy !== null} onClick={() => void act('stop')}>{spin('stop', <Square size={13} />)}{t('studio.sandbox.isoStop')}</button>
-            <button type="button" data-action="sandbox-iso-install" disabled={busy !== null} onClick={() => void act('install')}>{spin('install', <Download size={13} />)}{t('sandbox.card.install')}</button>
+            {ib === 'done' ? <button type="button" data-action="sandbox-iso-open-mine" onClick={() => void api.openInstalled(pluginId)}><SquareArrowOutUpRight size={13} />{t('sandbox.inst.open')}</button>
+              : ib === 'blocked' ? <button type="button" data-action="sandbox-iso-plugin-settings" onClick={() => void api.openInstalled(pluginId, true)}><Settings size={13} />{t('sandbox.inst.openSettings')}</button>
+                : <button type="button" data-action="sandbox-iso-install" disabled={busy !== null} onClick={() => void act('install')}>{spin('install', ib === 'update' ? <RefreshCw size={13} /> : <Download size={13} />)}{t(ib === 'update' ? 'sandbox.inst.update' : 'sandbox.card.install')}</button>}
           </>}
       </div>
       {!!error && <p className="csu-error" role="alert" data-sandbox-error="action">{error}</p>}
