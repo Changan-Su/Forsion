@@ -48,6 +48,10 @@ async function main() {
     const json = (body) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
     if (p === '/auth/me') return json({ id: 'fixture-user', username: 'Fixture' })
     if (p === '/auth/region') return json({ country: 'GB' })
+    // An unhandled /libraries request gets the engine stub's generic 200 and fails vault restore.
+    if (p === '/amadeus/libraries') return json({ libraries: [
+      { id: 'default', vaultId: 'default', kind: 'default', prefix: 'Amadeus/', name: 'My Vault', files: 1 + boards.size, devices: [] },
+    ] })
     if (p === '/amadeus/vaults') return json({ vaults: [{ id: 'default', name: 'Fixture vault', lastChangeSeq: 1, sizeBytes: 0, createdAt: new Date().toISOString() }] })
     if (p.endsWith('/tree')) return json({ pages: ['Fixture note.md', ...[...boards.keys()]], folders: [], files: [], seq: 1 })
     if (p.endsWith('/file')) {
@@ -249,25 +253,35 @@ async function main() {
         assert.equal(await phonePage('me').count(), 1, 'closing settings returns to the Me page')
       })
       await check('Note retains mobile categories, search, note detail and return', async () => {
+        const zh = config.locale.startsWith('zh')
+        const notesList = '.mb-shell[data-space="amadeus"][data-nav="list"]'
         await page.locator('.bmc-dock [data-space="amadeus"]').click()
-        await page.waitForSelector('.mb-shell[data-nav="list"]')
+        await page.waitForSelector(notesList)
         await page.waitForSelector('.amx-tree .pl-chips')
-        assert.equal(await page.locator('.bmc-heading .bmc-title > small').textContent(), config.locale.startsWith('zh') ? '云端智库' : 'Cloud vault')
+        assert.equal(await page.locator('.bmc-heading .bmc-title > small').textContent(), zh ? '云端智库' : 'Cloud vault')
         assert.equal(await page.locator('.amx-tree [data-filter="boards"]').count(), 1)
         assert.equal(await page.locator('[data-chrome-action="search"]').count(), 1)
         await page.locator('.amx-tree [data-filter="tree"]').click()
         await page.getByText('Fixture note', { exact: true }).click()
-        await page.waitForSelector('.mb-shell[data-nav="detail"]')
-        await page.waitForSelector('.ProseMirror')
+        await page.locator('.mb-shell[data-space="amadeus"][data-nav="detail"] .ProseMirror')
+          .getByText('Fixture body.', { exact: true }).waitFor()
         await page.locator('[data-chrome-action="left"]').click()
-        await page.waitForSelector('.mb-shell[data-nav="list"]')
+        await page.waitForSelector(notesList)
         await listGeometry()
-        assert.equal(await page.locator('.amx-tree .t2s-foot .t2s-special').filter({ hasText: config.locale.startsWith('zh') ? '云端智库' : 'Cloud vault' }).count(), 1, 'Cloud vault management stays reachable')
+        const vaultName = zh ? '云端笔记' : 'Cloud notes'
+        const vaultEntry = page.locator('.amx-tree .t2s-foot').getByRole('button', { name: `${vaultName} · ${zh ? '已保存' : 'Saved'}`, exact: true })
+        await vaultEntry.waitFor()
         await shot(`notes-${config.width}-${config.mode}.png`)
+        await vaultEntry.click()
+        const vaultPicker = page.getByRole('dialog', { name: zh ? '智库' : 'Vault', exact: true })
+        await vaultPicker.getByText(zh ? '云端' : 'In the cloud', { exact: true }).waitFor()
+        await vaultPicker.getByRole('button', { pressed: true }).filter({ hasText: vaultName }).waitFor()
+        await vaultPicker.getByRole('button', { name: zh ? '关闭' : 'Close', exact: true }).click()
+        await vaultPicker.waitFor({ state: 'detached' })
         // Full-text search has a row of its own at the foot of the list (the capsule's search finds by name) and opens in the
         // list. Browser Back closes what is on top first (a sheet), then the search, and the list is still there after both.
         const fullText = page.locator('.amx-tree .t2s-foot .amx-fulltext-entry')
-        assert.equal(await fullText.textContent(), config.locale.startsWith('zh') ? '全文搜索' : 'Full-text search')
+        assert.equal(await fullText.textContent(), zh ? '全文搜索' : 'Full-text search')
         await fullText.click()
         await page.waitForSelector('.amx-tree .amx-panel--inlist')
         assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('.amx-tree .amx-panel--inlist input')), true, 'the search field has the caret')
@@ -282,7 +296,7 @@ async function main() {
         await page.goBack()
         await page.waitForSelector('.amx-tree .amx-panel--inlist', { state: 'detached' })
         await guardSettled(true)
-        assert.equal(await page.locator('.mb-shell[data-space="amadeus"][data-nav="list"]').count(), 1, 'Back closed the search and stayed on the notes list')
+        assert.equal(await page.locator(notesList).count(), 1, 'Back closed the search and stayed on the notes list')
       })
       // Home's Continue opens a conversation straight at its page; Back from there is Home again, not that Space's list.
       await check('Home Continue opens the conversation; browser Back returns Home, not to the list', async () => {
