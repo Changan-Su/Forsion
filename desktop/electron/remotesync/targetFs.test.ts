@@ -55,8 +55,8 @@ async function folderBench(): Promise<Bench> {
   }
 }
 
-async function s3Bench(conditions: 'honour' | 'ignore'): Promise<Bench> {
-  const fake = await startFakeS3({ conditions })
+async function s3Bench(conditions: 'honour' | 'ignore', putEtag = true): Promise<Bench> {
+  const fake = await startFakeS3({ conditions, putEtag })
   const full = (key: string): string => `pre/${DIR}/${key}`
   const spec: TargetSpec = {
     kind: 's3',
@@ -144,6 +144,7 @@ const BENCHES: Array<[string, () => Promise<Bench>]> = [
   ['folder', folderBench],
   ['s3 (honours conditions)', () => s3Bench('honour')],
   ['s3 (ignores conditions)', () => s3Bench('ignore')],
+  ['s3 (honours, no ETag on PUT)', () => s3Bench('honour', false)],
   ['webdav (honours, strong etag)', () => webdavBench({ conditions: 'honour', etags: 'strong', putEtag: true })],
   ['webdav (ignores, strong etag)', () => webdavBench({ conditions: 'ignore', etags: 'strong', putEtag: true })],
   ['webdav (honours, strong etag, no ETag on PUT)', () => webdavBench({ conditions: 'honour', etags: 'strong', putEtag: false })],

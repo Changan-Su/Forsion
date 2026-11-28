@@ -2,7 +2,7 @@
  * 进程内假 S3(node:http,127.0.0.1 随机口,path-style):只认 fsS3 用到的几条请求 ——
  * ListObjectsV2 / GetObject / HeadObject / PutObject / DeleteObject。不验签。
  * conditions: 'honour' = 按 S3 语义执行 If-Match / If-None-Match(412 / 404);'ignore' = 收到也当没看见
- * (模拟默默忽略条件头的 S3 兼容服务)。测试用,不出网。
+ * (模拟默默忽略条件头的 S3 兼容服务)。putEtag: false = PutObject 响应不带 ETag(部分 S3 兼容服务如此)。测试用,不出网。
  */
 import { createHash } from 'node:crypto'
 import http from 'node:http'
@@ -19,6 +19,12 @@ export interface FakeS3 {
   conditions: 'honour' | 'ignore'
   /** HEAD 定好回什么之后、响应发出前调用(200 / 404 都调):用来在「复查」与「写」之间插一笔别人的改动。 */
   afterHead?: (key: string) => void
+  /** ListObjectsV2 定好回什么之后、响应发出前调用(参数 = prefix)。 */
+  afterList?: (prefix: string) => void
+  /** PUT 落盘之后、响应发出前调用:在「写」与写后核对之间插一笔别人的改动。 */
+  afterPut?: (key: string) => void
+  /** PutObject 响应是否带 ETag 头(缺省 true)。 */
+  putEtag: boolean
   /** 这些 key 的 HEAD 回 500。 */
   failHead: Set<string>
   /** 别的写入者直接改远端。 */
@@ -45,7 +51,7 @@ function decodeAwsChunked(raw: Buffer): Buffer {
   return Buffer.concat(out)
 }
 
-export async function startFakeS3(opts: { bucket?: string; conditions?: 'honour' | 'ignore' } = {}): Promise<FakeS3> {
+export async function startFakeS3(opts: { bucket?: string; conditions?: 'honour' | 'ignore'; putEtag?: boolean } = {}): Promise<FakeS3> {
   const bucket = opts.bucket ?? 'bkt'
   const objects = new Map<string, S3Obj>()
   const requests: S3Req[] = []
@@ -62,6 +68,7 @@ export async function startFakeS3(opts: { bucket?: string; conditions?: 'honour'
     objects,
     requests,
     conditions: opts.conditions ?? 'honour',
+    putEtag: opts.putEtag ?? true,
     failHead: new Set(),
     externalPut: (key, data) => { store(key, Buffer.isBuffer(data) ? data : Buffer.from(data)) },
     externalDelete: (key) => { objects.delete(key) },
@@ -95,6 +102,7 @@ export async function startFakeS3(opts: { bucket?: string; conditions?: 'honour'
           const o = objects.get(k)!
           return `<Contents><Key>${xmlEsc(k)}</Key><LastModified>${new Date(o.lastModified).toISOString()}</LastModified><ETag>${xmlEsc(o.etag)}</ETag><Size>${o.data.byteLength}</Size><StorageClass>STANDARD</StorageClass></Contents>`
         }).join('')
+        fake.afterList?.(prefix)
         res.writeHead(200, { 'Content-Type': 'application/xml' })
         res.end(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>${bucket}</Name><Prefix>${xmlEsc(prefix)}</Prefix><KeyCount>${keys.length}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`)
         return
@@ -135,7 +143,8 @@ export async function startFakeS3(opts: { bucket?: string; conditions?: 'honour'
         const meta: Record<string, string> = {}
         for (const [h, v] of Object.entries(req.headers)) if (h.startsWith('x-amz-meta-')) meta[h.slice(11)] = String(v)
         const o = store(key, body, meta)
-        res.writeHead(200, { ETag: o.etag })
+        fake.afterPut?.(key)
+        res.writeHead(200, fake.putEtag ? { ETag: o.etag } : {})
         res.end()
         return
       }

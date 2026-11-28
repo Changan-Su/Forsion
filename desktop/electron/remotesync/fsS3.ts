@@ -9,8 +9,12 @@
  * 保留:分页列举、multipart 上传、rclone 兼容的 MTime/CTime 元数据(秒)。
  * Forsion 增补(非上游):opts.cas = TargetFs 语义(targetFs.ts)—— 有期望时先 HEAD 复查身份,
  * 再用单次 PutObject / DeleteObject 带 If-None-Match / If-Match(412 / 409 ConditionalRequestConflict → cas-conflict)。
- * 有的 S3 兼容服务默默忽略条件头,所以对外不声明 CAS,真正兜底的是复查(窗口一个往返,非原子)。缺省 = 旧行为。
+ * 有的 S3 兼容服务默默忽略条件头,所以对外不声明 CAS,真正兜底的是复查(窗口一个往返,非原子)。
+ * HEAD 没有响应体,404 分不清「key 不在」和「桶不在」:cas 下 HEAD 404 再用 ListObjectsV2(Prefix = 完整 key)确认。
+ * 条件 PUT 不回 ETag(部分 S3 兼容服务)时:HEAD → GET → HEAD,两次身份一致且内容 sha256 正是这次写的才认,否则 cas-conflict。
+ * 缺省 = 旧行为。
  */
+import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
 import {
   DeleteObjectCommand,
@@ -91,7 +95,9 @@ export function createS3Remote(cfg: S3Config, opts: S3RemoteOptions = {}): Remot
   })
   const full = (key: string): string => `${prefix}${key}`
   const conflict = (op: string, key: string, why: string): Error => new Error(`cas-conflict s3 ${op} ${key}: ${why}`)
-  /** HEAD;id 与 walk 同口径(ETag,拿不到时秒级 LastModified + size)。404 → null,其余失败抛。 */
+  /** HEAD;id 与 walk 同口径(ETag,拿不到时秒级 LastModified + size)。其余失败抛。
+   *  cas 下 404 不直接当不存在(HEAD 无响应体,桶不在也是这个 404):用 ListObjectsV2 按完整 key 前缀确认 ——
+   *  列得出来且没有这个 key 才是 null;列出来有(HEAD 之后刚建的)就按列表给身份(与 walk 同口径);列失败照抛。 */
   const statKey = async (key: string, signal?: AbortSignal): Promise<RemoteEntity | null> => {
     try {
       const rsp = await client.send(new HeadObjectCommand({ Bucket: cfg.bucket, Key: full(key) }), { abortSignal: signal })
@@ -99,10 +105,18 @@ export function createS3Remote(cfg: S3Config, opts: S3RemoteOptions = {}): Remot
       const size = rsp.ContentLength ?? 0
       return { key, size, mtimeMs, id: rsp.ETag ?? `${mtimeMs}:${size}` }
     } catch (e) {
-      if (isNotFound(e)) return null
-      throw e
+      if (!isNotFound(e)) throw e
+      if (!opts.cas) return null // 缺省模式照旧
     }
+    // 完整 key 是所有以它为前缀的 key 里字典序最小的,MaxKeys 1 就够
+    const list = await client.send(new ListObjectsV2Command({ Bucket: cfg.bucket, Prefix: full(key), MaxKeys: 1 }), { abortSignal: signal })
+    const obj = (list.Contents ?? []).find((o) => o.Key === full(key))
+    if (!obj) return null
+    const mtimeMs = obj.LastModified ? Math.floor(obj.LastModified.valueOf() / 1000) * 1000 : 0
+    const size = obj.Size ?? 0
+    return { key, size, mtimeMs, id: obj.ETag ?? `${mtimeMs}:${size}` }
   }
+  const sha256 = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
 
   return {
     kind: 's3',
@@ -158,8 +172,17 @@ export function createS3Remote(cfg: S3Config, opts: S3RemoteOptions = {}): Remot
           if (input.IfMatch && isNotFound(e)) throw conflict('PUT', key, 'absent')
           throw e
         }
-        const mt = metaMtimeMs({ MTime: `${mtimeMs / 1000.0}` }) || mtimeMs
-        return { key, size: data.byteLength, mtimeMs: mt, id: etag ?? `${mt}:${data.byteLength}` }
+        if (etag) {
+          const mt = metaMtimeMs({ MTime: `${mtimeMs / 1000.0}` }) || mtimeMs
+          return { key, size: data.byteLength, mtimeMs: mt, id: etag }
+        }
+        // 不回 ETag:拿客户端 mtime 拼的 id 与随后 HEAD 的 ETag 对不上(下一轮必误报冲突),写后 HEAD 又可能已是别人的版本。
+        // HEAD → GET → HEAD:两次身份一致、下到的正是这次写的字节,这个身份才是我们的;否则抛冲突,交引擎重判。
+        const s1 = await statKey(key, signal)
+        const back = s1 ? await bodyToBuffer((await client.send(new GetObjectCommand({ Bucket: cfg.bucket, Key: full(key) }), { abortSignal: signal })).Body) : null
+        const s2 = s1 ? await statKey(key, signal) : null
+        if (!s1 || !s2 || !back || s1.id !== s2.id || sha256(back) !== sha256(data)) throw conflict('PUT', key, 'remote changed after write')
+        return s1
       }
       const upload = new Upload({
         client,

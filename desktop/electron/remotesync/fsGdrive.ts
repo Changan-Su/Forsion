@@ -15,12 +15,12 @@
  *  - 写入一律 resumable 会话(先 POST/PATCH 元数据拿上传地址,再一次 PUT 全部内容):multipart 只适合 5MB 以内;
  *    会话在内容传完前不产生文件,所以建会话那一步撞限流可以安全重试;
  *  - 删除 = 移进回收站(trashed:true),30 天内可在 Drive 里找回。
- *  - stat(单 key,TargetFs 用):父目录 ID 优先用上次清单里的,清单不认识的段现查(每段一次查询 × 同名父目录数;
- *    清单都没有时从 baseDir 逐段查),再按名字查一次 —— 常见情况 1 次查询;key 上同时有同名文件夹、或 key 本身是
- *    冲突派生名时,规则依赖整棵树(文件夹非空才让位 / 派生名按年龄排),走一次私有的全量列表(不替换共享清单)。
- *    结果回写清单里这一个 key,后续写删的复查跟它对得上。上次清单之后另一台新建的同名文件夹要到下次 walk 才看得见
- *    (与建前复查同一前提)。
- *  - opts.cas = TargetFs 语义(targetFs.ts):rm(null) 现查(不只看清单)。缺省 = 旧行为。
+ *  - stat(单 key,TargetFs 用):从 baseDir 逐段现查父目录(每段一次查询 × 同名父目录数),再按名字查一次 ——
+ *    不用清单缓存的文件夹 ID:walk 之后目标文件夹 / 中间目录在网页版被改名或移走,文件夹与文件 ID 都不变,
+ *    按缓存 ID 会找到(进而写删)挪走的那份。key 上同时有同名文件夹、或 key 本身是冲突派生名时,规则依赖整棵树
+ *    (文件夹非空才让位 / 派生名按年龄排),走一次私有的全量列表(不替换共享清单)。结果回写清单里这一个 key。
+ *  - opts.cas = TargetFs 语义(targetFs.ts):rm(null) 现查(不只看清单);条件写删在发请求前按 key 当前的路径
+ *    现查(同 stat)并比对文件 ID + 内容版本;新建发内容前确认落点文件夹仍在 key 的当前路径上。缺省 = 旧行为。
  * 隔离约定:不 import electron/desktop;凭据由宿主(remotesyncIpc)注入。
  */
 import { createHash } from 'node:crypto'
@@ -386,8 +386,16 @@ export function createGdriveRemote(cfg: GdriveConfig, opts: GdriveRemoteOptions 
   const conflict = (op: string, key: string, why: string): Error => new Error(`cas-conflict gdrive ${op} ${key}: ${why}`)
 
   /** key 还指着引擎期望的那份文件吗:同一 ID、同一内容版本、名字没改、还在清单时那个父目录里。
-   *  (只比内容版本不够:walk 之后在网页版改名 / 移走,版本不变,写删会落到挪走的那份上。) */
+   *  (只比内容版本不够:walk 之后在网页版改名 / 移走,版本不变,写删会落到挪走的那份上。)
+   *  cas:按 key 此刻的路径现查(从 baseDir 逐段,见 lookupKey)—— 改名 / 移走的是目标文件夹或中间目录时,
+   *  文件的名字和父目录 ID 都没变,下面按清单比对拦不住。 */
   const assertCurrent = async (op: string, key: string, expected: string, signal?: AbortSignal): Promise<WireFile> => {
+    if (opts.cas) {
+      const now = await lookupKey(key, signal)
+      if (!now) throw conflict(op, key, 'absent at its current path')
+      if (identityOf(now) !== expected) throw conflict(op, key, 'key no longer maps to the expected file version')
+      return now
+    }
     const w = tree?.files.get(key)
     if (!w || w.id !== fileIdOfIdentity(expected)) throw conflict(op, key, 'key no longer maps to the expected file')
     const meta = await getMeta(w.id, signal)
@@ -412,12 +420,13 @@ export function createGdriveRemote(cfg: GdriveConfig, opts: GdriveRemoteOptions 
 
   const ensureTree = async (signal?: AbortSignal): Promise<DriveTree> => tree ?? (await loadTree(signal))
 
-  /** 相对目录 → 物理文件夹 ID(合并的同名都算,按年龄排);不存在 → null。只读,不建任何东西。 */
-  const resolveFolderIds = async (rel: string, signal?: AbortSignal): Promise<string[] | null> => {
-    const known = tree?.folders.get(rel)
+  /** 相对目录 → 物理文件夹 ID(合并的同名都算,按年龄排);不存在 → null。只读,不建任何东西。
+   *  fresh = 每一段(含 baseDir 本身)都现查,不用清单缓存的文件夹 ID。 */
+  const resolveFolderIds = async (rel: string, signal?: AbortSignal, fresh = false): Promise<string[] | null> => {
+    const known = fresh ? undefined : tree?.folders.get(rel)
     if (known?.length) return known
     if (rel === '') return resolveBase(false, signal)
-    const parents = await resolveFolderIds(dirOf(rel), signal)
+    const parents = await resolveFolderIds(dirOf(rel), signal, fresh)
     if (!parents) return null
     const found = await childrenNamed(parents, baseOf(rel), signal, true)
     return found.length ? found.map((x) => x.id) : null
@@ -430,8 +439,9 @@ export function createGdriveRemote(cfg: GdriveConfig, opts: GdriveRemoteOptions 
     else tree.files.delete(key)
   }
 
-  const statKey = async (key: string, signal?: AbortSignal): Promise<RemoteEntity | null> => {
-    const parents = await resolveFolderIds(dirOf(key), signal)
+  /** key 此刻映射到的文件(与 buildTree 同一规则);cas 下父目录从 baseDir 逐段现查。 */
+  const lookupKey = async (key: string, signal?: AbortSignal): Promise<WireFile | null> => {
+    const parents = await resolveFolderIds(dirOf(key), signal, !!opts.cas)
     if (!parents) {
       remember(key, null)
       return null
@@ -442,13 +452,18 @@ export function createGdriveRemote(cfg: GdriveConfig, opts: GdriveRemoteOptions 
       if (!named.some((x) => x.mimeType === FOLDER_MIME)) {
         const w = named.find((x) => !x.mimeType?.startsWith('application/vnd.google-apps.')) ?? null
         remember(key, w)
-        return w ? entityOf(key, w) : null
+        return w
       }
     }
     // 有同名文件夹 / 派生名:私有全量列表,别动共享的 tree 与 folderPending(在途写还挂在上面)
     const baseIds = await resolveBase(false, signal)
     const w = baseIds ? buildTree(await query('list', 'trashed = false', signal), baseIds).files.get(key) ?? null : null
     remember(key, w)
+    return w
+  }
+
+  const statKey = async (key: string, signal?: AbortSignal): Promise<RemoteEntity | null> => {
+    const w = await lookupKey(key, signal)
     return w ? entityOf(key, w) : null
   }
 
@@ -505,8 +520,9 @@ export function createGdriveRemote(cfg: GdriveConfig, opts: GdriveRemoteOptions 
       const known = t.files.get(key)
       let w: WireFile
       if (typeof expectedId === 'string') {
-        await assertCurrent('PUT', key, expectedId, signal)
-        w = await upload({ update: known!.id }, data, mtimeMs, async () => { await assertCurrent('PUT', key, expectedId, signal) }, signal)
+        const cur = await assertCurrent('PUT', key, expectedId, signal)
+        // cas 下 cur 来自按当前路径的现查,清单里的 known 可能已过期 / 缺席;旧路径 cur.id === known.id
+        w = await upload({ update: opts.cas ? cur.id : known!.id }, data, mtimeMs, async () => { await assertCurrent('PUT', key, expectedId, signal) }, signal)
       } else if (known && expectedId === undefined) {
         w = await upload({ update: known.id }, data, mtimeMs, async () => {}, signal)
       } else {
@@ -520,7 +536,14 @@ export function createGdriveRemote(cfg: GdriveConfig, opts: GdriveRemoteOptions 
         } else {
           w = await upload({ create: { parent: parents[0], name: baseOf(key) } }, data, mtimeMs, async () => {
             if (expectedId !== null) return
-            const again = (await childrenNamed(parents, baseOf(key), signal)).filter((x) => x.mimeType !== FOLDER_MIME)
+            let where = parents
+            if (opts.cas) {
+              // 落点文件夹必须仍在 key 的当前路径上:walk 之后被改名 / 移走的话,按缓存 ID 会建进挪走的那份
+              const fresh = await resolveFolderIds(dirOf(key), signal, true)
+              if (!fresh?.includes(parents[0])) throw conflict('PUT', key, 'target folder renamed or moved since listing')
+              where = fresh
+            }
+            const again = (await childrenNamed(where, baseOf(key), signal)).filter((x) => x.mimeType !== FOLDER_MIME)
             if (again.length) throw conflict('PUT', key, 'created remotely since listing')
           }, signal)
         }
@@ -540,6 +563,13 @@ export function createGdriveRemote(cfg: GdriveConfig, opts: GdriveRemoteOptions 
       if (expectedId === null) {
         if (known) throw conflict('rm', key, 'exists remotely')
         return
+      } else if (typeof expectedId === 'string' && opts.cas) {
+        // cas:按 key 当前的路径现查(见 assertCurrent);路径上已没有活着的文件 = 已不在,幂等
+        const now = await lookupKey(key, signal)
+        if (!now) return
+        if (identityOf(now) !== expectedId) throw conflict('rm', key, 'key no longer maps to the expected file version')
+        id = now.id
+        precheck = async () => { await assertCurrent('rm', key, expectedId, signal) }
       } else if (typeof expectedId === 'string') {
         const meta = known?.id === fileIdOfIdentity(expectedId) ? await getMeta(known.id, signal) : null
         if (!meta || meta.trashed) {

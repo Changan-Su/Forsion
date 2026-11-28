@@ -7,7 +7,8 @@
  *    rm 带 parent_rev —— walk→push 窗口的并发写在 Dropbox 侧变 409,绝不静默覆盖;
  *  - Dropbox-API-Arg 头必须纯 ASCII:中文路径一律 \uXXXX 转义(asciiJson)。
  *  - opts.cas = TargetFs 语义(targetFs.ts):上传加 strict_conflict(期望的那份被删了 / 内容恰好相同也算冲突,
- *    不再静默重建);rm(null) 只查不删;条件删回 not_found 时再查一次,区分「真没了」和「换了一版」。缺省 = 旧行为。
+ *    不再静默重建);rm(null) 只查不删;条件删回 not_found 时再查一次,区分「真没了」和「换了一版」;
+ *    空字符串的 expectedId 不是合法 rev:发任何请求之前就 cas-conflict(旧行为里 rm 会把它当成无条件删)。缺省 = 旧行为。
  * 隔离约定:不 import electron/desktop;凭据由宿主(remotesyncIpc)注入。
  */
 import { createHash, randomBytes } from 'node:crypto'
@@ -276,6 +277,7 @@ export function createDropboxRemote(cfg: DropboxConfig, opts: DropboxRemoteOptio
       return data
     },
     async writeFile(key, data, mtimeMs, signal, expectedId) {
+      if (opts.cas && expectedId === '') throw new Error(`cas-conflict dropbox PUT ${key}: empty expected rev`)
       const token = await accessToken(signal)
       const mode = expectedId === null ? 'add' : typeof expectedId === 'string' ? { '.tag': 'update', update: expectedId } : 'overwrite'
       const arg: Record<string, unknown> = { path: absOf(key), mode, autorename: false, mute: true, client_modified: isoSec(mtimeMs) }
@@ -300,6 +302,8 @@ export function createDropboxRemote(cfg: DropboxConfig, opts: DropboxRemoteOptio
       return { key, size: j.size, mtimeMs: Date.parse(j.client_modified ?? j.server_modified ?? '') || mtimeMs, id: j.rev }
     },
     async rm(key, signal, expectedId) {
+      // 旧行为里 '' 是假值、不带 parent_rev = 无条件删;cas 下它只能是坏身份
+      if (opts.cas && expectedId === '') throw new Error(`cas-conflict dropbox rm ${key}: empty expected rev`)
       if (opts.cas && expectedId === null) {
         // 期望不存在:只查不删(在 = 冲突,不在 = 无事可做)
         if (await statKey(key, signal)) throw new Error(`cas-conflict dropbox rm ${key}: exists`)

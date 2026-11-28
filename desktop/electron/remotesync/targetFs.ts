@@ -19,12 +19,17 @@
  *    命中仍映射成 `cas-conflict`,但不声明。realMove 恒 false:没有一个后端在这里提供改名。
  *
  * 各后端:
- *  - folder:新建 = 同目录临时文件 + link(原子,EEXIST = 冲突;link 因别的原因失败退回 open(final,'wx'),非原子落内容但不覆盖);
- *    覆盖 / 删除 = 进程内写锁里复查 mtime:size 身份(外部进程不在锁里)。
- *  - s3:HEAD 复查 + 单次 PutObject / DeleteObject 带 If-None-Match / If-Match(412 / 409 ConditionalRequestConflict → 冲突)。
- *  - webdav:PROPFIND 复查 + If-None-Match / If-Match(只回送服务器原样的强 etag);写后身份优先取 PUT 响应的 ETag。
- *  - dropbox:upload mode add / update(rev) + strict_conflict、delete_v2 parent_rev —— 原子。rm(null) 只查不删。
- *  - gdrive:Drive v3 没有条件写,沿用后端自己的发送前按文件 ID 复查(见 fsGdrive.ts)。
+ *  - folder:新建 = 同目录临时文件 + link(原子,EEXIST = 冲突;link 因别的原因失败退回 open(final,'wx'),非原子落内容但不覆盖,
+ *    写失败只删自己那个 inode);覆盖 / 删除 = 进程内写锁里复查 mtime:size 身份(外部进程不在锁里);覆盖先把临时文件写完刷盘,
+ *    rename 前一刻再复查身份与中止信号,新内容同 mtime 同大小时把 mtime 往后挪(身份必变)。每次变更与 stat 先确认 key 的
+ *    真实父目录在根里(父路径上的符号链接不穿过去,拒绝而非当不存在)。
+ *  - s3:HEAD 复查(404 再用 ListObjectsV2 确认 —— HEAD 无响应体,桶不在也是 404)+ 单次 PutObject / DeleteObject 带
+ *    If-None-Match / If-Match(412 / 409 ConditionalRequestConflict → 冲突);PUT 不回 ETag 时写后 HEAD → GET → HEAD 核对。
+ *  - webdav:PROPFIND 复查(只有 HTTP 404 / 207 里资源级 404 算不存在)+ If-None-Match / If-Match(只回送服务器原样的强 etag);
+ *    PUT / DELETE 必须 2xx;写后身份优先取 PUT 响应的 ETag,没有就 stat → 下载 → stat 核对。
+ *  - dropbox:upload mode add / update(rev) + strict_conflict、delete_v2 parent_rev —— 原子。rm(null) 只查不删;空 rev 直接冲突。
+ *  - gdrive:Drive v3 没有条件写:stat 与条件写删的发送前复查都按 key 当前的路径从 baseDir 逐段现查,比对文件 ID + 内容版本
+ *    (见 fsGdrive.ts)。
  */
 import { promises as fs } from 'node:fs'
 import path from 'node:path'

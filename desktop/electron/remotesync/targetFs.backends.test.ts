@@ -59,7 +59,8 @@ describe('S3:条件头', () => {
   it('honour:新建复查之后被抢先 → If-None-Match: * 412 → cas-conflict;删除复查之后被改 → If-Match 412', async () => {
     s3 = await startFakeS3({ conditions: 'honour' })
     const t = open()
-    s3.afterHead = (key) => { s3.afterHead = undefined; s3.externalPut(key, 'theirs') }
+    // 复查 = HEAD 404 + ListObjectsV2 确认(HEAD 404 分不清「key 不在」和「桶不在」):在确认之后插入
+    s3.afterList = (prefix) => { s3.afterList = undefined; s3.externalPut(prefix, 'theirs') }
     await expect(t.writeFile('n.md', buf('mine'), T, undefined, null)).rejects.toThrow(/^cas-conflict/)
     expect(puts().at(-1)!.headers['if-none-match']).toBe('*')
     expect(s3.objects.get('v/n.md')!.data.toString()).toBe('theirs')
@@ -69,6 +70,34 @@ describe('S3:条件头', () => {
     await expect(t.rm('n.md', undefined, id)).rejects.toThrow(/^cas-conflict s3 rm/)
     expect(s3.requests.filter((r) => r.method === 'DELETE').at(-1)!.headers['if-match']).toBe(id)
     expect(s3.objects.get('v/n.md')!.data.toString()).toBe('theirs again')
+  })
+
+  it('HEAD 404 不直接当不存在:桶不在时 HEAD 也是无响应体的 404 → stat / rm(null) 必须抛', async () => {
+    s3 = await startFakeS3({ conditions: 'honour' })
+    const t = openTargetFs({ kind: 's3', s3: { endpoint: s3.endpoint, region: 'us-east-1', accessKeyID: 'AK', secretAccessKey: 'SK', bucket: 'no-such-bucket', forcePathStyle: true } }, 'v')
+    await expect(t.stat('k.md')).rejects.toThrow()
+    await expect(t.rm('k.md', undefined, null)).rejects.toThrow()
+  })
+
+  it('PUT 不回 ETag(部分 S3 兼容服务):返回的 id 与随后的 stat / walk 一致,拿它条件写不误报冲突', async () => {
+    s3 = await startFakeS3({ conditions: 'honour', putEtag: false })
+    const t = open()
+    const e1 = await t.writeFile('c.md', buf('one'), T, undefined, null)
+    expect((await t.stat('c.md'))!.id).toBe(e1.id)
+    expect((await t.walk()).find((e) => e.key === 'c.md')!.id).toBe(e1.id)
+    const e2 = await t.writeFile('c.md', buf('two'), T, undefined, e1.id)
+    expect((await t.stat('c.md'))!.id).toBe(e2.id)
+    expect(s3.objects.get('v/c.md')!.data.toString()).toBe('two')
+  })
+
+  it('PUT 不回 ETag 且写后、核对前别人写了 → cas-conflict(不把别人的版本当成这次写的)', async () => {
+    s3 = await startFakeS3({ conditions: 'honour', putEtag: false })
+    s3.externalPut('v/k.md', 'v1')
+    const t = open()
+    const [a] = await t.walk()
+    s3.afterPut = (key) => { s3.afterPut = undefined; s3.externalPut(key, 'theirs') }
+    await expect(t.writeFile('k.md', buf('ours'), T, undefined, a.id)).rejects.toThrow(/^cas-conflict s3 PUT k\.md: .*changed after write/)
+    expect(s3.objects.get('v/k.md')!.data.toString()).toBe('theirs')
   })
 
   it('无条件写走旧的 Upload 路径,不带条件头', async () => {
@@ -89,6 +118,9 @@ describe('S3:条件头', () => {
     expect(s3.objects.has('k.md')).toBe(false)
     expect(s3.requests.some((r) => r.method === 'HEAD')).toBe(false)
     expect(s3.requests.some((r) => r.headers['if-match'] || r.headers['if-none-match'])).toBe(false)
+    // stat:HEAD 404 照旧直接 null,不做 cas 的 ListObjectsV2 确认
+    expect(await legacy.stat('none.md')).toBeNull()
+    expect(s3.requests.some((r) => r.method === 'GET' && r.key === '')).toBe(false)
   })
 })
 
@@ -149,6 +181,50 @@ describe('WebDAV:条件头', () => {
     await expect(open().stat('sub')).rejects.toThrow(/^not-a-file/)
   })
 
+  it('PUT 不回 ETag:写后 stat → 下载 → stat 核对;PUT 与核对之间别人写了 → cas-conflict(不把别人的 etag 当成这次写的)', async () => {
+    dav = await startFakeWebdav({ conditions: 'honour', etags: 'strong', putEtag: false })
+    dav.externalPut('/forsion-vault/v/k.md', 'v1')
+    const t = open()
+    const [a] = await t.walk()
+    dav.afterPut = (p) => { dav.afterPut = undefined; dav.externalPut(p, 'theirs') }
+    await expect(t.writeFile('k.md', buf('ours'), T, undefined, a.id)).rejects.toThrow(/^cas-conflict webdav PUT k\.md: .*changed after write/)
+    expect(dav.files.get('/forsion-vault/v/k.md')!.data.toString()).toBe('theirs')
+  })
+
+  it('207 里第一组 propstat 是 404、第二组 200(资源在):stat 抛,绝不当不存在;独占新建不覆盖', async () => {
+    dav = await startFakeWebdav({ conditions: 'ignore', etags: 'strong' })
+    dav.externalPut('/forsion-vault/v/k.md', 'theirs')
+    const t = open()
+    await t.walk()
+    dav.propstat404First = true
+    await expect(t.stat('k.md')).rejects.toThrow()
+    await expect(t.writeFile('k.md', buf('mine'), T, undefined, null)).rejects.toThrow()
+    expect(dav.files.get('/forsion-vault/v/k.md')!.data.toString()).toBe('theirs')
+  })
+
+  it('资源真不在:207 里资源级 404(只有 status 没有 propstat)→ null,独占新建照常', async () => {
+    dav = await startFakeWebdav({ conditions: 'honour', etags: 'strong' })
+    const t = open()
+    await t.walk() // 先建好 baseDir(库自己的 exists() 不认 207 里的资源级 404,那是 init 的事,不在这里测)
+    dav.missingAs207 = true
+    expect(await t.stat('n.md')).toBeNull()
+    const e = await t.writeFile('n.md', buf('new'), T, undefined, null)
+    expect((await t.stat('n.md'))!.id).toBe(e.id)
+  })
+
+  it('digest:PROPFIND 通过而 PUT / DELETE 最终 401(库对 digest 的 401 不抛)→ 条件写删必须报错,不能当成功', async () => {
+    dav = await startFakeWebdav({ conditions: 'honour', etags: 'strong' })
+    dav.externalPut('/forsion-vault/v/k.md', 'v1')
+    const t = openTargetFs({ kind: 'webdav', webdav: { address: dav.address, username: 'u', password: 'p', authType: 'digest' } }, 'v')
+    const [a] = await t.walk()
+    dav.digest401.add('PUT')
+    dav.digest401.add('DELETE')
+    await expect(t.writeFile('k.md', buf('ours'), T, undefined, a.id)).rejects.toThrow(/401/)
+    await expect(t.writeFile('n.md', buf('new'), T, undefined, null)).rejects.toThrow(/401/)
+    await expect(t.rm('k.md', undefined, a.id)).rejects.toThrow(/401/)
+    expect(dav.files.get('/forsion-vault/v/k.md')!.data.toString()).toBe('v1')
+  })
+
   it('缺省模式(旧引擎)不受影响:expectedId 照旧忽略,不带条件头', async () => {
     dav = await startFakeWebdav({ conditions: 'honour', etags: 'strong' })
     dav.externalPut('/forsion-vault/k.md', 'theirs')
@@ -176,6 +252,16 @@ describe('Dropbox', () => {
     const ups = d.calls.filter((c) => c.endpoint === '/2/files/upload')
     expect(ups[0].arg).toMatchObject({ path: '/V/x/b.md', mode: 'add', strict_conflict: true })
     expect(ups[1].arg!.strict_conflict).toBeUndefined()
+  })
+
+  it('cas:空字符串 expectedId 不是「无条件」—— rm / writeFile 都在发任何请求之前 cas-conflict', async () => {
+    const d = fakeDropbox()
+    d.externalPut('/V/x/a.md', 'a')
+    const t = openTargetFs({ kind: 'dropbox', dropbox: { appKey: 'k', refreshToken: 'rt', baseDir: 'V', fetch: d.fetch } }, 'x')
+    await expect(t.rm('a.md', undefined, '')).rejects.toThrow(/^cas-conflict/)
+    await expect(t.writeFile('a.md', buf('b'), T, undefined, '')).rejects.toThrow(/^cas-conflict/)
+    expect(d.files.get('/v/x/a.md')!.data.toString()).toBe('a')
+    expect(d.calls).toEqual([])
   })
 
   it('stat:文件夹 → not-a-file;不存在 → null', async () => {
@@ -209,7 +295,7 @@ describe('Google Drive:stat', () => {
     return { g, v1, t, queries, fullListings }
   }
 
-  it('walk 过之后:一次按名查询;没 walk 过:从 baseDir 逐段查(3 段 + 1),都不做全量列表', async () => {
+  it('walk 过与否都从 baseDir 逐段现查(3 段 + 1),不用清单缓存的文件夹 ID(目标文件夹可能被改名 / 移走),也不做全量列表', async () => {
     const { g, v1, t, queries, fullListings } = setup()
     g.put({ name: 'a.md', parents: [v1.id] }, buf('a'))
     const cold = queries().length
@@ -220,7 +306,7 @@ describe('Google Drive:stat', () => {
     expect(fullListings()).toBe(1)
     const warm = queries().length
     await t.stat('a.md')
-    expect(queries().length - warm).toBe(1)
+    expect(queries().length - warm).toBe(4)
     expect(fullListings()).toBe(1)
   })
 
@@ -258,6 +344,45 @@ describe('Google Drive:stat', () => {
     g.put({ name: 'later.md', parents: [v1.id] }, buf('theirs'))
     await legacy.rm('later.md', undefined, null) // 旧行为:清单里没有就当已删
     expect(g.live().some((f) => f.name === 'later.md')).toBe(true)
+  })
+})
+
+describe('Google Drive:CAS 按当前路径现查(walk 之后目标文件夹 / 中间目录在网页版被改名,文件夹与文件 ID 都不变)', () => {
+  const KEYS = ['note.md', 'sub/note.md']
+  const setupMoved = async (key: string) => {
+    const g = fakeGdrive()
+    const base = g.folder('Forsion-Vault', 'root')
+    const v1 = g.folder('v1', g.folder('vaults', base.id).id)
+    const dir = key.includes('/') ? g.folder('sub', v1.id) : v1
+    const f = g.put({ name: 'note.md', parents: [dir.id] }, buf('orig'))
+    const t = openTargetFs({ kind: 'gdrive', gdrive: { clientId: 'cid', refreshToken: 'rt', fetch: g.fetch } }, 'vaults/v1')
+    const id = (await t.walk()).find((e) => e.key === key)!.id
+    g.files.get(dir.id)!.name = dir === v1 ? 'moved' : 'sub2'
+    return { g, t, f, id }
+  }
+
+  it.each(KEYS)('%s:改名之后 stat → null(不顺着缓存的文件夹 ID 找到挪走的那份)', async (key) => {
+    const { t } = await setupMoved(key)
+    expect(await t.stat(key)).toBeNull()
+  })
+
+  it.each(KEYS)('%s:改名之后带旧 id 条件删 = 已不在、幂等,挪走的那份不进回收站', async (key) => {
+    const { t, f, id } = await setupMoved(key)
+    await t.rm(key, undefined, id)
+    expect(f.trashed).toBe(false)
+  })
+
+  it.each(KEYS)('%s:改名之后带旧 id 条件写 → cas-conflict,挪走的那份内容不动', async (key) => {
+    const { t, f, id } = await setupMoved(key)
+    await expect(t.writeFile(key, buf('mine'), T, undefined, id)).rejects.toThrow(/^cas-conflict/)
+    expect(f.content!.toString()).toBe('orig')
+  })
+
+  it.each(KEYS)('%s:改名之后独占新建同目录的新 key → cas-conflict,不建进挪走的文件夹', async (key) => {
+    const { g, t } = await setupMoved(key)
+    const fresh = key.replace('note.md', 'new.md')
+    await expect(t.writeFile(fresh, buf('mine'), T, undefined, null)).rejects.toThrow(/^cas-conflict/)
+    expect(g.live().some((x) => x.name === 'new.md')).toBe(false)
   })
 })
 
@@ -322,5 +447,146 @@ describe('folder', () => {
     expect(await fsp.readFile(path.join(root, 'k.md'), 'utf8')).toBe('mine 2')
     await legacy.rm('k.md', undefined, null)
     expect(await legacy.stat('k.md')).toBeNull()
+  })
+})
+
+describe('folder:CAS 写删纪律', () => {
+  let root: string
+  let outside: string | undefined
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await fsp.rm(root, { recursive: true, force: true })
+    if (outside) await fsp.rm(outside, { recursive: true, force: true })
+    outside = undefined
+  })
+  const realOpen = fsp.open
+  type Handle = Awaited<ReturnType<typeof fsp.open>>
+  /** 包一层 fs.open:路径命中 pick 的句柄交给 patch 改写方法(把外部进程的写 / 中止插到那一步)。 */
+  const hookOpen = (pick: (p: string) => boolean, patch: (h: Handle, p: string) => void): void => {
+    vi.spyOn(fsp, 'open').mockImplementation((async (...args: Parameters<typeof fsp.open>) => {
+      const h = await realOpen(...args)
+      if (pick(String(args[0]))) patch(h, String(args[0]))
+      return h
+    }) as typeof fsp.open)
+  }
+  const read = (p: string): Promise<string | null> => fsp.readFile(p, 'utf8').catch((e) => (e.code === 'ENOENT' ? null : Promise.reject(e)))
+  const leftovers = async (dir: string): Promise<string[]> => (await fsp.readdir(dir)).filter((n) => n.startsWith('.rsync-tmp-'))
+  const open = () => openTargetFs({ kind: 'folder', folder: { path: root } }, '')
+  /** 根下的 assets 是指向目标外目录的符号链接,目标外放着 x.md。 */
+  const escapeSetup = async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), 'targetfs-escape-'))
+    outside = await fsp.mkdtemp(path.join(os.tmpdir(), 'targetfs-outside-'))
+    await fsp.writeFile(path.join(outside, 'x.md'), 'outside')
+    symlinkSync(outside, path.join(root, 'assets'))
+    const st = await fsp.stat(path.join(outside, 'x.md'))
+    return { t: open(), id: `${Math.floor(st.mtimeMs)}:${st.size}`, out: outside }
+  }
+
+  // Windows 建符号链接要特权,只在 POSIX 上跑
+  it.skipIf(process.platform === 'win32')('父目录是指向目标外的符号链接:stat 抛(不当文件、也不当不存在)', async () => {
+    const { t } = await escapeSetup()
+    await expect(t.stat('assets/x.md')).rejects.toThrow()
+    await expect(t.stat('assets/none.md')).rejects.toThrow()
+  })
+
+  it.skipIf(process.platform === 'win32')('父目录是指向目标外的符号链接:独占新建拒绝,目标外不多出文件', async () => {
+    const { t, out } = await escapeSetup()
+    await expect(t.writeFile('assets/new.md', buf('mine'), T, undefined, null)).rejects.toThrow()
+    expect((await fsp.readdir(out)).sort()).toEqual(['x.md'])
+  })
+
+  it.skipIf(process.platform === 'win32')('父目录是指向目标外的符号链接:带对的身份条件删拒绝,目标外的文件不动', async () => {
+    const { t, id, out } = await escapeSetup()
+    await expect(t.rm('assets/x.md', undefined, id)).rejects.toThrow()
+    expect(await read(path.join(out, 'x.md'))).toBe('outside')
+  })
+
+  it.skipIf(process.platform === 'win32')('父目录是指向目标外的符号链接:带对的身份条件写拒绝,目标外的文件不动', async () => {
+    const { t, id, out } = await escapeSetup()
+    await expect(t.writeFile('assets/x.md', buf('mine'), T, undefined, id)).rejects.toThrow()
+    expect(await read(path.join(out, 'x.md'))).toBe('outside')
+    expect((await fsp.readdir(out)).sort()).toEqual(['x.md'])
+  })
+
+  it('条件写:身份在临时文件刷盘之后、rename 之前复查 —— 刷盘期间外部进程存了新版本 → cas-conflict,不覆盖、不留临时文件', async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), 'targetfs-order-'))
+    const t = open()
+    const file = path.join(root, 'a.md')
+    const e = await t.writeFile('a.md', buf('v1'), T, undefined, null)
+    hookOpen((p) => p.includes('.rsync-tmp-'), (h) => {
+      const sync = h.sync.bind(h)
+      h.sync = async () => {
+        await sync()
+        await fsp.writeFile(file, 'theirs, newer')
+        await fsp.utimes(file, new Date(T + 5000), new Date(T + 5000))
+      }
+    })
+    await expect(t.writeFile('a.md', buf('ours'), T + 1000, undefined, e.id)).rejects.toThrow(/^cas-conflict/)
+    expect(await read(file)).toBe('theirs, newer')
+    expect(await leftovers(root)).toEqual([])
+  })
+
+  it('条件写:刷盘期间请求被中止 → 不落盘、不留临时文件', async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), 'targetfs-abort-'))
+    const t = open()
+    const file = path.join(root, 'a.md')
+    const e = await t.writeFile('a.md', buf('v1'), T, undefined, null)
+    const ac = new AbortController()
+    hookOpen((p) => p.includes('.rsync-tmp-'), (h) => {
+      const sync = h.sync.bind(h)
+      h.sync = async () => {
+        await sync()
+        ac.abort()
+      }
+    })
+    await expect(t.writeFile('a.md', buf('ours'), T + 1000, ac.signal, e.id)).rejects.toThrow()
+    expect(await read(file)).toBe('v1')
+    expect(await leftovers(root)).toEqual([])
+  })
+
+  it('条件覆盖:新旧内容同 mtime 同大小 → 身份照样变;拿旧身份的删除 cas-conflict,新内容不被删', async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), 'targetfs-sameid-'))
+    const t = open()
+    const e1 = await t.writeFile('a.md', buf('AAA'), T, undefined, null)
+    const e2 = await t.writeFile('a.md', buf('BBB'), T, undefined, e1.id)
+    expect(e2.id).not.toBe(e1.id)
+    expect((await t.stat('a.md'))!.id).toBe(e2.id)
+    expect((await t.walk()).find((e) => e.key === 'a.md')!.id).toBe(e2.id)
+    await expect(t.rm('a.md', undefined, e1.id)).rejects.toThrow(/^cas-conflict/)
+    expect(await read(path.join(root, 'a.md'))).toBe('BBB')
+  })
+
+  // Windows 上不能把文件 rename 到一个开着句柄的路径上,只在 POSIX 上跑
+  it.skipIf(process.platform === 'win32')('link 不可用退回 open wx:写内容失败时只删自己建的那个 inode —— 路径已被别的进程换掉就不动', async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), 'targetfs-fallback-'))
+    vi.spyOn(fsp, 'link').mockRejectedValue(Object.assign(new Error('nope'), { code: 'EPERM' }))
+    const t = open()
+    const file = path.join(root, 'a.md')
+    hookOpen((p) => p === file, (h) => {
+      h.writeFile = async () => {
+        const other = path.join(root, 'other.part')
+        await fsp.writeFile(other, 'theirs')
+        await fsp.rename(other, file)
+        throw Object.assign(new Error('disk gone'), { code: 'EIO' })
+      }
+    })
+    await expect(t.writeFile('a.md', buf('mine'), T, undefined, null)).rejects.toThrow(/disk gone/)
+    expect(await read(file)).toBe('theirs')
+    expect(await leftovers(root)).toEqual([])
+  })
+
+  it('link 不可用退回 open wx:写内容失败、路径还是自己建的 → 半截文件删掉', async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), 'targetfs-fallback-'))
+    vi.spyOn(fsp, 'link').mockRejectedValue(Object.assign(new Error('nope'), { code: 'EPERM' }))
+    const t = open()
+    const file = path.join(root, 'a.md')
+    hookOpen((p) => p === file, (h) => {
+      h.writeFile = async () => {
+        throw Object.assign(new Error('disk gone'), { code: 'EIO' })
+      }
+    })
+    await expect(t.writeFile('a.md', buf('mine'), T, undefined, null)).rejects.toThrow(/disk gone/)
+    expect(await read(file)).toBeNull()
+    expect(await leftovers(root)).toEqual([])
   })
 })
