@@ -105,9 +105,10 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): ActiveVaultHost {
       for (const [id, p] of [...pending]) if (p.wc === wc) finish(id, new Error('switch_failed'))
     }
     wc.on('render-process-gone', drop)
-    wc.on('did-start-navigation', (d: { isMainFrame?: boolean; isSameDocument?: boolean }) => {
-      if (d?.isMainFrame && !d.isSameDocument) drop()
-    })
+    // 只在主框架跨文档**提交**时作废(did-navigate 只发主框架、不含同文档跳转;那种发 did-navigate-in-page)。
+    // 不听 did-start-navigation:被 hardenNav 拦下的外链、取消的导航也会先发它,原文档其实还在用(Codex 评审 #958)。
+    // 提交前旧文档报上来的照常算(它还是当前文档);提交后迟到的由 liveTop 拦(senderFrame 不再是 mainFrame)。
+    wc.on('did-navigate', drop)
   }
 
   const get = async (): Promise<ActiveVaultRead> => {
