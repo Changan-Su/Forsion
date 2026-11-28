@@ -238,8 +238,9 @@ async function main() {
   if (listed) {
     await cdp.eval(`Capacitor.Plugins.ForsionLocalEngine.stop().then(() => true)`)
     await waitState((x) => x.engine === 'stopped', 30000, 'engine stopped')
-    // (this emulator crashes ~1 in 3 cold starts with a glibc "double free" in the environment — probe-apk/REPORT.md;
-    // start() retries once itself; a failed start toasts and stays on the list, so the bench taps again, up to 3 times)
+    // (before PRoot patch 0005 about 1 in 4 cold starts on this emulator died with a glibc "double free" — see
+    // scripts/local-engine/proot-brk-probe/; start() retries once itself; a failed start toasts and stays on the list,
+    // so the bench still taps again, up to 3 times, and reports how many: more than one is a regression)
     let back = null
     let taps = 0
     while (taps < 3 && (!back || back.engine !== 'running')) {

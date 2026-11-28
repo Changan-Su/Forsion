@@ -10,6 +10,8 @@
 | `probe.sh` | 在设备上循环跑 node / 引擎，按层对照（直接跑 / PRoot / App 身份），计 `double free` 次数 |
 | `app-loop.cjs` | 经原生插件循环 `start()` / `stop()`，统计每次用了几次拉起，和 logcat 里的失败原文 |
 | `heap-env-switch.patch` | 实验用：给 `heap.c` 加环境变量 `PROOT_NO_HEAP_EMULATION=1` 开关，打在补丁 1–4 之上（不和 0005 一起用） |
+| `guest-tools.sh` | 用 App 身份（run-as）在装好的环境里跑 bash / apt / dpkg / git / 大堆 node；run-as 没有网络，apt 只能看到解析失败 |
+| `guest-tools-app.cjs` | 同样几项，经调试包的 `shell` 调用在 App 自己的进程里跑（有网络），另加 npm install；调用先发出去再轮询结果 |
 
 ## 用法
 
@@ -43,3 +45,13 @@ adb shell "PB=/data/local/tmp/<另一个 libproot.so> sh /data/local/tmp/b1-dev.
 | shell，原版 PRoot，`PROOT_NO_SECCOMP=1`（不走 seccomp 加速，所有系统调用都经 ptrace） | 整个引擎 | 1/15 |
 
 跑的时候主机上还有别的任务，负载在 6 到 40 之间。
+
+## 补丁 5 之后（11-28，同一台模拟器）
+
+| 跑法 | 启动器 | 结果 |
+|---|---|---|
+| `app-loop.cjs`，起停 40 轮，间隔 0 | 补丁 5 | 40/40 第一次拉起就健康，0 次崩溃；就绪中位 4.3 s，最长 18.7 s |
+| `app-loop.cjs`，起停 30 轮，间隔 0（对照，紧接着跑） | 原版（补丁 1–4） | 37 次拉起里 8 次崩在 `double free or corruption (out)`；有 1 轮两次都崩，`start()` 失败 |
+| `guest-tools-app.cjs` | 补丁 5 | bash、git（`fsck --strict` 干净）、node 200 MB 堆、npm install 都正常；apt 能下载和解包，jq 能跑；dpkg 停在 unpacked（写不了 `status-old` 硬链接，`--link2symlink` 关着时本来就这样，和补丁无关） |
+
+logcat 里每次崩溃各有两行带 `double free`：一行是引擎输出，一行是 `engine start attempt N failed`。

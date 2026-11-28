@@ -198,8 +198,9 @@ async function main() {
   ok('stop() → engine and launcher gone', stopped.engine === 'stopped' && !/libproot\.so/.test(ps2) && !/\bnode\b/.test(ps2))
 
   // accounts: another account signing in stops the previous account's engine; signed out = no start.
-  // (This emulator crashes ~1 in 3 cold starts with a glibc "double free" inside the environment — probe-apk/REPORT.md;
-  // start() retries once itself, the bench allows up to three start() calls here and reports how many it took.)
+  // (Before PRoot patch 0005 about 1 in 4 cold starts on this emulator died with a glibc "double free" — see
+  // scripts/local-engine/proot-brk-probe/; start() retries once itself, the bench still allows up to three start()
+  // calls here and reports how many it took: more than one is a regression.)
   let starts = 0
   for (let r; starts < 3; ) {
     starts++
